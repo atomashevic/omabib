@@ -56,7 +56,10 @@ Item {
     property int metadataRequest: -1
     property string metadataInfo: ""
     property var repoSettings: ({})
+    property var repoStatus: ({})
+    property var repoCheck: ({})
     property bool syncBusy: false
+    property bool repoBusy: false
     property int syncRequest: -1
     readonly property color bg: Color.menu.background
     readonly property color fg: Color.menu.text
@@ -105,6 +108,22 @@ Item {
         var hit=currentHit();if(!hit)return
         rpc("open_target",{id:hit.id},function(r){if(Qt.openUrlExternally(r.url))dismiss();else error="Could not open "+r.url})
     }
+    property bool pdfBusy: false
+    property int pdfRequest: -1
+    function getPdf() {
+        var hit=currentHit();if(!hit||pdfBusy)return
+        pdfBusy=true
+        pdfRequest=rpc("get_pdf",{ref_id:hit.id},function(r){
+            pdfBusy=false
+            if(Qt.openUrlExternally(root.fileUrl(r.path))){notice="PDF ready ("+r.source+")";noticeTimer.restart();if(expanded)showDetail()}
+            else error="Could not open "+r.path
+        })
+        if(pdfRequest<0)pdfBusy=false
+    }
+    function copyPdfPath() {
+        var hit=currentHit();if(!hit)return
+        rpc("get_pdf",{ref_id:hit.id,download:false},function(r){copy(r.path)})
+    }
     function lookupMetadata() {
         var hit=currentHit();if(!hit || metadataBusy)return
         metadataLookup=null;metadataChoice=null;metadataInfo="Looking up online metadata…";metadataDialog.open()
@@ -143,6 +162,26 @@ Item {
         if(conflicts.length)out+="\nExisting values kept: "+conflicts.join(", ")+".\n"
         return out+"\nSources\n"+c.source
     }
+    function quickAddPreviewText(r) {
+        var items=r.items||[]
+        var out=""
+        for(var i=0;i<items.length;++i){
+            var it=items[i]
+            if(i>0)out+="\n\n"
+            out+=(it.title||it.citekey||it.input||"Entry "+(i+1))
+            var line2=[]
+            if(it.authors)line2.push(it.authors)
+            if(it.year)line2.push(it.year)
+            if(line2.length)out+="\n"+line2.join(" · ")
+            if(it.recognized==="bibtex"){out+="\nPasted BibTeX"}
+            else{
+                out+="\n"+it.recognized+(it.abstract_source?" · abstract via "+it.abstract_source:" · no abstract found")+(it.pdf_url?" · open-access PDF found":"")
+            }
+        }
+        if((r.warnings||[]).length)out+="\n\nNot recognized: "+r.warnings.join("; ")
+        if(items.length===1 && items[0].recognized!=="bibtex")out+="\n\nImporting will also fetch and attach an open-access PDF, if one is found."
+        return (out||("Recognized: "+r.recognized))+"\n\nBibTeX to import\n"+r.bibtex
+    }
     function applyMetadata() {
         if(!metadataChoice || metadataBusy)return
         metadataBusy=true
@@ -163,9 +202,29 @@ Item {
     }
     function refresh() {
         rpc("get_repo_config",{},function(r){repoSettings=r})
+        rpc("repo_status",{},function(r){repoStatus=r})
         rpc("list_projects", {}, function(r) { projects = r.projects; updateProjectName() })
         rpc("status", {}, function(r) { referenceCount = r.references })
         search(false)
+    }
+    function relativeTime(iso) {
+        if(!iso)return ""
+        var ms=Date.now()-Date.parse(iso)
+        if(isNaN(ms))return ""
+        var s=Math.floor(ms/1000)
+        if(s<60)return "just now"
+        var m=Math.floor(s/60);if(m<60)return m+"m ago"
+        var h=Math.floor(m/60);if(h<24)return h+"h ago"
+        return Math.floor(h/24)+"d ago"
+    }
+    function syncChipText() {
+        if(root.syncBusy)return "Syncing…"
+        var s=root.repoStatus
+        if(!s || s.configured!==true)return "Set up sync"
+        if(s.last_error)return "⚠ Sync issue"
+        if(s.pending && s.pending.any)return "● Changes pending"
+        if(s.behind>0)return "↓ "+s.behind+" behind"
+        return "✓ Synced "+root.relativeTime(s.last_success)
     }
     function updateProjectName() {
         projectName = "All references"
@@ -226,11 +285,26 @@ Item {
         else if(format==="pandoc")copy("[@"+hit.citekey+"]")
         else rpc("export_bibtex",{ids:[hit.id]},function(r){copy(r.bibtex)})
     }
+    // A light heuristic for "this looks addable", used only to steer the
+    // empty-results hint and Enter's behavior; the server does the real
+    // recognition (and accepts several of these pasted together).
+    function looksLikeIdentifier(text) {
+        text=(text||"").trim()
+        if(!text)return false
+        if(/^(doi:)?10\.\S+\/\S+/i.test(text))return true
+        if(/doi\.org\//i.test(text))return true
+        if(/^arxiv:/i.test(text))return true
+        if(/arxiv\.org\//i.test(text))return true
+        if(/^\d{4}\.\d{4,5}(v\d+)?$/.test(text))return true
+        if(/^[a-z-]+\/\d{7}$/i.test(text))return true
+        if(/^https?:\/\//i.test(text))return true
+        return false
+    }
     function edit(kind, n) {
         editToken = "ui-"+Date.now()+"-"+Math.random().toString(36).slice(2)
         editKind = kind
         editingNote = n || null
-        editorDialog.title = kind==="note" ? (n ? "Edit contextual note" : "New contextual note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add entry: URL, DOI or BibTeX" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
+        editorDialog.title = kind==="note" ? (n ? "Edit contextual note" : "New contextual note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add: DOI, arXiv ID, URL or BibTeX" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
         editor.text = kind==="note" ? (n ? n.body : "") : kind==="metadata" && selected ? selected.bibtex : kind==="import" ? "@article{key,\n  title = {},\n  author = {},\n  year = {}\n}" : ""
         labels.text = n ? (n.labels || []).join(", ") : ""
         evidence.text = n ? (n.evidence || "") : ""
@@ -253,7 +327,7 @@ Item {
             method="upsert_reference";args={id:selected.id,expected_revision:selected.revision,bibtex:body}
         } else if(editKind==="import") {method="import_bibtex";args={bibtex:body,source:"Omabib UI"}}
         else if(editKind==="quick") {
-            rpc("preview_entry",{input:body},function(r){pendingImport=r;previewBody.text="Recognized: "+r.recognized+"\n\n"+r.bibtex+(r.repairs&&r.repairs.length?"\n\nRepairs: "+JSON.stringify(r.repairs,null,2):"")+(r.conflicts&&r.conflicts.length?"\n\nExisting values kept: "+JSON.stringify(r.conflicts,null,2):"");editorDialog.close();previewDialog.open()});return
+            rpc("preview_entry",{input:body},function(r){pendingImport=r;previewBody.text=root.quickAddPreviewText(r);editorDialog.close();previewDialog.open()});return
         }
         else if(editKind==="doi") {
             rpc("preview_doi",{doi:body.trim()},function(r){pendingImport=r;previewBody.text=r.bibtex+(r.conflicts&&r.conflicts.length?"\n\nExisting values will be preserved. Conflicts:\n"+JSON.stringify(r.conflicts,null,2):"");editorDialog.close();previewDialog.open()});return
@@ -278,11 +352,43 @@ Item {
         if(syncBusy)return
         if(!repoSettings.configured){openRepoSettings();return}
         syncBusy=true
-        syncRequest=rpc("sync_repo",{push:true},function(r){syncBusy=false;notice="History synced · "+r.references+" references";noticeTimer.restart()})
+        syncRequest=rpc("sync_repo",{push:true},function(r){
+            syncBusy=false
+            notice=r.ok===false?("Saved locally, but the push failed: "+(r.push_error||"")):"History synced · "+r.references+" references"
+            noticeTimer.restart()
+            rpc("repo_status",{},function(s){repoStatus=s})
+        })
         if(syncRequest===-1)syncBusy=false
     }
     function openRepoSettings() {
-        rpc("get_repo_config",{},function(r){repoSettings=r;repoPath.text=r.repo_path||"";repoRemote.text=r.remote_url||"";repoBranch.text=r.branch||"main";repoDialog.open()})
+        rpc("get_repo_config",{},function(r){repoSettings=r;repoPath.text=r.repo_path||"";repoRemote.text=r.remote_url||"";repoBranch.text=r.branch||"main";repoDialog.open();root.checkRepoPrereqs()})
+    }
+    function checkRepoPrereqs() {
+        var args={}
+        if(repoPath.text)args.repo_path=repoPath.text
+        rpc("repo_check",args,function(r){root.repoCheck=r})
+    }
+    function repoCheckSummary() {
+        var c=root.repoCheck
+        if(c===undefined||c.git===undefined)return "Checking…"
+        var bits=[]
+        bits.push(c.git?"git ✓":"git ✗ missing")
+        bits.push(c.git_lfs?"git-lfs ✓":"git-lfs ✗ missing")
+        bits.push(c.gh_logged_in?("gh ✓ ("+(c.gh_user||"logged in")+")"):(c.gh?"gh: not logged in — run gh auth login":"gh ✗ missing"))
+        if(c.path&&c.path.state==="repo")bits.push("path: existing repo"+(c.path.lfs_tracked?", LFS tracked":", LFS NOT tracked")+(c.path.dirty?", has local edits":""))
+        else if(c.path&&c.path.state&&c.path.state!=="unspecified")bits.push("path: "+c.path.state.replace(/_/g," "))
+        return bits.join("   ·   ")
+    }
+    function createGithubRepo() {
+        if(!repoNewName.text.trim()){root.error="Name the new repository first";return}
+        var args={mode:"create_github",name:repoNewName.text.trim(),branch:repoBranch.text||"main"}
+        if(repoPath.text)args.repo_path=repoPath.text
+        root.repoBusy=true
+        root.rpc("repo_setup",args,function(r){root.repoBusy=false;root.repoSettings=r;repoDialog.close();root.notice="Created and configured "+repoNewName.text.trim();noticeTimer.restart();root.checkRepoPrereqs()})
+    }
+    function useLocalRepo() {
+        root.repoBusy=true
+        root.rpc("repo_setup",{mode:"local",repo_path:repoPath.text,remote_url:repoRemote.text,branch:repoBranch.text||"main",fix_lfs:true},function(r){root.repoBusy=false;root.repoSettings=r;repoDialog.close();root.notice="Repository settings saved";noticeTimer.restart()})
     }
     function choosePdf() {
         var hit=currentHit();if(!hit)return
@@ -292,12 +398,13 @@ Item {
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){notice="PDF attached";noticeTimer.restart();showDetail()})
     }
+    readonly property int actionCount: 20
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
-        if (number===1 && actionDigits==="") {actionDigits="1";actionTimer.restart();return}
+        if (actionDigits==="" && Number(digit)*10<=root.actionCount) {actionDigits=digit;actionTimer.restart();return}
         actionDigits=""
-        if(number>=1 && number<=18)runAction(number)
+        if(number>=1 && number<=root.actionCount)runAction(number)
     }
     function runAction(number) {
         commandDialog.close()
@@ -320,10 +427,22 @@ Item {
         case 16:openRepoSettings();break
         case 17:lookupMetadata();break
         case 18:edit("quick");break
+        case 19:getPdf();break
+        case 20:copyPdfPath();break
         }
     }
     function importPreview() {
         if(!pendingImport)return
+        var items=pendingImport.items||[]
+        if(items.length===1 && items[0].recognized!=="bibtex") {
+            var item=items[0]
+            rpc("add_reference",{input:item.input,download_pdf:true,project_id:projectId||null,idempotency_key:editToken+"-add"},function(r){
+                previewDialog.close();refresh();if(expanded)showDetail()
+                notice="Added "+r.citekey+(r.merged?" (filled an existing reference)":"")+(r.attachment&&r.attachment.exists?" · PDF attached":"")+(r.abstract_source?" · abstract via "+r.abstract_source:"")
+                noticeTimer.restart()
+            })
+            return
+        }
         rpc("import_bibtex",pendingImport,function(r){previewDialog.close();refresh();notice="Imported";noticeTimer.restart();showImportReport(r)})
     }
     function importBibFile(url) {
@@ -333,7 +452,7 @@ Item {
         if(bibFile.path===importPath)bibFile.reload()
         else bibFile.path=importPath
     }
-    Timer {id:actionTimer;interval:700;onTriggered:root.runAction(1)}
+    Timer {id:actionTimer;interval:700;onTriggered:root.runAction(Number(root.actionDigits))}
     FileView {
         id:bibFile
         onLoaded:{
@@ -370,7 +489,7 @@ Item {
         connected: true
         onConnectedChanged: {
             if(connected){root.error="";if(root.opened)root.refresh()}
-            else {root.pending=({});root.metadataBusy=false;root.syncBusy=false;root.error="Library service disconnected. Reconnecting…"}
+            else {root.pending=({});root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
         }
         parser: SplitParser {
             onRead: data => {
@@ -380,6 +499,7 @@ Item {
                     delete root.pending[message.id]
                     if(message.id===root.syncRequest)root.syncBusy=false
                     if(message.id===root.metadataRequest)root.metadataBusy=false
+                    if(message.id===root.pdfRequest)root.pdfBusy=false
                     if(message.error){if(message.id===root.metadataRequest)root.metadataInfo=message.error.message;if(message.id===root.pendingSearch)root.searchPending=false;root.error=message.error.message;return}
                     if(callback)callback(message.result)
                 } catch(e){root.error="Could not read the library response: "+e}
@@ -420,7 +540,7 @@ Item {
                     Label { text:"omabib";color:root.fg;font.family:root.fontFamily;font.pixelSize:22;font.bold:true }
                     Label { text:root.referenceCount.toLocaleString()+" references";color:root.fg;opacity:.755;font.pixelSize:12;Layout.fillWidth:true }
                     BibButton { text:root.projectName+"  ▾";onClicked:projectDialog.open() }
-                    BibButton {text:root.syncBusy?"Syncing…":"Sync";enabled:!root.syncBusy;onClicked:root.syncHistory()}
+                    BibButton {text:root.syncChipText();enabled:!root.syncBusy;onClicked:root.syncHistory()}
                     BibButton {text:"Repo";onClicked:root.openRepoSettings()}
                     BibButton { text:"⌘  Actions";onClicked:commandDialog.open() }
                 }
@@ -431,7 +551,11 @@ Item {
                     Keys.onPressed:event=>{
                         if(event.key===Qt.Key_Down || (event.key===Qt.Key_N && event.modifiers & Qt.ControlModifier)){root.navigate(1);event.accepted=true}
                         else if(event.key===Qt.Key_Up || (event.key===Qt.Key_P && event.modifiers & Qt.ControlModifier)){root.navigate(-1);event.accepted=true}
-                        else if(event.key===Qt.Key_Return || event.key===Qt.Key_Enter){root.openPdf();event.accepted=true}
+                        else if(event.key===Qt.Key_Return || event.key===Qt.Key_Enter){
+                            if(root.hits.length===0 && root.looksLikeIdentifier(query.text)){var pasted=query.text.trim();root.edit("quick");editor.text=pasted}
+                            else root.openPdf()
+                            event.accepted=true
+                        }
                         else if(event.key===Qt.Key_Tab){root.showDetail();event.accepted=true}
                     }
                 }
@@ -472,7 +596,7 @@ Item {
                                 }
                                 onClicked:{results.currentIndex=index;root.showDetail();query.forceActiveFocus()}
                             }
-                            Label {anchors.centerIn:parent;visible:root.hits.length===0;text:root.referenceCount?"No matching references":"Your library is ready.\nAdd BibTeX or a DOI from Actions.";horizontalAlignment:Text.AlignHCenter;color:root.fg;opacity:.8}
+                            Label {anchors.centerIn:parent;visible:root.hits.length===0;text:root.looksLikeIdentifier(query.text)?"Press Enter to add "+query.text.trim()+" to your library":(root.referenceCount?"No matching references":"Your library is ready.\nAdd BibTeX or a DOI from Actions.");horizontalAlignment:Text.AlignHCenter;color:root.fg;opacity:.8}
                         }
                         BibButton {visible:root.nextCursor!==null;text:"More results";Layout.alignment:Qt.AlignHCenter;onClicked:root.search(true)}
                     }
@@ -492,6 +616,8 @@ Item {
                             RowLayout {
                                 BibButton{text:"Open PDF / link";onClicked:root.openPdf()}
                                 BibButton{text:root.metadataBusy?"Looking up…":"Fill metadata";enabled:!root.metadataBusy;onClicked:root.lookupMetadata()}
+                                BibButton{text:root.pdfBusy?"Finding PDF…":"Get PDF";enabled:!root.pdfBusy;onClicked:root.getPdf()}
+                                BibButton{text:"Copy PDF path";onClicked:root.copyPdfPath()}
                             }
                             Label {text:root.selected?(root.selected.abstract||"No abstract available."):"";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;font.pixelSize:14;textFormat:Text.PlainText}
                             Repeater {
@@ -538,14 +664,14 @@ Item {
             onClosed:{root.actionDigits="";actionTimer.stop()}
             ColumnLayout {
                 anchors.fill:parent
-                Label {text:root.actionDigits ? "Number: "+root.actionDigits+" · Enter to select" : "Type 1–18 to select an action";color:root.fg;Layout.fillWidth:true}
+                Label {text:root.actionDigits ? "Number: "+root.actionDigits+" · Enter to select" : "Type 1–20 to select an action";color:root.fg;Layout.fillWidth:true}
                 ScrollView {
                     id:actionsScroll
                     Layout.fillWidth:true;Layout.fillHeight:true
                     ColumnLayout {
                         width:actionsScroll.availableWidth
                         Repeater {
-                            model:["Copy citation key","Copy LaTeX citation","Copy Pandoc / Quarto citation","Copy BibTeX","Paste BibTeX","Import BibTeX file…","Add DOI","New contextual note","Attach PDF","Choose project","Create project","Copy project bibliography","Copy project notes","Open PDF / link","Sync history","Repository settings","Fill metadata online","Add entry from URL / DOI / BibTeX"]
+                            model:["Copy citation key","Copy LaTeX citation","Copy Pandoc / Quarto citation","Copy BibTeX","Paste BibTeX","Import BibTeX file…","Add DOI","New contextual note","Attach PDF","Choose project","Create project","Copy project bibliography","Copy project notes","Open PDF / link","Sync history","Repository settings","Fill metadata online","Add entry from URL / DOI / BibTeX","Get PDF (download if needed)","Copy PDF path"]
                             BibButton {
                                 required property string modelData
                                 required property int index
@@ -680,15 +806,21 @@ Item {
             id:repoDialog;title:"History repository";anchors.centerIn:parent;width:Math.min(720,window.width-60);modal:true
             ColumnLayout {
                 anchors.fill:parent
-                Label{text:"Existing Git checkout";color:root.fg}
-                TextField{id:repoPath;Layout.fillWidth:true;placeholderText:"/absolute/path/to/history"}
-                Label{text:"Remote URL (origin)";color:root.fg}
-                TextField{id:repoRemote;Layout.fillWidth:true;placeholderText:"https://github.com/owner/repository.git"}
+                Label{text:root.repoCheckSummary();color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;font.pixelSize:11;opacity:.85}
+                Label{text:"Path (existing checkout, or where to create a new one)";color:root.fg}
+                RowLayout{Layout.fillWidth:true;TextField{id:repoPath;Layout.fillWidth:true;placeholderText:"/absolute/path/to/history";onEditingFinished:root.checkRepoPrereqs()}BibButton{text:"Check";onClicked:root.checkRepoPrereqs()}}
                 Label{text:"Branch";color:root.fg}
                 TextField{id:repoBranch;Layout.fillWidth:true;text:"main"}
-                Label{text:"Sync exports the local library and pushes it. Remote metadata is not merged into SQLite.";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true}
                 Label{text:root.error;visible:text!=="";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true}
-                RowLayout {Layout.alignment:Qt.AlignRight;BibButton{text:"Cancel";onClicked:repoDialog.close()}BibButton{text:"Save";onClicked:root.rpc("set_repo_config",{repo_path:repoPath.text,remote_url:repoRemote.text,branch:repoBranch.text},function(r){root.repoSettings=r;repoDialog.close();root.notice="Repository settings saved";noticeTimer.restart()})}}
+                Rectangle{Layout.fillWidth:true;height:1;color:root.borderColor}
+                Label{text:"Create a new private GitHub repository";color:root.fg;font.bold:true}
+                RowLayout{Layout.fillWidth:true;TextField{id:repoNewName;Layout.fillWidth:true;placeholderText:"omabib-history"}BibButton{text:root.repoBusy?"Working…":"Create";enabled:!root.repoBusy&&root.repoCheck.gh_logged_in===true;onClicked:root.createGithubRepo()}}
+                Rectangle{Layout.fillWidth:true;height:1;color:root.borderColor}
+                Label{text:"Or use an existing local checkout";color:root.fg;font.bold:true}
+                Label{text:"Remote URL (origin) — leave blank to keep the checkout's own";color:root.fg}
+                TextField{id:repoRemote;Layout.fillWidth:true;placeholderText:"https://github.com/owner/repository.git"}
+                Label{text:"Sync exports the local library and pushes it; Git LFS is configured automatically if it isn't tracking PDFs yet. Remote metadata is never merged into SQLite.";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;font.pixelSize:11;opacity:.85}
+                RowLayout {Layout.alignment:Qt.AlignRight;BibButton{text:"Cancel";onClicked:repoDialog.close()}BibButton{text:root.repoBusy?"Working…":"Use this checkout";enabled:!root.repoBusy;onClicked:root.useLocalRepo()}}
             }
         }
         BibDialog {
@@ -707,7 +839,7 @@ Item {
                 anchors.fill:parent
                 Label {visible:root.editKind==="note";text:"Assessment scope"}
                 ComboBox{id:noteScope;visible:root.editKind==="note";model:["Global"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
-                ScrollView {Layout.fillWidth:true;Layout.fillHeight:true;TextArea{id:editor;objectName:"editor";wrapMode:TextEdit.Wrap;selectByMouse:true;font.family:root.fontFamily;placeholderText:root.editKind==="quick"?"Paste a URL, DOI or whole BibTeX entry…":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""}}
+                ScrollView {Layout.fillWidth:true;Layout.fillHeight:true;TextArea{id:editor;objectName:"editor";wrapMode:TextEdit.Wrap;selectByMouse:true;font.family:root.fontFamily;placeholderText:root.editKind==="quick"?"Paste a DOI, arXiv ID, URL, several of those, or a whole BibTeX entry…":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""}}
                 TextField{id:labels;visible:root.editKind==="note";placeholderText:"Optional labels, separated by commas";Layout.fillWidth:true}
                 TextField{id:evidence;visible:root.editKind==="note";placeholderText:"Optional evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
                 Label{visible:root.error!=="";text:root.error;wrapMode:Text.Wrap;Layout.fillWidth:true}
