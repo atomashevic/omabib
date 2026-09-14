@@ -333,6 +333,7 @@ impl Library {
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(a),
             "lookup_abstract" => lookup_abstract(self, a),
+            "add_reference" => self.add_reference(a),
             "get_attachment" => {
                 let c = read_connection(&self.path)?;
                 c.query_row("SELECT id,ref_id,path,file_type,fingerprint FROM attachments WHERE id=?",[required(a,"id")?],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"file_type":r.get::<_,String>(3)?,"fingerprint":r.get::<_,Option<String>>(4)?}))).context("Unknown attachment")
@@ -447,7 +448,12 @@ impl Library {
             }
             "associate" => {
                 validate_labels(a)?;
-                tx.execute("INSERT INTO associations VALUES(?,?,?) ON CONFLICT(ref_id,project_id) DO UPDATE SET labels=excluded.labels",params![required(a,"ref_id")?,required(a,"project_id")?,json_field(a,"labels",json!([]))])?;
+                associate_within(
+                    &tx,
+                    required(a, "ref_id")?,
+                    required(a, "project_id")?,
+                    &json_field(a, "labels", json!([])),
+                )?;
                 json!({"associated":true})
             }
             "add_note" | "update_note" => write_note(&tx, method, a)?,
@@ -476,16 +482,15 @@ impl Library {
                 json!({"id":id,"path":path,"exists":true})
             }
             "attach" => {
-                let aid = id();
                 let path = PathBuf::from(required(a, "path")?);
                 ensure!(path.is_absolute(), "Attachment path must be absolute");
-                tx.execute("INSERT INTO attachments VALUES(?,?,?,?,?) ON CONFLICT(ref_id,path) DO UPDATE SET file_type=excluded.file_type,fingerprint=excluded.fingerprint",params![aid,required(a,"ref_id")?,path.to_string_lossy(),a.get("file_type").and_then(Value::as_str).unwrap_or("pdf"),a.get("fingerprint").and_then(Value::as_str)])?;
-                let actual_id: String = tx.query_row(
-                    "SELECT id FROM attachments WHERE ref_id=? AND path=?",
-                    params![required(a, "ref_id")?, path.to_string_lossy()],
-                    |r| r.get(0),
-                )?;
-                json!({"id":actual_id,"ref_id":text(a,"ref_id"),"path":path,"exists":path.is_file()})
+                attach_within(
+                    &tx,
+                    required(a, "ref_id")?,
+                    &path,
+                    a.get("file_type").and_then(Value::as_str).unwrap_or("pdf"),
+                    a.get("fingerprint").and_then(Value::as_str),
+                )?
             }
             _ => unreachable!(),
         };
@@ -558,6 +563,131 @@ impl Library {
             json!({"project_id":project,"items":items,"next_cursor":next,"truncated":!next.is_null(),"max_chars":budget}),
         )
     }
+    fn idempotent_result(&self, key: &str, payload: &str) -> Result<Option<Value>> {
+        let c = self.writer.lock().unwrap();
+        if let Some((old, result)) = c
+            .query_row(
+                "SELECT payload,result FROM requests WHERE key=?",
+                [key],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?
+        {
+            ensure!(old == payload, "Idempotency key reused with different request");
+            return Ok(Some(serde_json::from_str(&result)?));
+        }
+        Ok(None)
+    }
+    /// Add a reference from a DOI, arXiv ID, URL, BibTeX entry or PDF file in
+    /// one call: identify it, fetch its abstract and an open-access PDF link
+    /// (network work, done before any lock is held), then import it, attach
+    /// a PDF and link it to a project inside one write transaction.
+    pub fn add_reference(&self, a: &Value) -> Result<Value> {
+        let key = text(a, "idempotency_key").to_string();
+        let payload = json!({"method":"add_reference","params":a}).to_string();
+        if !key.is_empty()
+            && let Some(cached) = self.idempotent_result(&key, &payload)?
+        {
+            return Ok(cached);
+        }
+        let input = a
+            .get("input")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let pdf_path = a
+            .get("pdf_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        ensure!(
+            input.is_some() || pdf_path.is_some(),
+            "Provide input (a DOI, arXiv ID, URL or BibTeX entry) or pdf_path"
+        );
+        let download_pdf = a.get("download_pdf") != Some(&json!(false));
+
+        let preview = if let Some(input) = input {
+            crate::ingest::preview(&json!({"input":input}))?
+        } else {
+            let identified = crate::attachments::identify_pdf(&json!({"path":pdf_path.unwrap()}))?;
+            let candidates = identified["candidates"].as_array().cloned().unwrap_or_default();
+            ensure!(
+                !candidates.is_empty(),
+                "Could not identify this PDF. Pass its DOI, arXiv ID or a URL as input instead."
+            );
+            ensure!(
+                candidates.len() == 1,
+                "This PDF's title matched more than one candidate; call identify_pdf first, then pass the correct DOI or URL as input."
+            );
+            let item = candidates.into_iter().next().unwrap();
+            json!({"bibtex":item["bibtex"],"items":[item]})
+        };
+        let first_item = preview["items"][0].clone();
+
+        let mut attach_path = pdf_path.map(PathBuf::from);
+        if let Some(p) = &attach_path {
+            ensure!(p.is_absolute(), "pdf_path must be absolute");
+        }
+        if attach_path.is_none()
+            && download_pdf
+            && let Some(url) = first_item["pdf_url"].as_str().filter(|s| !s.is_empty())
+            && let Ok((path, _)) =
+                crate::attachments::download_and_store(self, url, text(&first_item, "citekey"))
+        {
+            attach_path = Some(path);
+        }
+
+        let mut c = self.writer.lock().unwrap();
+        let tx = c.transaction()?;
+        if !key.is_empty()
+            && let Some((old, result)) = tx
+                .query_row(
+                    "SELECT payload,result FROM requests WHERE key=?",
+                    [&key],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()?
+        {
+            ensure!(old == payload, "Idempotency key reused with different request");
+            return Ok(serde_json::from_str(&result)?);
+        }
+        let changes = import(&tx, &preview)?;
+        let item = changes["items"]
+            .as_array()
+            .and_then(|xs| xs.first())
+            .cloned()
+            .context("Nothing was imported")?;
+        let ref_id = text(&item, "id").to_string();
+        let mut attachment = Value::Null;
+        if let Some(p) = &attach_path {
+            let canonical = p.canonicalize().context("Cannot read pdf_path")?;
+            let hash = crate::attachments::inspect(&canonical)?;
+            attachment = attach_within(&tx, &ref_id, &canonical, "pdf", Some(&hash))?;
+        }
+        if let Some(pid) = a.get("project_id").and_then(Value::as_str) {
+            associate_within(&tx, &ref_id, pid, "[]")?;
+        }
+        let out = json!({
+            "id": ref_id,
+            "citekey": item["citekey"],
+            "merged": item["merged"],
+            "conflicts": changes["conflicts"],
+            "repairs": changes["repairs"],
+            "abstract_source": first_item["abstract_source"],
+            "attachment": attachment,
+            "warnings": first_item["warnings"],
+        });
+        if !key.is_empty() {
+            tx.execute(
+                "INSERT INTO requests VALUES(?,?,?)",
+                params![key, payload, out.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        drop(c);
+        self.load_vocabulary()?;
+        Ok(out)
+    }
 }
 fn validate_roots(a: &Value) -> Result<()> {
     if let Some(roots) = a.get("roots") {
@@ -580,6 +710,32 @@ fn validate_labels(a: &Value) -> Result<()> {
         );
     }
     Ok(())
+}
+/// Link a reference to a project, replacing that association's labels.
+/// Shared by the `associate` operation and `add_reference`'s optional
+/// `project_id`, both of which run inside an already-open transaction.
+fn associate_within(c: &Connection, ref_id: &str, project_id: &str, labels: &str) -> Result<()> {
+    c.execute("INSERT INTO associations VALUES(?,?,?) ON CONFLICT(ref_id,project_id) DO UPDATE SET labels=excluded.labels",params![ref_id,project_id,labels])?;
+    Ok(())
+}
+/// Record a pointer to a PDF (or other file) for a reference, deduplicating
+/// on (ref_id, path). Shared by the `attach` operation and `add_reference`,
+/// both of which run inside an already-open transaction.
+fn attach_within(
+    c: &Connection,
+    ref_id: &str,
+    path: &Path,
+    file_type: &str,
+    fingerprint: Option<&str>,
+) -> Result<Value> {
+    let aid = id();
+    c.execute("INSERT INTO attachments VALUES(?,?,?,?,?) ON CONFLICT(ref_id,path) DO UPDATE SET file_type=excluded.file_type,fingerprint=excluded.fingerprint",params![aid,ref_id,path.to_string_lossy(),file_type,fingerprint])?;
+    let actual_id: String = c.query_row(
+        "SELECT id FROM attachments WHERE ref_id=? AND path=?",
+        params![ref_id, path.to_string_lossy()],
+        |r| r.get(0),
+    )?;
+    Ok(json!({"id":actual_id,"ref_id":ref_id,"path":path,"exists":path.is_file()}))
 }
 fn insert_doc(c: &Connection, rid: &str) -> Result<()> {
     let (key, title, authors, ab, fields): (String, String, String, String, String) = c.query_row(

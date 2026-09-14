@@ -521,3 +521,75 @@ fn get_pdf_reports_no_copy_without_network_when_download_disabled() {
             .is_err()
     );
 }
+
+#[test]
+fn add_reference_from_bibtex_attaches_pdf_and_associates_project_atomically() {
+    let (d, l, _) = setup();
+    let project = l
+        .call("create_project", &json!({"name":"Thesis"}))
+        .unwrap();
+    let pdf = d.path().join("local.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
+    let bibtex = "@article{Added2025,title={Added by hand},author={Doe, Jane},year={2025}}";
+    let args = json!({
+        "input": bibtex,
+        "pdf_path": pdf,
+        "project_id": project["id"],
+        "download_pdf": false,
+        "idempotency_key": "add-ref-1",
+    });
+    let out = l.call("add_reference", &args).unwrap();
+    assert_eq!(out["citekey"], "Added2025");
+    let r = l
+        .call("get_reference", &json!({"id":out["id"]}))
+        .unwrap();
+    assert_eq!(r["pdf_path"], json!(pdf.to_str().unwrap()));
+    let ctx = l
+        .call("project_context", &json!({"project_id":project["id"]}))
+        .unwrap();
+    assert!(
+        ctx["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == out["id"])
+    );
+
+    // Retrying with the same idempotency key returns the cached result
+    // rather than importing a second time.
+    let count = l.call("status", &json!({})).unwrap()["references"]
+        .as_i64()
+        .unwrap();
+    let retried = l.call("add_reference", &args).unwrap();
+    assert_eq!(retried, out);
+    assert_eq!(
+        l.call("status", &json!({})).unwrap()["references"],
+        json!(count)
+    );
+
+    // Reusing the same key with different content is rejected.
+    let mut different = args.clone();
+    different["input"] = json!("@article{Other,title={Other},year={2026}}");
+    assert!(l.call("add_reference", &different).is_err());
+}
+
+#[test]
+fn add_reference_is_atomic_when_the_pdf_path_is_unreadable() {
+    let (_d, l, _) = setup();
+    let bibtex = "@article{ShouldNotExist2025,title={Should not be saved},year={2025}}";
+    let result = l.call(
+        "add_reference",
+        &json!({"input":bibtex,"pdf_path":"/nonexistent/absolute/path-omabib-test.pdf","download_pdf":false}),
+    );
+    assert!(result.is_err());
+    assert!(
+        l.call("get_reference", &json!({"id":"ShouldNotExist2025"}))
+            .is_err()
+    );
+}
+
+#[test]
+fn add_reference_requires_input_or_pdf_path() {
+    let (_d, l, _) = setup();
+    assert!(l.call("add_reference", &json!({})).is_err());
+}

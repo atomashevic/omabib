@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 const MAX_PDF: u64 = 512 * 1024 * 1024;
-fn inspect(path: &Path) -> Result<String> {
+pub(crate) fn inspect(path: &Path) -> Result<String> {
     let mut f = File::open(path).context("Cannot open PDF")?;
     ensure!(
         f.metadata()?.is_file() && f.metadata()?.len() <= MAX_PDF,
@@ -96,6 +96,48 @@ fn finish(lib: &Library, path: &Path, citekey: &str) -> Result<(PathBuf, String)
     }
     Ok((target, hash))
 }
+/// Download a PDF from an HTTPS URL into managed storage under a
+/// citekey-derived name, without attaching it to any reference. Shared by
+/// `pull` (which already has a saved reference to name it after) and
+/// `add_reference` (which names it from a not-yet-saved preview's citekey
+/// hint, since the download happens before the reference is imported).
+pub(crate) fn download_and_store(
+    lib: &Library,
+    url: &str,
+    citekey_hint: &str,
+) -> Result<(PathBuf, String)> {
+    let temporary = temp(lib)?;
+    let result = (|| {
+        let url = reqwest::Url::parse(url)?;
+        ensure!(
+            url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
+            "PDF downloads require an HTTPS URL without embedded credentials"
+        );
+        let response = reqwest::blocking::Client::builder()
+            .https_only(true)
+            .timeout(Duration::from_secs(90))
+            .build()?
+            .get(url)
+            .send()?
+            .error_for_status()?;
+        ensure!(
+            response.content_length().is_none_or(|n| n <= MAX_PDF),
+            "PDF exceeds 512 MiB"
+        );
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let bytes = std::io::copy(&mut response.take(MAX_PDF + 1), &mut output)?;
+        ensure!(bytes <= MAX_PDF, "PDF exceeds 512 MiB");
+        drop(output);
+        finish(lib, &temporary, citekey_hint)
+    })();
+    if temporary.exists() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
 pub fn pull(lib: &Library, a: &Value) -> Result<Value> {
     let temporary = temp(lib)?;
     let result = (|| {
@@ -109,30 +151,7 @@ pub fn pull(lib: &Library, a: &Value) -> Result<Value> {
                 "get_reference",
                 &json!({"id":ref_id,"include_metadata":false}),
             )?;
-            let url = reqwest::Url::parse(url)?;
-            ensure!(
-                url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
-                "PDF downloads require an HTTPS URL without embedded credentials"
-            );
-            let response = reqwest::blocking::Client::builder()
-                .https_only(true)
-                .timeout(Duration::from_secs(90))
-                .build()?
-                .get(url)
-                .send()?
-                .error_for_status()?;
-            ensure!(
-                response.content_length().is_none_or(|n| n <= MAX_PDF),
-                "PDF exceeds 512 MiB"
-            );
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
-            let bytes = std::io::copy(&mut response.take(MAX_PDF + 1), &mut output)?;
-            ensure!(bytes <= MAX_PDF, "PDF exceeds 512 MiB");
-            drop(output);
-            let (path, _) = finish(lib, &temporary, text(&reference, "citekey"))?;
+            let (path, _) = download_and_store(lib, url, text(&reference, "citekey"))?;
             let mut args = json!({"ref_id":ref_id,"path":path});
             if let Some(k) = a.get("idempotency_key") {
                 args["idempotency_key"] = k.clone();
