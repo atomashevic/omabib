@@ -1,8 +1,8 @@
 use crate::db::{Library, clip, normalize, normalize_doi, text};
 use anyhow::{Result, ensure};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 use symspell::Verbosity;
 
 #[derive(Debug)]
@@ -278,11 +278,25 @@ pub fn search_cancellable(
         .take(limit)
         .collect::<Vec<_>>();
     for h in &mut result {
+        let id = text(h, "id").to_string();
         h["note_count"] = json!(c.query_row(
             "SELECT count(*) FROM notes WHERE ref_id=?",
-            [text(h, "id")],
+            [&id],
             |r| r.get::<_, i64>(0)
         )?);
+        h["has_abstract"] = json!(
+            c.query_row("SELECT abstract<>'' FROM refs WHERE id=?", [&id], |r| r
+                .get::<_, bool>(0))
+                .unwrap_or(false)
+        );
+        let pdf_path: Option<String> = c
+            .query_row(
+                "SELECT path FROM attachments WHERE ref_id=? AND file_type='pdf' ORDER BY rowid",
+                [&id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        h["has_pdf"] = json!(pdf_path.is_some_and(|p| Path::new(&p).is_file()));
     }
     Ok(
         json!({"results":result,"next_cursor":if more{json!(offset+limit)}else{Value::Null},"corrections":corrected,"ranking":"bounded_field_weighted","candidate_limited":candidate_limited,"elapsed_ms":start.elapsed().as_secs_f64()*1000.0}),

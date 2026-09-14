@@ -280,7 +280,7 @@ fn from_url(token: &str, url: reqwest::Url) -> Result<Value> {
 
 /// Identify a single token (not a whole BibTeX entry) as a DOI, arXiv ID or
 /// plain URL, and fetch a previewable entry for it.
-fn identify_one(token: &str) -> Result<Value> {
+pub(crate) fn identify_one(token: &str) -> Result<Value> {
     let token = token.trim();
     let mut result = if let Some(doi) = doi_from_text(token) {
         from_doi(&doi, "doi")

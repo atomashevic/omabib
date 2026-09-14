@@ -143,6 +143,24 @@ pub(crate) fn datacite(v: &Value) -> Value {
     }
     json!({"gateway":"DataCite","source":format!("https://api.datacite.org/dois/{}",text(v,"doi")),"fields":f})
 }
+/// A bounded, best-effort Crossref title search, shared by the interactive
+/// "Fill metadata" candidate search and PDF-based identification.
+pub(crate) fn title_search(c: &Client, title: &str, authors: &str) -> Result<Vec<Value>> {
+    let mut url = Url::parse("https://api.crossref.org/works")?;
+    url.query_pairs_mut()
+        .append_pair("query.title", title)
+        .append_pair("rows", "15");
+    if !authors.is_empty() {
+        url.query_pairs_mut().append_pair("query.author", authors);
+    }
+    let v = fetch(c, url)?;
+    Ok(v["message"]["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(crossref)
+        .collect())
+}
 pub(crate) fn inferred_doi(r: &Value) -> String {
     let fields = &r["fields"];
     let doi = db::normalize_doi(text(fields, "doi"));
@@ -231,20 +249,8 @@ pub fn lookup(lib: &Library, a: &Value) -> Result<Value> {
             !text(&r, "title").is_empty(),
             "Add a title or DOI before looking up metadata"
         );
-        let mut url = Url::parse("https://api.crossref.org/works")?;
-        url.query_pairs_mut()
-            .append_pair("query.title", text(&r, "title"))
-            .append_pair("rows", "15");
-        if !text(&r, "authors").is_empty() {
-            url.query_pairs_mut()
-                .append_pair("query.author", text(&r, "authors"));
-        }
-        match fetch(&c, url) {
-            Ok(v) => {
-                if let Some(items) = v["message"]["items"].as_array() {
-                    candidates.extend(items.iter().map(crossref))
-                }
-            }
+        match title_search(&c, text(&r, "title"), text(&r, "authors")) {
+            Ok(items) => candidates.extend(items),
             Err(e) => warnings.push(format!("Crossref: {e}")),
         }
     }

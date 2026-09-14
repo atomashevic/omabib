@@ -330,6 +330,9 @@ impl Library {
             "sync_repo" => crate::history::sync(self, a),
             "add_pdf" => crate::attachments::add(self, a),
             "pull_pdf" => crate::attachments::pull(self, a),
+            "get_pdf" => crate::attachments::get_pdf(self, a),
+            "identify_pdf" => crate::attachments::identify_pdf(a),
+            "lookup_abstract" => lookup_abstract(self, a),
             "get_attachment" => {
                 let c = read_connection(&self.path)?;
                 c.query_row("SELECT id,ref_id,path,file_type,fingerprint FROM attachments WHERE id=?",[required(a,"id")?],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"file_type":r.get::<_,String>(3)?,"fingerprint":r.get::<_,Option<String>>(4)?}))).context("Unknown attachment")
@@ -853,6 +856,17 @@ pub fn get_reference(c: &Connection, a: &Value) -> Result<Value> {
     let rid = required(a, "id")?;
     let mut out=c.query_row("SELECT id,citekey,title,authors,year,entry_type,abstract,fields,bibtex,revision,source FROM refs WHERE id=? OR citekey=?",params![rid,rid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"authors":r.get::<_,String>(3)?,"year":r.get::<_,String>(4)?,"entry_type":r.get::<_,String>(5)?,"abstract":r.get::<_,String>(6)?,"fields":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!({})),"bibtex":r.get::<_,String>(8)?,"revision":r.get::<_,i64>(9)?,"source":r.get::<_,String>(10)?}))).context("Reference not found")?;
     let rid = text(&out, "id").to_string();
+    // Always surface a readable PDF path (if any) for agents; full
+    // attachment detail (IDs, fingerprints, missing files) stays opt-in.
+    out["pdf_path"] = c
+        .query_row(
+            "SELECT path FROM attachments WHERE ref_id=? AND file_type='pdf' ORDER BY rowid",
+            [&rid],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .filter(|p| Path::new(p).is_file())
+        .map_or(Value::Null, |p| json!(p));
     if a.get("include_metadata") == Some(&json!(false)) {
         for key in ["abstract", "fields", "bibtex", "source"] {
             out.as_object_mut().unwrap().remove(key);
@@ -1065,4 +1079,24 @@ fn preview_doi(a: &Value) -> Result<Value> {
     ensure!(raw.len() <= 1024 * 1024, "DOI response too large");
     parse_bibtex(&raw).map_err(|e| anyhow::anyhow!("DOI returned invalid BibTeX: {e}"))?;
     Ok(json!({"doi":doi,"bibtex":raw,"saved":false,"source":format!("https://doi.org/{doi}")}))
+}
+/// Preview an abstract for one reference that already has an exact DOI or
+/// arXiv identifier, without writing anything. Used by `enrich --abstracts`
+/// and `apply_metadata` to backfill abstracts across the whole library.
+fn lookup_abstract(lib: &Library, a: &Value) -> Result<Value> {
+    let r = get_reference(&read_connection(&lib.path)?, a)?;
+    let doi = crate::metadata::inferred_doi(&r);
+    ensure!(
+        !doi.is_empty(),
+        "This reference has no DOI or arXiv identifier to look up an abstract by"
+    );
+    let arxiv_id = crate::metadata::arxiv_from_doi(&doi);
+    let (found, warnings) = crate::abstracts::find_abstract(&doi, &arxiv_id)?;
+    Ok(json!({
+        "id": r["id"],
+        "expected_revision": r["revision"],
+        "abstract": found.as_ref().map(|f| f.text.clone()),
+        "source": found.as_ref().map(|f| f.source.clone()),
+        "warnings": warnings,
+    }))
 }

@@ -469,3 +469,55 @@ fn universal_add_previews_bibtex_without_writing() {
         assert!(l.call("preview_entry", &json!({"input":input})).is_err());
     }
 }
+
+#[test]
+fn pdf_path_and_search_flags_reflect_attachments_and_abstracts() {
+    let (d, l, r) = setup();
+    let smith = first(&r);
+    let book = r["items"][1]["id"].as_str().unwrap();
+    // Smith2024 has an abstract already; Book2020 does not.
+    let smith_hit = l.call("search", &json!({"query":"collective creativity"})).unwrap()["results"][0].clone();
+    assert_eq!(smith_hit["id"], smith);
+    assert_eq!(smith_hit["has_abstract"], true);
+    assert_eq!(smith_hit["has_pdf"], false);
+    let smith_ref = l.call("get_reference", &json!({"id":smith})).unwrap();
+    assert_eq!(smith_ref["pdf_path"], Value::Null);
+
+    let pdf = d.path().join("paper.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
+    l.call("add_pdf", &json!({"ref_id":book,"path":pdf})).unwrap();
+    let book_ref = l.call("get_reference", &json!({"id":book})).unwrap();
+    assert_eq!(book_ref["pdf_path"], json!(pdf.to_str().unwrap()));
+    let book_hit = l.call("search", &json!({"query":"measurement theory"})).unwrap()["results"][0].clone();
+    assert_eq!(book_hit["id"], book);
+    assert_eq!(book_hit["has_pdf"], true);
+    assert_eq!(book_hit["has_abstract"], false);
+
+    // Once the local file is gone, pdf_path and has_pdf both go false again
+    // (removing the link is the only way to make the record forget it).
+    std::fs::remove_file(&pdf).unwrap();
+    let book_ref2 = l.call("get_reference", &json!({"id":book})).unwrap();
+    assert_eq!(book_ref2["pdf_path"], Value::Null);
+}
+
+#[test]
+fn get_pdf_returns_existing_local_attachment_without_network() {
+    let (d, l, r) = setup();
+    let book = r["items"][1]["id"].as_str().unwrap();
+    let pdf = d.path().join("existing.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
+    l.call("add_pdf", &json!({"ref_id":book,"path":pdf.clone()})).unwrap();
+    let got = l.call("get_pdf", &json!({"ref_id":book})).unwrap();
+    assert_eq!(got["source"], "local");
+    assert_eq!(got["path"], json!(pdf.to_str().unwrap()));
+}
+
+#[test]
+fn get_pdf_reports_no_copy_without_network_when_download_disabled() {
+    let (_d, l, r) = setup();
+    let book = r["items"][1]["id"].as_str().unwrap();
+    assert!(
+        l.call("get_pdf", &json!({"ref_id":book,"download":false}))
+            .is_err()
+    );
+}
