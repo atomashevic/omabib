@@ -28,7 +28,7 @@ pub(crate) fn endpoint(base: &str, id: &str) -> Result<Url> {
     u.path_segments_mut().unwrap().push(id);
     Ok(u)
 }
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     let mut out = String::new();
     let mut tag = false;
     for ch in s.chars() {
@@ -182,7 +182,11 @@ pub(crate) fn inferred_doi(r: &Value) -> String {
     }
     String::new()
 }
-fn match_score(reference: &Value, candidate: &Value) -> f64 {
+/// Extract the bare arXiv identifier back out of an inferred `10.48550/arxiv.ID` DOI.
+pub(crate) fn arxiv_from_doi(doi: &str) -> String {
+    doi.strip_prefix("10.48550/arxiv.").unwrap_or("").to_string()
+}
+pub(crate) fn match_score(reference: &Value, candidate: &Value) -> f64 {
     fn words(s: &str) -> std::collections::BTreeSet<String> {
         db::normalize(s)
             .split(|c: char| !c.is_alphanumeric())
@@ -256,6 +260,20 @@ pub fn lookup(lib: &Library, a: &Value) -> Result<Value> {
         });
         let mut additions = Map::new();
         let mut conflicts = Map::new();
+        // Identifier matches (not broad title search) run the abstract chain
+        // server-side, so an agent never has to make a second round trip.
+        if !doi.is_empty() && text(&candidate["fields"], "abstract").is_empty() {
+            let arxiv_id = arxiv_from_doi(&doi);
+            match crate::abstracts::find_abstract(&doi, &arxiv_id) {
+                Ok((Some(found), extra)) => {
+                    candidate["fields"]["abstract"] = json!(found.text);
+                    candidate["abstract_source"] = json!(found.source);
+                    warnings.extend(extra);
+                }
+                Ok((None, extra)) => warnings.extend(extra),
+                Err(e) => warnings.push(format!("Abstract lookup: {e}")),
+            }
+        }
         for (k, v) in candidate["fields"].as_object().unwrap() {
             let old = text(&r["fields"], k);
             if old.trim().is_empty() {
@@ -276,6 +294,9 @@ pub fn lookup(lib: &Library, a: &Value) -> Result<Value> {
     )
 }
 /// Supplement a selected candidate by exact DOI only; never mix title-search results.
+/// Supplement a selected candidate by exact DOI (or the DOI an arXiv ID was
+/// inferred into). Runs the full abstract chain: OpenAlex, Semantic Scholar,
+/// then Europe PMC. Never mixes in title-search results.
 pub fn supplement(lib: &Library, a: &Value) -> Result<Value> {
     lib.call("get_reference", &json!({"id":required(a,"id")?}))?;
     let doi = db::normalize_doi(required(a, "doi")?);
@@ -283,29 +304,21 @@ pub fn supplement(lib: &Library, a: &Value) -> Result<Value> {
         doi.starts_with("10.") && !doi.chars().any(char::is_whitespace),
         "Invalid DOI"
     );
-    let mut url = Url::parse("https://www.ebi.ac.uk/europepmc/webservices/rest/search")?;
-    url.query_pairs_mut()
-        .append_pair("query", &format!("DOI:\"{}\"", doi.replace('"', "")))
-        .append_pair("format", "json")
-        .append_pair("resultType", "core")
-        .append_pair("pageSize", "3");
-    let v = match fetch(&client()?, url.clone()) {
-        Ok(v) => v,
-        Err(e) => {
-            return Ok(
-                json!({"fields":{},"warning":format!("Europe PMC unavailable: {e}"),"saved":false}),
-            );
-        }
-    };
+    let arxiv_id = arxiv_from_doi(&doi);
     let mut fields = Map::new();
-    if let Some(items) = v["resultList"]["result"].as_array()
-        && let Some(v) = items
-            .iter()
-            .find(|v| db::normalize_doi(text(v, "doi")) == doi)
-    {
-        insert(&mut fields, "abstract", text(v, "abstractText"));
+    let (found, warnings) = crate::abstracts::find_abstract(&doi, &arxiv_id)?;
+    let gateway = found.as_ref().map(|f| f.source.clone());
+    if let Some(f) = found {
+        insert(&mut fields, "abstract", &f.text);
     }
-    Ok(json!({"fields":fields,"source":url.as_str(),"gateway":"Europe PMC","saved":false}))
+    let warning = if fields.is_empty() && !warnings.is_empty() {
+        Some(warnings.join("; "))
+    } else {
+        None
+    };
+    Ok(
+        json!({"fields":fields,"source":format!("https://doi.org/{doi}"),"gateway":gateway.unwrap_or_else(||"none".into()),"warning":warning,"saved":false}),
+    )
 }
 pub fn apply(c: &rusqlite::Connection, a: &Value) -> Result<Value> {
     let r = db::get_reference(c, &json!({"id":required(a,"id")?}))?;

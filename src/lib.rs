@@ -1,3 +1,4 @@
+pub mod abstracts;
 pub mod attachments;
 pub mod db;
 pub mod history;
