@@ -262,16 +262,27 @@ pub fn lookup(lib: &Library, a: &Value) -> Result<Value> {
         let mut conflicts = Map::new();
         // Identifier matches (not broad title search) run the abstract chain
         // server-side, so an agent never has to make a second round trip.
-        if !doi.is_empty() && text(&candidate["fields"], "abstract").is_empty() {
+        if !doi.is_empty()
+            && (text(&candidate["fields"], "abstract").is_empty()
+                || text(&candidate["fields"], "pdf").is_empty())
+        {
             let arxiv_id = arxiv_from_doi(&doi);
-            match crate::abstracts::find_abstract(&doi, &arxiv_id) {
-                Ok((Some(found), extra)) => {
-                    candidate["fields"]["abstract"] = json!(found.text);
-                    candidate["abstract_source"] = json!(found.source);
-                    warnings.extend(extra);
+            match crate::abstracts::enrich(&doi, &arxiv_id) {
+                Ok(e) => {
+                    if let Some(found) = e.abstract_result
+                        && text(&candidate["fields"], "abstract").is_empty()
+                    {
+                        candidate["fields"]["abstract"] = json!(found.text);
+                        candidate["abstract_source"] = json!(found.source);
+                    }
+                    if let Some(url) = e.pdf_url
+                        && text(&candidate["fields"], "pdf").is_empty()
+                    {
+                        candidate["fields"]["pdf"] = json!(url);
+                    }
+                    warnings.extend(e.warnings);
                 }
-                Ok((None, extra)) => warnings.extend(extra),
-                Err(e) => warnings.push(format!("Abstract lookup: {e}")),
+                Err(e) => warnings.push(format!("Abstract/PDF lookup: {e}")),
             }
         }
         for (k, v) in candidate["fields"].as_object().unwrap() {
