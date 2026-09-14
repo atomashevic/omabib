@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from urllib.parse import quote
 
-REPO = Path(__file__).resolve().parents[1] if '__file__' in globals() else Path.cwd()
+REPO = Path(__file__).resolve().parents[1]
 MANAGED = ['metadata', 'notes']
 
 def git(*args, check=True):

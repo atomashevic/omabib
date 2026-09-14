@@ -1,0 +1,6 @@
+*.db
+*.db-wal
+*.db-shm
+.snapshot.lock
+pdfs/.incoming-*
+__pycache__/

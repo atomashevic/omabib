@@ -5,7 +5,8 @@ binary=str(pathlib.Path(sys.argv[1]).resolve())
 with tempfile.TemporaryDirectory(prefix='omabib-history-test-') as td:
  root=pathlib.Path(td);repo=root/'history';remote=root/'remote.git';repo.mkdir()
  def run(*args,cwd=None):return subprocess.check_output(args,cwd=cwd,text=True,stderr=subprocess.STDOUT).strip()
- run('git','init','--bare',str(remote));run('git','init','-b','main',str(repo));run('git','config','user.name','Omabib Test',cwd=repo);run('git','config','user.email','test@example.invalid',cwd=repo)
+ run('git','init','--bare',str(remote));run('git','--git-dir',str(remote),'symbolic-ref','HEAD','refs/heads/main')
+ run('git','init','-b','main',str(repo));run('git','config','user.name','Omabib Test',cwd=repo);run('git','config','user.email','test@example.invalid',cwd=repo)
  run('git','lfs','install','--local',cwd=repo);run('git','remote','add','origin',str(remote),cwd=repo)
  (repo/'.gitattributes').write_text('*.pdf filter=lfs diff=lfs merge=lfs -text\n');(repo/'.gitignore').write_text('.snapshot.lock\npdfs/.incoming-*\n')
  (repo/'pdfs').mkdir();(repo/'pdfs/.gitkeep').write_text('');run('git','add','.',cwd=repo);run('git','commit','-m','Initialize test',cwd=repo)
@@ -45,6 +46,56 @@ with tempfile.TemporaryDirectory(prefix='omabib-history-test-') as td:
   except RuntimeError as e:assert 'local edits'in str(e)
   else:raise AssertionError('Sync overwrote a local edit')
   assert path.read_text().endswith(' ')
+  run('git','checkout','--',str(path.relative_to(repo)),cwd=repo)
   print('PASS: config, snapshot/push, LFS pointer/upload, restore with local LFS cache deleted, unlink keeps file, MCP PDF add, dirty metadata protection')
+
+  # repo_status reports configuration, HEAD, and pending changes since the
+  # last successful sync, without needing a fresh sync to answer.
+  status_before=call('repo_status',{})
+  assert status_before['configured']and status_before['ahead']==0 and not status_before['dirty']
+  # last_success is from the push above; last_error still reflects the
+  # deliberately-refused dirty-metadata sync just tried (state persists
+  # until the next successful attempt, which is the whole point of it).
+  assert status_before['last_success']is not None
+  assert status_before['last_error']['kind']=='dirty',status_before['last_error']
+  call('add_note',{'ref_id':item['id'],'project_id':None,'body':'pending note','provenance':'test','idempotency_key':'pending-note-1'})
+  status_pending=call('repo_status',{})
+  assert status_pending['pending']['any']and status_pending['pending']['new_notes']>=1
+  print('PASS: repo_status reports configuration, ahead/behind and pending changes')
+
+  # A diverged remote must fail the push without losing the local commit,
+  # and repo_status must explain why in a machine-readable way.
+  clone=root/'clone';run('git','clone',str(remote),str(clone))
+  run('git','checkout','main',cwd=clone)
+  run('git','config','user.name','Other Clone',cwd=clone);run('git','config','user.email','clone@example.invalid',cwd=clone)
+  (clone/'DIVERGED.md').write_text('from another clone\n');run('git','add','DIVERGED.md',cwd=clone)
+  run('git','commit','-m','Diverging commit',cwd=clone);run('git','push','origin','HEAD:refs/heads/main',cwd=clone)
+  diverged=call('sync_repo',{'push':True})
+  assert diverged['ok']==False and diverged.get('committed')==True and 'push_error'in diverged
+  status_after=call('repo_status',{})
+  assert status_after['last_error']['kind']=='diverged',status_after['last_error']
+  print('PASS: a diverged remote fails the push, keeps the local commit, and repo_status explains it')
+
+  # repo_check reports prerequisites for a path, and repo_setup(local,
+  # fix_lfs) adopts an existing checkout that does not yet track PDFs.
+  fresh=root/'fresh-local'
+  run('git','init','-b','main',str(fresh));run('git','config','user.name','Fresh',cwd=fresh);run('git','config','user.email','fresh@example.invalid',cwd=fresh)
+  (fresh/'README.md').write_text('placeholder\n');run('git','add','.',cwd=fresh);run('git','commit','-m','init',cwd=fresh)
+  checked=call('repo_check',{'repo_path':str(fresh)})
+  assert checked['path']['state']=='repo'and checked['path']['lfs_tracked']==False
+  try:
+   call('repo_setup',{'mode':'local','repo_path':str(fresh),'branch':'main','remote_url':str(remote)})
+   raise AssertionError('repo_setup should refuse a checkout without LFS unless fix_lfs is set')
+  except RuntimeError as e:
+   assert 'Git LFS'in str(e)
+  configured=call('repo_setup',{'mode':'local','repo_path':str(fresh),'branch':'main','fix_lfs':True,'remote_url':str(remote)})
+  assert configured['configured']
+  rechecked=call('repo_check',{'repo_path':str(fresh)})
+  assert rechecked['path']['lfs_tracked']==True
+  print('PASS: repo_check flags missing LFS tracking; repo_setup(local, fix_lfs) configures it')
+
+  info=call('repo_check',{})
+  assert 'git'in info and 'gh'in info
+  print('PASS: repo_check reports installed tools without a path')
  finally:
   service.terminate();service.wait(timeout=10)
