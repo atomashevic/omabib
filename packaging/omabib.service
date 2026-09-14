@@ -1,0 +1,14 @@
+[Unit]
+Description=Omabib bibliography library
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omabib serve
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

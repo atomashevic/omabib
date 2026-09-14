@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# == 0 ]]; then
+  exec omabib sync --local
+elif [[ $# == 1 && $1 == --push ]]; then
+  exec omabib sync
+else
+  printf '%s\n' 'Usage: omabib-history [--push]' 'Uses the repository configured in Omabib.' >&2
+  exit 2
+fi

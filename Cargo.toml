@@ -1,0 +1,27 @@
+[package]
+name = "omabib"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Instant bibliography search and project-aware research notes for Omarchy"
+
+[dependencies]
+anyhow = "1"
+biblatex = "0.12"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+symspell = "0.5"
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+sha2 = "0.10"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,16 @@
+{
+  "passed": [
+    "7 opens DOI editor",
+    "11 opens project editor",
+    "6 opens file browser",
+    "Escape cancels browser",
+    "1 then Enter selects action 1"
+  ],
+  "file_import": "PickerSmoke2026 imported from a filename containing spaces into the isolated library",
+  "production": {
+    "notes": 0,
+    "references": 0,
+    "schema": 1,
+    "version": "0.1.0"
+  }
+}

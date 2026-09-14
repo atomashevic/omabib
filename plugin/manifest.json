@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "omabib",
+  "name": "Omabib",
+  "version": "0.1.0",
+  "author": "Aleksandar",
+  "license": "MIT",
+  "description": "Instant bibliography search and project-aware research notes",
+  "kinds": [
+    "panel",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "App.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omabib",
+    "description": "Open bibliography search",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "passed": [
+    "Search field focused on open",
+    "Real reference search",
+    "Tab opens reference detail",
+    "Ctrl+K opens actions",
+    "Escape closes actions then popup",
+    "Enter copies the citation key and closes"
+  ],
+  "last_ui_state": {
+    "opened": true,
+    "expanded": true,
+    "query": "network",
+    "results": [
+      "Baraba_si_1999",
+      "Epskamp_2018"
+    ],
+    "selected": "deacddf4-0ac2-4458-a8bc-1d12a502b261",
+    "error": "",
+    "editor_open": false,
+    "commands_open": false,
+    "query_focused": true,
+    "response_ms": 29
+  },
+  "note": "Keyboard smoke test. response_ms is response/model-update time, not compositor paint latency."
+}

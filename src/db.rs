@@ -1,0 +1,1068 @@
+use anyhow::{Context, Result, bail, ensure};
+use biblatex::{Bibliography, ChunksExt};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::{Path, PathBuf},
+    sync::{Mutex, RwLock},
+    time::Duration,
+};
+use symspell::{SymSpell, SymSpellBuilder, UnicodeStringStrategy};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+
+pub struct Library {
+    pub path: PathBuf,
+    writer: Mutex<Connection>,
+    pub history_lock: Mutex<()>,
+    readers: Mutex<Vec<Connection>>,
+    pub spell_ready: std::sync::atomic::AtomicBool,
+    pub spell: RwLock<SymSpell<UnicodeStringStrategy>>,
+}
+pub struct ReadLease<'a> {
+    connection: Option<Connection>,
+    pool: &'a Mutex<Vec<Connection>>,
+}
+impl std::ops::Deref for ReadLease<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.connection.as_ref().unwrap()
+    }
+}
+impl Drop for ReadLease<'_> {
+    fn drop(&mut self) {
+        if let Some(c) = self.connection.take() {
+            let _ = c.progress_handler(0, None::<fn() -> bool>);
+            let mut pool = self.pool.lock().unwrap();
+            if pool.len() < 8 {
+                pool.push(c);
+            }
+        }
+    }
+}
+pub fn parse_bibtex(raw: &str) -> Result<Bibliography> {
+    match Bibliography::parse(raw) {
+        Ok(b) => Ok(b),
+        Err(original) => {
+            let months = [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ];
+            let defaults = months
+                .iter()
+                .map(|m| format!("@string{{{m}=\"{m}\"}}\n"))
+                .collect::<String>();
+            Bibliography::parse(&(defaults + raw)).map_err(|_| anyhow::anyhow!("{original}"))
+        }
+    }
+}
+/// Repair only parser-identified, unambiguous issues; retain source text separately.
+fn parse_import(raw: &str) -> Result<(Vec<biblatex::Entry>, Vec<Value>)> {
+    use biblatex::{ParseErrorKind, RawBibliography, Token};
+    let mut repairs = Vec::new();
+    let mut source = raw.trim_start_matches('\u{feff}').to_string();
+    if source != raw {
+        repairs.push(json!({"kind":"removed_bom"}));
+    }
+    // Explicit user macros follow these defaults and take precedence.
+    let months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let defaults = months
+        .iter()
+        .map(|m| format!("@string{{{m}=\"{m}\"}}\n"))
+        .collect::<String>();
+    source = defaults + &source;
+    let mut parsed = loop {
+        match RawBibliography::parse(&source) {
+            Ok(b) => break b,
+            Err(e) => {
+                let at = e.span.start;
+                let tail = source.get(at..).unwrap_or("");
+                let field = tail
+                    .split_once('=')
+                    .map(|(k, _)| k.trim())
+                    .unwrap_or("")
+                    .to_string();
+                if matches!(e.kind, ParseErrorKind::Expected(Token::Comma))
+                    && !field.is_empty()
+                    && field
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    && repairs.len() < 100
+                {
+                    source.insert(at, ',');
+                    repairs
+                        .push(json!({"kind":"inserted_missing_comma","field":field.to_string()}));
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    };
+    let original_keys: Vec<String> = parsed
+        .entries
+        .iter()
+        .map(|e| e.v.key.v.to_string())
+        .collect();
+    let mut used: HashSet<String> = original_keys.iter().cloned().collect();
+    let mut seen = HashSet::new();
+    let mut temporary = Vec::new();
+    for (i, key) in original_keys.iter().enumerate() {
+        let mut name = key.clone();
+        if !seen.insert(key.clone()) {
+            name = format!("omabib_import_duplicate_{i}");
+            while !used.insert(name.clone()) {
+                name.push('_');
+            }
+            repairs.push(json!({"kind":"duplicate_key","citekey":key}));
+        }
+        temporary.push(name);
+    }
+    for (i, entry) in parsed.entries.iter_mut().enumerate() {
+        entry.v.key.v = &temporary[i];
+        let mut positions = BTreeMap::new();
+        let mut fields: Vec<biblatex::Pair<'_>> = Vec::new();
+        for field in std::mem::take(&mut entry.v.fields) {
+            let key = field.key.v.to_ascii_lowercase();
+            if let Some(&at) = positions.get(&key) {
+                let prior: &biblatex::Pair<'_> = &fields[at];
+                let empty =
+                    prior.value.v.iter().all(
+                        |c| matches!(c.v,biblatex::RawChunk::Normal(t) if t.trim().is_empty()),
+                    );
+                if empty {
+                    fields[at] = field;
+                }
+                repairs.push(json!({"kind":"duplicate_field","citekey":original_keys[i],"field":key,"resolution":"first nonempty value retained"}));
+            } else {
+                positions.insert(key, fields.len());
+                fields.push(field);
+            }
+        }
+        entry.v.fields = fields;
+    }
+    let bibliography = Bibliography::from_raw(parsed)?;
+    let entries = bibliography
+        .iter()
+        .cloned()
+        .zip(original_keys)
+        .map(|(mut e, key)| {
+            e.key = key;
+            e
+        })
+        .collect();
+    Ok((entries, repairs))
+}
+pub(crate) fn serialize_entry(e: &biblatex::Entry) -> String {
+    let mut out = format!("@{}{{{},\n", e.entry_type, e.key);
+    for (key, value) in &e.fields {
+        let verbatim = matches!(
+            key.as_str(),
+            "file"
+                | "doi"
+                | "uri"
+                | "eprint"
+                | "verba"
+                | "verbb"
+                | "verbc"
+                | "pdf"
+                | "url"
+                | "urlraw"
+        );
+        out.push_str(&format!(
+            "{key} = {},\n",
+            value.to_biblatex_string(verbatim)
+        ));
+    }
+    out.push('}');
+    out
+}
+pub fn normalize(s: &str) -> String {
+    s.nfkd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+pub fn id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(Value::as_str).unwrap_or("")
+}
+pub fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
+    let s = text(v, key);
+    ensure!(!s.trim().is_empty(), "{key} is required");
+    Ok(s)
+}
+pub fn clip(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+fn json_field(v: &Value, key: &str, default: Value) -> String {
+    v.get(key).unwrap_or(&default).to_string()
+}
+pub fn normalize_doi(s: &str) -> String {
+    s.trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .to_lowercase()
+}
+pub fn read_connection(path: &Path) -> Result<Connection> {
+    let c = Connection::open(path)?;
+    c.busy_timeout(Duration::from_secs(5))?;
+    c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-16000;")?;
+    Ok(c)
+}
+impl Library {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_vocabulary(path, true)
+    }
+    pub fn open_with_vocabulary(path: impl AsRef<Path>, eager: bool) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let c = read_connection(&path)?;
+        let version: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        ensure!(
+            version <= 1,
+            "Database schema {version} is newer than this Omabib version"
+        );
+        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+        if version == 0 {
+            c.execute_batch("BEGIN IMMEDIATE;")?;
+            if let Err(e) = c.execute_batch(include_str!("schema.sql")) {
+                let _ = c.execute_batch("ROLLBACK");
+                return Err(e.into());
+            }
+            c.execute_batch("COMMIT;")?;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let lib = Self {
+            path,
+            writer: Mutex::new(c),
+            history_lock: Mutex::new(()),
+            readers: Mutex::new(Vec::new()),
+            spell_ready: std::sync::atomic::AtomicBool::new(false),
+            spell: RwLock::new(
+                SymSpellBuilder::default()
+                    .max_dictionary_edit_distance(1)
+                    .build()
+                    .unwrap(),
+            ),
+        };
+        if eager {
+            lib.load_vocabulary()?;
+        }
+        Ok(lib)
+    }
+    pub fn read(&self) -> Result<ReadLease<'_>> {
+        let cached = self.readers.lock().unwrap().pop();
+        let c = match cached {
+            Some(c) => c,
+            None => read_connection(&self.path)?,
+        };
+        Ok(ReadLease {
+            connection: Some(c),
+            pool: &self.readers,
+        })
+    }
+    pub fn load_vocabulary(&self) -> Result<()> {
+        let _writer_guard = self.writer.lock().unwrap();
+        let c = read_connection(&self.path)?;
+        let mut s = c.prepare(
+            "SELECT term,doc FROM vocabulary WHERE length(term)>=4 AND length(term)<=64",
+        )?;
+        let mut spell: SymSpell<UnicodeStringStrategy> = SymSpellBuilder::default()
+            .max_dictionary_edit_distance(1)
+            .build()
+            .unwrap();
+        for r in s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (t, n) = r?;
+            if t.chars().any(char::is_numeric) {
+                continue;
+            }
+            spell.load_dictionary_line(&format!("{t} {n}"), 0, 1, " ");
+        }
+        *self.spell.write().unwrap() = spell;
+        self.spell_ready
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+    fn add_words(&self, s: &str) {
+        let mut spell = self.spell.write().unwrap();
+        for word in normalize(s).split(|c: char| !c.is_alphanumeric()) {
+            if !word.chars().any(char::is_numeric) && (4..=64).contains(&word.chars().count()) {
+                spell.load_dictionary_line(&format!("{word} 1"), 0, 1, " ");
+            }
+        }
+    }
+    pub fn call(&self, method: &str, a: &Value) -> Result<Value> {
+        match method {
+            "lookup_metadata" => crate::metadata::lookup(self, a),
+            "supplement_metadata" => crate::metadata::supplement(self, a),
+            "open_target" => crate::metadata::open_target(self, a),
+            "get_repo_config" => crate::history::config(self),
+            "set_repo_config" => crate::history::save_config(self, a),
+            "sync_repo" => crate::history::sync(self, a),
+            "add_pdf" => crate::attachments::add(self, a),
+            "pull_pdf" => crate::attachments::pull(self, a),
+            "get_attachment" => {
+                let c = read_connection(&self.path)?;
+                c.query_row("SELECT id,ref_id,path,file_type,fingerprint FROM attachments WHERE id=?",[required(a,"id")?],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"file_type":r.get::<_,String>(3)?,"fingerprint":r.get::<_,Option<String>>(4)?}))).context("Unknown attachment")
+            }
+            "search" => crate::search::search(self, a),
+            "get_reference" => get_reference(&read_connection(&self.path)?, a),
+            "list_projects" => list_projects(&read_connection(&self.path)?, a),
+            "project_context" => self.project_context(a),
+            "export_bibtex" => export_bibtex(&read_connection(&self.path)?, a),
+            "export_notes" => export_notes(&read_connection(&self.path)?, a),
+            "status" => {
+                let c = read_connection(&self.path)?;
+                Ok(
+                    json!({"version":env!("CARGO_PKG_VERSION"),"schema":1,"references":c.query_row("SELECT count(*) FROM refs",[],|r|r.get::<_,i64>(0))?,"notes":c.query_row("SELECT count(*) FROM notes",[],|r|r.get::<_,i64>(0))?}),
+                )
+            }
+            "preview_doi" | "preview_entry" => {
+                let mut preview = if method == "preview_entry" {
+                    crate::ingest::preview(a)?
+                } else {
+                    preview_doi(a)?
+                };
+                let mut c = self.writer.lock().unwrap();
+                let tx = c.transaction()?;
+                let changes = import(&tx, &preview)?;
+                tx.rollback()?;
+                preview["conflicts"] = changes["conflicts"].clone();
+                preview["repairs"] = changes["repairs"].clone();
+                preview["citation_keys"] = json!(
+                    changes["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|item| item["citekey"].clone())
+                        .collect::<Vec<_>>()
+                );
+                Ok(preview)
+            }
+            "backup" => {
+                let dest = PathBuf::from(required(a, "path")?);
+                ensure!(!dest.exists(), "Backup destination already exists");
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&dest)?;
+                let c = self.writer.lock().unwrap();
+                c.backup(rusqlite::MAIN_DB, &dest, None)?;
+                Ok(json!({"path":dest}))
+            }
+            "import_bibtex" | "upsert_reference" | "create_project" | "update_project"
+            | "associate" | "add_note" | "update_note" | "attach" | "remove_pdf"
+            | "relink_attachment" | "apply_metadata" => self.write(method, a),
+            _ => bail!("Unknown operation: {method}"),
+        }
+    }
+    fn write(&self, method: &str, a: &Value) -> Result<Value> {
+        let mut c = self.writer.lock().unwrap();
+        let tx = c.transaction()?;
+        let payload = json!({"method":method,"params":a}).to_string();
+        let key = text(a, "idempotency_key");
+        if !key.is_empty()
+            && let Some((old, result)) = tx
+                .query_row(
+                    "SELECT payload,result FROM requests WHERE key=?",
+                    [key],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()?
+        {
+            ensure!(
+                old == payload,
+                "Idempotency key reused with different request"
+            );
+            return Ok(serde_json::from_str(&result)?);
+        }
+        let out = match method {
+            "import_bibtex" => import(&tx, a)?,
+            "upsert_reference" => upsert(&tx, a)?,
+            "apply_metadata" => crate::metadata::apply(&tx, a)?,
+            "create_project" => {
+                let pid = id();
+                let name = required(a, "name")?;
+                validate_roots(a)?;
+                tx.execute(
+                    "INSERT INTO projects(id,name,description,roots) VALUES(?,?,?,?)",
+                    params![
+                        pid,
+                        name,
+                        text(a, "description"),
+                        json_field(a, "roots", json!([]))
+                    ],
+                )?;
+                json!({"id":pid,"name":name})
+            }
+            "update_project" => {
+                validate_roots(a)?;
+                ensure!(
+                    tx.execute(
+                        "UPDATE projects SET name=?,description=?,roots=? WHERE id=?",
+                        params![
+                            required(a, "name")?,
+                            text(a, "description"),
+                            json_field(a, "roots", json!([])),
+                            required(a, "id")?
+                        ]
+                    )? == 1,
+                    "Unknown project"
+                );
+                json!({"id":text(a,"id")})
+            }
+            "associate" => {
+                validate_labels(a)?;
+                tx.execute("INSERT INTO associations VALUES(?,?,?) ON CONFLICT(ref_id,project_id) DO UPDATE SET labels=excluded.labels",params![required(a,"ref_id")?,required(a,"project_id")?,json_field(a,"labels",json!([]))])?;
+                json!({"associated":true})
+            }
+            "add_note" | "update_note" => write_note(&tx, method, a)?,
+            "remove_pdf" => {
+                let id = required(a, "attachment_id")?;
+                let removed = tx.execute(
+                    "DELETE FROM attachments WHERE id=? AND file_type='pdf'",
+                    [id],
+                )?;
+                json!({"attachment_id":id,"removed":removed>0,"file_deleted":false})
+            }
+            "relink_attachment" => {
+                let id = required(a, "id")?;
+                let path = required(a, "path")?;
+                ensure!(
+                    Path::new(path).is_absolute() && Path::new(path).is_file(),
+                    "PDF path is unavailable"
+                );
+                ensure!(
+                    tx.execute(
+                        "UPDATE attachments SET path=?,fingerprint=? WHERE id=?",
+                        params![path, required(a, "fingerprint")?, id]
+                    )? == 1,
+                    "Unknown attachment"
+                );
+                json!({"id":id,"path":path,"exists":true})
+            }
+            "attach" => {
+                let aid = id();
+                let path = PathBuf::from(required(a, "path")?);
+                ensure!(path.is_absolute(), "Attachment path must be absolute");
+                tx.execute("INSERT INTO attachments VALUES(?,?,?,?,?) ON CONFLICT(ref_id,path) DO UPDATE SET file_type=excluded.file_type,fingerprint=excluded.fingerprint",params![aid,required(a,"ref_id")?,path.to_string_lossy(),a.get("file_type").and_then(Value::as_str).unwrap_or("pdf"),a.get("fingerprint").and_then(Value::as_str)])?;
+                let actual_id: String = tx.query_row(
+                    "SELECT id FROM attachments WHERE ref_id=? AND path=?",
+                    params![required(a, "ref_id")?, path.to_string_lossy()],
+                    |r| r.get(0),
+                )?;
+                json!({"id":actual_id,"ref_id":text(a,"ref_id"),"path":path,"exists":path.is_file()})
+            }
+            _ => unreachable!(),
+        };
+        if !key.is_empty() {
+            tx.execute(
+                "INSERT INTO requests VALUES(?,?,?)",
+                params![key, payload, out.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        drop(c);
+        if method == "import_bibtex" || method == "upsert_reference" || method == "apply_metadata" {
+            self.load_vocabulary()?;
+        } else if method.ends_with("note") {
+            self.add_words(text(a, "body"));
+        }
+        Ok(out)
+    }
+    fn project_context(&self, a: &Value) -> Result<Value> {
+        let project = required(a, "project_id")?;
+        let budget = a
+            .get("max_chars")
+            .and_then(Value::as_u64)
+            .unwrap_or(8000)
+            .clamp(1000, 32000) as usize;
+        let mut query = a.clone();
+        query["project_filter"] = json!(project);
+        query["limit"] = json!(25);
+        let result = crate::search::search(self, &query)?;
+        let mut items = Vec::new();
+        let mut next = result["next_cursor"].clone();
+        let offset = a.get("cursor").and_then(Value::as_u64).unwrap_or(0);
+        for hit in result["results"].as_array().unwrap() {
+            let mut item = get_reference(
+                &read_connection(&self.path)?,
+                &json!({"id":hit["id"],"project_id":project,"include_notes":true,"include_metadata":false,"note_limit":3,"note_chars":400}),
+            )?;
+            item["title"] = json!(clip(text(&item, "title"), 200));
+            item["authors"] = json!(clip(text(&item, "authors"), 140));
+            if let Some(notes) = item["notes"].as_array_mut() {
+                for n in notes {
+                    let compact = json!({"id":n["id"],"project_id":n["project_id"],"body":n["body"],"evidence":n["evidence"],"truncated":n["truncated"]});
+                    *n = compact;
+                }
+            }
+            for key in ["revision", "entry_type"] {
+                item.as_object_mut().unwrap().remove(key);
+            }
+            if items.is_empty() {
+                while item.to_string().chars().count() + 180 > budget
+                    && item["notes"].as_array().is_some_and(|n| !n.is_empty())
+                {
+                    item["notes"].as_array_mut().unwrap().pop();
+                    item["notes_truncated"] = json!(true);
+                }
+            }
+            items.push(item);
+            if json!({"project_id":project,"items":items,"next_cursor":next,"truncated":true})
+                .to_string()
+                .chars()
+                .count()
+                > budget
+            {
+                items.pop();
+                next = json!(offset + items.len() as u64);
+                break;
+            }
+        }
+        Ok(
+            json!({"project_id":project,"items":items,"next_cursor":next,"truncated":!next.is_null(),"max_chars":budget}),
+        )
+    }
+}
+fn validate_roots(a: &Value) -> Result<()> {
+    if let Some(roots) = a.get("roots") {
+        for r in roots.as_array().context("roots must be an array")? {
+            ensure!(
+                Path::new(r.as_str().context("root must be a string")?).is_absolute(),
+                "Project roots must be absolute"
+            );
+        }
+    }
+    Ok(())
+}
+fn validate_labels(a: &Value) -> Result<()> {
+    if let Some(labels) = a.get("labels") {
+        ensure!(
+            labels
+                .as_array()
+                .is_some_and(|xs| xs.iter().all(Value::is_string)),
+            "labels must be strings"
+        );
+    }
+    Ok(())
+}
+fn insert_doc(c: &Connection, rid: &str) -> Result<()> {
+    let (key, title, authors, ab, fields): (String, String, String, String, String) = c.query_row(
+        "SELECT citekey,title,authors,abstract,fields FROM refs WHERE id=?",
+        [rid],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
+    let fields: Value = serde_json::from_str(&fields)?;
+    c.execute(
+        "DELETE FROM docs INDEXED BY docs_ref WHERE ref_id=? AND note_id IS NULL",
+        [rid],
+    )?;
+    c.execute("INSERT INTO docs(ref_id,citekey,title,authors,abstract,keywords,body) VALUES(?,?,?,?,?,?, '')",params![rid,normalize(&key),normalize(&title),normalize(&authors),normalize(&ab),normalize(&[text(&fields,"keywords"),text(&fields,"isbn"),text(&fields,"eprint"),text(&fields,"url")].join(" "))])?;
+    c.execute(
+        "UPDATE docs SET citekey=?,title=?,authors=? WHERE ref_id=? AND note_id IS NOT NULL",
+        params![normalize(&key), normalize(&title), normalize(&authors), rid],
+    )?;
+    Ok(())
+}
+fn import(c: &Connection, a: &Value) -> Result<Value> {
+    let raw = required(a, "bibtex")?;
+    ensure!(raw.len() <= 64 * 1024 * 1024, "Import exceeds 64 MiB");
+    let (bib, repairs) = parse_import(raw).map_err(|e| anyhow::anyhow!("Invalid BibTeX: {e}"))?;
+    let mut imported = Vec::new();
+    let mut conflicts = Vec::new();
+    let import_id = id();
+    c.execute(
+        "INSERT INTO imports(id,source,original) VALUES(?,?,?)",
+        params![import_id, text(a, "source"), raw],
+    )?;
+    let mut keys = BTreeMap::new();
+    let mut batch_keys = HashSet::new();
+    let mut signatures: BTreeMap<String, String> = BTreeMap::new();
+    let mut duplicates_merged = 0;
+    let mut result_ids = HashSet::new();
+    for entry in bib.iter() {
+        let mut fields = BTreeMap::new();
+        for (k, v) in &entry.fields {
+            fields.insert(k.clone(), v.format_verbatim());
+        }
+        let signature = json!([entry.entry_type.to_string(), fields]).to_string();
+        let repeated_key = !batch_keys.insert(entry.key.clone());
+        let title = entry
+            .get("title")
+            .map(|v| v.format_verbatim())
+            .unwrap_or_default();
+        let authors = entry
+            .get("author")
+            .map(|v| v.format_verbatim())
+            .unwrap_or_default();
+        let doi = fields
+            .get("doi")
+            .map(|s| normalize_doi(s))
+            .filter(|s| !s.is_empty());
+        let existing: Option<String> = if let Some(d) = &doi {
+            c.query_row("SELECT id FROM refs WHERE doi=?", [d], |r| r.get(0))
+                .optional()?
+        } else {
+            None
+        };
+        let lookup_key = keys.get(&entry.key).unwrap_or(&entry.key);
+        let by_key: Option<(String, String, String)> = c
+            .query_row(
+                "SELECT id,fields,title FROM refs WHERE citekey=?",
+                [lookup_key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let existing = existing
+            .or_else(|| signatures.get(&signature).cloned())
+            .or_else(|| {
+                by_key
+                    .as_ref()
+                    .filter(|(_, f, t)| {
+                        f == &json!(fields).to_string()
+                            || ((repeated_key
+                                || (!title.is_empty() && normalize(t) == normalize(&title)))
+                                && {
+                                    let old: Value = serde_json::from_str(f).unwrap_or(Value::Null);
+                                    let compatible_doi = doi.as_ref().is_none_or(|d| {
+                                        text(&old, "doi").is_empty()
+                                            || normalize_doi(text(&old, "doi")) == *d
+                                    });
+                                    compatible_doi
+                                        && (repeated_key
+                                            || authors.is_empty()
+                                            || normalize(text(&old, "author"))
+                                                == normalize(&authors))
+                                })
+                    })
+                    .map(|v| v.0.clone())
+            });
+        if let Some(rid) = existing {
+            let old: String =
+                c.query_row("SELECT bibtex FROM refs WHERE id=?", [&rid], |r| r.get(0))?;
+            let mut oldbib =
+                parse_bibtex(&old).map_err(|e| anyhow::anyhow!("Stored BibTeX: {e}"))?;
+            let oldentry = oldbib.iter_mut().next().context("Stored entry empty")?;
+            for (k, v) in &entry.fields {
+                match oldentry.fields.get(k){None=>{oldentry.fields.insert(k.clone(),v.clone());},Some(x)if x.format_verbatim().trim().is_empty()=>{oldentry.fields.insert(k.clone(),v.clone());},Some(x)if x.format_verbatim()!=v.format_verbatim()=>conflicts.push(json!({"id":rid,"field":k,"existing":x.format_verbatim(),"incoming":v.format_verbatim()})),_=>{}}
+            }
+            if serialize_entry(oldentry) != old {
+                save_entry(c, &rid, oldentry, false, text(a, "source"))?;
+            }
+            keys.entry(entry.key.clone())
+                .or_insert_with(|| oldentry.key.clone());
+            signatures.insert(signature, rid.clone());
+            if !result_ids.insert(rid.clone()) {
+                duplicates_merged += 1;
+            } else {
+                imported.push(json!({"id":rid,"citekey":oldentry.key,"merged":true}));
+            }
+        } else {
+            let mut e = entry.clone();
+            let base = e.key.clone();
+            let mut n = 2;
+            while c
+                .query_row("SELECT 1 FROM refs WHERE citekey=?", [&e.key], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
+                e.key = format!("{base}_{n}");
+                n += 1;
+            }
+            let rid = id();
+            save_entry(c, &rid, &e, true, text(a, "source"))?;
+            keys.entry(base.clone()).or_insert_with(|| e.key.clone());
+            signatures.insert(signature, rid.clone());
+            result_ids.insert(rid.clone());
+            imported.push(json!({"id":rid,"citekey":e.key,"original_key":base,"merged":false}));
+        }
+        let _ = authors;
+    }
+    // Rewrite imported cross-reference links when an incoming key was renamed.
+    for item in &imported {
+        if item["merged"] == true {
+            continue;
+        }
+        let rid = text(item, "id");
+        let raw: String = c.query_row("SELECT bibtex FROM refs WHERE id=?", [rid], |r| r.get(0))?;
+        let mut b = parse_bibtex(&raw).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let e = b.iter_mut().next().unwrap();
+        let mut changed = false;
+        for field in ["crossref", "xref"] {
+            if let Some(value) = e.get(field) {
+                let old = value.format_verbatim();
+                if let Some(new) = keys.get(&old)
+                    && new != &old
+                {
+                    let parsed = parse_bibtex(&format!("@misc{{temp,{field}={{{new}}}}}")).unwrap();
+                    e.set(field, parsed.iter().next().unwrap().fields[field].clone());
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            save_entry(c, rid, e, false, text(a, "source"))?;
+        }
+    }
+    Ok(
+        json!({"import_id":import_id,"items":imported,"conflicts":conflicts,"repairs":repairs,"duplicates_merged":duplicates_merged}),
+    )
+}
+pub(crate) fn save_entry(
+    c: &Connection,
+    rid: &str,
+    e: &biblatex::Entry,
+    new: bool,
+    source: &str,
+) -> Result<()> {
+    let fields: BTreeMap<String, String> = e
+        .fields
+        .iter()
+        .map(|(k, v)| (k.clone(), v.format_verbatim()))
+        .collect();
+    let title = e
+        .get("title")
+        .map(|x| x.format_verbatim())
+        .unwrap_or_default();
+    let authors = e
+        .get("author")
+        .map(|x| x.format_verbatim())
+        .unwrap_or_default();
+    let ab = e
+        .get("abstract")
+        .map(|x| x.format_verbatim())
+        .unwrap_or_default();
+    let doi = fields
+        .get("doi")
+        .map(|s| normalize_doi(s))
+        .filter(|s| !s.is_empty());
+    let year = fields
+        .get("year")
+        .cloned()
+        .or_else(|| fields.get("date").map(|s| clip(s, 4)))
+        .unwrap_or_default();
+    let kind = e.entry_type.to_string().to_lowercase();
+    let bib = serialize_entry(e);
+    if new {
+        c.execute("INSERT INTO refs(id,citekey,entry_type,title,authors,abstract,year,doi,fields,bibtex,source) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![rid,e.key,kind,title,authors,ab,year,doi,json!(fields).to_string(),bib,source])?;
+    } else {
+        c.execute("UPDATE refs SET citekey=?,entry_type=?,title=?,authors=?,abstract=?,year=?,doi=?,fields=?,bibtex=?,revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",params![e.key,kind,title,authors,ab,year,doi,json!(fields).to_string(),bib,rid])?;
+    }
+    insert_doc(c, rid)
+}
+fn upsert(c: &Connection, a: &Value) -> Result<Value> {
+    let b = parse_bibtex(required(a, "bibtex")?).map_err(|e| anyhow::anyhow!("{e}"))?;
+    ensure!(b.len() == 1, "Provide exactly one BibTeX entry");
+    let rid = text(a, "id");
+    if rid.is_empty() {
+        return import(c, a);
+    }
+    let revision: i64 = c.query_row("SELECT revision FROM refs WHERE id=?", [rid], |r| r.get(0))?;
+    ensure!(
+        a.get("expected_revision").and_then(Value::as_i64) == Some(revision),
+        "Revision conflict: current revision is {revision}"
+    );
+    save_entry(c, rid, b.iter().next().unwrap(), false, text(a, "source"))?;
+    Ok(json!({"id":rid,"revision":revision+1}))
+}
+fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
+    validate_labels(a)?;
+    let body = required(a, "body")?;
+    ensure!(body.len() <= 65536, "Note exceeds 64 KiB");
+    required(a, "provenance")?;
+    ensure!(
+        a.get("project_id").is_some(),
+        "Explicit project_id required; use null for a global note"
+    );
+    let project = if a["project_id"].is_null() {
+        None
+    } else {
+        Some(required(a, "project_id")?)
+    };
+    let nid;
+    if method == "add_note" {
+        nid = id();
+        c.execute("INSERT INTO notes(id,ref_id,project_id,body,labels,evidence,provenance) VALUES(?,?,?,?,?,?,?)",params![nid,required(a,"ref_id")?,project,body,json_field(a,"labels",json!([])),a.get("evidence").and_then(Value::as_str),text(a,"provenance")])?;
+    } else {
+        nid = required(a, "id")?.to_string();
+        let old = note(c, &nid)?;
+        let rev = old["revision"].as_i64().unwrap();
+        ensure!(
+            a.get("expected_revision").and_then(Value::as_i64) == Some(rev),
+            "Revision conflict: current revision is {rev}"
+        );
+        c.execute(
+            "INSERT INTO note_revisions VALUES(?,?,?)",
+            params![nid, rev, old.to_string()],
+        )?;
+        c.execute("UPDATE notes SET project_id=?,body=?,labels=?,evidence=?,provenance=?,revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",params![project,body,json_field(a,"labels",json!([])),a.get("evidence").and_then(Value::as_str),text(a,"provenance"),nid])?;
+    }
+    let n = note(c, &nid)?;
+    let rid = text(&n, "ref_id");
+    if let Some(p) = project {
+        c.execute(
+            "INSERT OR IGNORE INTO associations(ref_id,project_id) VALUES(?,?)",
+            params![rid, p],
+        )?;
+    }
+    c.execute("DELETE FROM docs WHERE note_id=?", [&nid])?;
+    let (key, title, authors): (String, String, String) = c.query_row(
+        "SELECT citekey,title,authors FROM refs WHERE id=?",
+        [rid],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    c.execute("INSERT INTO docs(ref_id,note_id,project_id,citekey,title,authors,abstract,keywords,body) VALUES(?,?,?,?,?,?,'',?,?)",params![rid,nid,project,normalize(&key),normalize(&title),normalize(&authors),normalize(&json_field(a,"labels",json!([]))),normalize(body)])?;
+    Ok(n)
+}
+pub fn note(c: &Connection, nid: &str) -> Result<Value> {
+    Ok(c.query_row("SELECT id,ref_id,project_id,body,labels,evidence,provenance,revision,created_at,updated_at FROM notes WHERE id=?",[nid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"project_id":r.get::<_,Option<String>>(2)?,"body":r.get::<_,String>(3)?,"labels":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!([])),"evidence":r.get::<_,Option<String>>(5)?,"provenance":r.get::<_,String>(6)?,"revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?,"updated_at":r.get::<_,String>(9)?})))?)
+}
+pub fn get_reference(c: &Connection, a: &Value) -> Result<Value> {
+    let rid = required(a, "id")?;
+    let mut out=c.query_row("SELECT id,citekey,title,authors,year,entry_type,abstract,fields,bibtex,revision,source FROM refs WHERE id=? OR citekey=?",params![rid,rid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"authors":r.get::<_,String>(3)?,"year":r.get::<_,String>(4)?,"entry_type":r.get::<_,String>(5)?,"abstract":r.get::<_,String>(6)?,"fields":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!({})),"bibtex":r.get::<_,String>(8)?,"revision":r.get::<_,i64>(9)?,"source":r.get::<_,String>(10)?}))).context("Reference not found")?;
+    let rid = text(&out, "id").to_string();
+    if a.get("include_metadata") == Some(&json!(false)) {
+        for key in ["abstract", "fields", "bibtex", "source"] {
+            out.as_object_mut().unwrap().remove(key);
+        }
+    }
+    if a.get("include_attachments") == Some(&json!(true)) {
+        let mut s =
+            c.prepare("SELECT id,path,file_type,fingerprint FROM attachments WHERE ref_id=?")?;
+        out["attachments"]=json!(s.query_map([&rid],|r|{let p:String=r.get(1)?;Ok(json!({"id":r.get::<_,String>(0)?,"path":p,"exists":Path::new(&p).is_file(),"file_type":r.get::<_,String>(2)?,"fingerprint":r.get::<_,Option<String>>(3)?}))})?.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    if a.get("include_notes") == Some(&json!(true)) {
+        let project = a.get("project_id").and_then(Value::as_str);
+        let all = a.get("include_other_projects") == Some(&json!(true));
+        let limit = a
+            .get("note_limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(10)
+            .clamp(1, 25);
+        let offset = a.get("note_cursor").and_then(Value::as_u64).unwrap_or(0);
+        let chars = a
+            .get("note_chars")
+            .and_then(Value::as_u64)
+            .unwrap_or(1000)
+            .clamp(100, 65536) as usize;
+        let mut s=c.prepare("SELECT id FROM notes WHERE ref_id=? AND (? OR project_id IS NULL OR project_id=?) ORDER BY updated_at DESC,id LIMIT ? OFFSET ?")?;
+        let ids = s
+            .query_map(
+                params![rid, all, project, (limit + 1) as i64, offset as i64],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let more = ids.len() > limit as usize;
+        let mut notes = Vec::new();
+        for nid in ids.iter().take(limit as usize) {
+            let mut n = note(c, nid)?;
+            let body = text(&n, "body").to_string();
+            n["body"] = json!(clip(&body, chars));
+            n["truncated"] = json!(body.chars().count() > chars);
+            if let Some(pid) = n["project_id"].as_str() {
+                n["project_name"] = json!(c.query_row(
+                    "SELECT name FROM projects WHERE id=?",
+                    [pid],
+                    |r| r.get::<_, String>(0)
+                )?);
+            }
+            notes.push(n);
+        }
+        out["notes"] = json!(notes);
+        out["next_note_cursor"] = if more {
+            json!(offset + limit)
+        } else {
+            Value::Null
+        };
+        out["other_project_note_count"]=json!(c.query_row("SELECT count(*) FROM notes WHERE ref_id=? AND project_id IS NOT NULL AND (? IS NULL OR project_id!=?)",params![rid,project,project],|r|r.get::<_,i64>(0))?);
+    }
+    if a.get("include_history") == Some(&json!(true)) {
+        let mut s=c.prepare("SELECT snapshot FROM note_revisions WHERE note_id IN (SELECT id FROM notes WHERE ref_id=?) ORDER BY note_id,revision DESC LIMIT 25")?;
+        out["history"] = json!(
+            s.query_map([rid], |r| Ok(serde_json::from_str::<Value>(
+                &r.get::<_, String>(0)?
+            )
+            .unwrap_or(Value::Null)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        );
+    }
+    Ok(out)
+}
+fn list_projects(c: &Connection, a: &Value) -> Result<Value> {
+    let mut s = c.prepare("SELECT id,name,description,roots FROM projects ORDER BY name")?;
+    let projects=s.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"description":r.get::<_,String>(2)?,"roots":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!([]))})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let cwd = text(a, "cwd");
+    let mut matches = Vec::new();
+    let mut longest = 0;
+    if !cwd.is_empty() {
+        let cwd = std::fs::canonicalize(cwd).context("Cannot resolve working directory")?;
+        for p in &projects {
+            for r in p["roots"].as_array().unwrap() {
+                let path = PathBuf::from(r.as_str().unwrap());
+                let root = std::fs::canonicalize(&path).unwrap_or(path);
+                if cwd.starts_with(&root) {
+                    let n = root.components().count();
+                    if n > longest {
+                        longest = n;
+                        matches.clear();
+                    }
+                    if n == longest && !matches.contains(&p["id"]) {
+                        matches.push(p["id"].clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(
+        json!({"projects":projects,"resolved_project_id":if matches.len()==1{matches[0].clone()}else{Value::Null},"ambiguous":matches.len()>1,"candidates":matches}),
+    )
+}
+fn selected_ids(c: &Connection, a: &Value) -> Result<Vec<String>> {
+    if let Some(ids) = a.get("ids") {
+        let xs = ids.as_array().context("ids must be an array")?;
+        ensure!(xs.len() <= 100000, "Too many references");
+        return xs
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .map(str::to_string)
+                    .context("id must be a string")
+            })
+            .collect();
+    }
+    let p = required(a, "project_id")?;
+    let mut s = c.prepare("SELECT ref_id FROM associations WHERE project_id=? ORDER BY ref_id")?;
+    Ok(s.query_map([p], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn export_bibtex(c: &Connection, a: &Value) -> Result<Value> {
+    let mut pending = selected_ids(c, a)?;
+    let mut seen = HashSet::new();
+    let mut entries = BTreeMap::new();
+    while let Some(rid) = pending.pop() {
+        if !seen.insert(rid.clone()) {
+            continue;
+        }
+        let v = get_reference(c, &json!({"id":rid}))?;
+        for field in ["crossref", "xref", "xdata"] {
+            if let Some(s) = v["fields"][field].as_str() {
+                for key in s.split(',').map(str::trim) {
+                    ensure!(
+                        c.query_row("SELECT 1 FROM refs WHERE citekey=?", [key], |_| Ok(()))
+                            .optional()?
+                            .is_some(),
+                        "Missing bibliography dependency: {key}"
+                    );
+                    pending.push(key.into());
+                }
+            }
+        }
+        entries.insert(
+            text(&v, "citekey").to_string(),
+            parse_bibtex(text(&v, "bibtex"))?
+                .iter()
+                .next()
+                .context("Empty entry")?
+                .to_bibtex_string()
+                .map_err(|e| anyhow::anyhow!("Cannot export BibTeX: {e}"))?,
+        );
+    }
+    Ok(
+        json!({"bibtex":entries.values().cloned().collect::<Vec<_>>().join("\n\n"),"count":entries.len()}),
+    )
+}
+fn export_notes(c: &Connection, a: &Value) -> Result<Value> {
+    let mut output = String::new();
+    for rid in selected_ids(c, a)? {
+        let r = get_reference(c, &json!({"id":rid}))?;
+        output.push_str(&format!(
+            "# {} [{}]\n\n",
+            text(&r, "title"),
+            text(&r, "citekey")
+        ));
+        let mut s=c.prepare("SELECT id FROM notes WHERE ref_id=? AND (? OR project_id IS NULL OR project_id=?) ORDER BY project_id,created_at,id")?;
+        let ids = s
+            .query_map(
+                params![
+                    rid,
+                    a["include_other_projects"] == true,
+                    a.get("project_id").and_then(Value::as_str)
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for nid in ids {
+            let n = note(c, &nid)?;
+            let project = if let Some(p) = n["project_id"].as_str() {
+                c.query_row("SELECT name FROM projects WHERE id=?", [p], |r| {
+                    r.get::<_, String>(0)
+                })?
+            } else {
+                "Global".into()
+            };
+            output.push_str(&format!(
+                "## {project}\n\n{}\n\nSource: {}; evidence: {}; note: {}; revision: {}\n\n",
+                text(&n, "body"),
+                text(&n, "provenance"),
+                text(&n, "evidence"),
+                nid,
+                n["revision"]
+            ));
+        }
+    }
+    Ok(json!({"markdown":output}))
+}
+fn preview_doi(a: &Value) -> Result<Value> {
+    let doi = normalize_doi(required(a, "doi")?);
+    ensure!(
+        doi.starts_with("10.") && doi.contains('/') && !doi.chars().any(char::is_whitespace),
+        "Invalid DOI"
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("Omabib/0.1 (local bibliography manager)")
+        .build()?;
+    let response = client
+        .get(format!("https://doi.org/{doi}"))
+        .header("Accept", "application/x-bibtex")
+        .send()?
+        .error_for_status()?;
+    use std::io::Read;
+    let mut raw = String::new();
+    response.take(1024 * 1024 + 1).read_to_string(&mut raw)?;
+    ensure!(raw.len() <= 1024 * 1024, "DOI response too large");
+    parse_bibtex(&raw).map_err(|e| anyhow::anyhow!("DOI returned invalid BibTeX: {e}"))?;
+    Ok(json!({"doi":doi,"bibtex":raw,"saved":false,"source":format!("https://doi.org/{doi}")}))
+}

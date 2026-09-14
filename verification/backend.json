@@ -1,0 +1,69 @@
+{
+  "fixture": "Synthetic: varied topics/methods, 10,000 author identities; not a real-library relevance evaluation",
+  "references": 101010,
+  "notes": 300000,
+  "public_import_1000_seconds": 2.007982284998434,
+  "search_during_import_p95_ms": 17.71099100005813,
+  "seed_and_index_seconds": 126.57171827599814,
+  "service_start_seconds": 0.10074357600024086,
+  "database_bytes": 1564033024,
+  "memory": "VmRSS:\t   74760 kB",
+  "queries": {
+    "Ref005321": {
+      "wall_p95_ms": 3.8104900013422593,
+      "backend_p95_ms": 3.169492,
+      "results": 1
+    },
+    "network": {
+      "wall_p95_ms": 20.40239299822133,
+      "backend_p95_ms": 18.482355,
+      "results": 8
+    },
+    "social networks": {
+      "wall_p95_ms": 13.186357002268778,
+      "backend_p95_ms": 11.450676,
+      "results": 8
+    },
+    "Smith consensus": {
+      "wall_p95_ms": 11.307495999062667,
+      "backend_p95_ms": 9.541829,
+      "results": 8
+    },
+    "population align": {
+      "wall_p95_ms": 12.467110998841235,
+      "backend_p95_ms": 10.656298999999999,
+      "results": 8
+    },
+    "Bayesian estimation": {
+      "wall_p95_ms": 18.219099001726136,
+      "backend_p95_ms": 16.077945,
+      "results": 8
+    },
+    "heterogeneous effects": {
+      "wall_p95_ms": 12.511193999671377,
+      "backend_p95_ms": 11.339957,
+      "results": 8
+    },
+    "colective creativity": {
+      "wall_p95_ms": 8.718807999684941,
+      "backend_p95_ms": 6.860126,
+      "results": 8
+    },
+    "netwroks": {
+      "wall_p95_ms": 6.842111997684697,
+      "backend_p95_ms": 5.348898999999999,
+      "results": 8
+    },
+    "oscillators": {
+      "wall_p95_ms": 13.13559099799022,
+      "backend_p95_ms": 11.359854,
+      "results": 8
+    },
+    "sensitivity specification": {
+      "wall_p95_ms": 12.929321997944498,
+      "backend_p95_ms": 11.427602,
+      "results": 8
+    }
+  },
+  "four_reader_batch_ms": 167.15775999909965
+}

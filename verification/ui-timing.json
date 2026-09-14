@@ -1,0 +1,9 @@
+{
+  "ordinary_frame_p95_ms": 46,
+  "typo_frame_p95_ms": 30,
+  "warm_window_frame_p95_ms": 36,
+  "command_to_observed_ready_p95_ms": 102.66819000025862,
+  "query_samples": 40,
+  "opening_samples": 20,
+  "measurement": "QQuickWindow.frameSwapped; query changes supplied through the normal QML property path, not a physical keyboard. Wall observation includes CLI/poll overhead."
+}
