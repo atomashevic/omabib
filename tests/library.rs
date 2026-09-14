@@ -14,6 +14,93 @@ fn first(r: &Value) -> &str {
     r["items"][0]["id"].as_str().unwrap()
 }
 #[test]
+fn deleting_a_reference_removes_its_library_data_but_keeps_pdf_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("library.db");
+    let lib = Library::open(&db).unwrap();
+    let imported = lib.call("import_bibtex", &json!({"bibtex":"@article{DeleteMe,title={Delete target},year={2026}}\n@article{KeepMe,title={Keep target},year={2026}}"})).unwrap();
+    let rid = imported["items"][0]["id"].as_str().unwrap();
+    let keep = imported["items"][1]["id"].as_str().unwrap();
+    let project = lib.call("create_project", &json!({"name":"Delete test"})).unwrap()["id"].clone();
+    let pdf = dir.path().join("paper.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+    lib.call("attach", &json!({"ref_id":rid,"path":pdf,"file_type":"pdf"})).unwrap();
+    let note = lib.call("add_note", &json!({"ref_id":rid,"project_id":project,"body":"A note to remove","provenance":"test"})).unwrap();
+    lib.call("update_note", &json!({"id":note["id"],"project_id":project,"expected_revision":1,"body":"Revised note","provenance":"test"})).unwrap();
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute("INSERT INTO note_images VALUES(?1,'image/png',1,1,'hash',?2,1,'{}',X'00')",rusqlite::params![note["id"].as_str().unwrap(),pdf.to_str().unwrap()]).unwrap();
+    c.execute("INSERT INTO external_summaries(ref_id,source,external_id,source_url,body) VALUES(?1,'alphaXiv','2609.00001','https://www.alphaxiv.org/overview/2609.00001.md','# Report')",[rid]).unwrap();
+    drop(c);
+    let preview = lib.call("delete_reference_preview", &json!({"id":"DeleteMe"})).unwrap();
+    assert_eq!(preview["id"], rid);
+    assert_eq!(preview["note_count"], 1);
+    assert_eq!(preview["attachment_count"], 1);
+    assert_eq!(preview["project_count"], 1);
+    assert_eq!(preview["summary_count"], 1);
+    let args = json!({"id":rid,"expected_revision":preview["revision"],"confirm_citekey":"DeleteMe","expected_notes":1,"expected_attachments":1,"idempotency_key":"delete-once"});
+    for (field, wrong) in [("expected_revision",json!(999)),("confirm_citekey",json!("KeepMe")),("expected_notes",json!(0)),("expected_attachments",json!(0))] {
+        let mut bad = args.clone(); bad[field] = wrong;
+        assert!(lib.call("delete_reference", &bad).is_err(), "{field}");
+        assert!(lib.call("get_reference", &json!({"id":rid})).is_ok());
+    }
+    let deleted = lib.call("delete_reference", &args).unwrap();
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(deleted["notes_deleted"], 1);
+    assert_eq!(deleted["attachments_unlinked"], 1);
+    assert_eq!(deleted["files_deleted"], false);
+    assert_eq!(lib.call("delete_reference", &args).unwrap(), deleted);
+    assert!(pdf.exists());
+    assert!(lib.call("get_reference", &json!({"id":rid})).is_err());
+    assert!(lib.call("get_reference", &json!({"id":keep})).is_ok());
+    assert!(lib.call("search", &json!({"query":"Delete target"})).unwrap()["results"].as_array().unwrap().is_empty());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    for table in ["notes","note_revisions","note_images","attachments","associations","external_summaries"] {
+        let count: i64 = c.query_row(&format!("SELECT count(*) FROM {table}"),[],|r|r.get(0)).unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    let docs: i64 = c.query_row("SELECT count(*) FROM docs WHERE ref_id=?",[rid],|r|r.get(0)).unwrap();
+    assert_eq!(docs, 0);
+    let violations: i64 = c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get(0)).unwrap();
+    assert_eq!(violations, 0);
+}
+#[test]
+fn deleting_one_note_keeps_its_reference_and_other_notes() {
+    let (dir, lib, refs) = setup();
+    let rid = first(&refs);
+    let note = lib.call("add_note", &json!({"ref_id":rid,"project_id":null,"body":"Delete this specific assessment","provenance":"test"})).unwrap();
+    let keep = lib.call("add_note", &json!({"ref_id":rid,"project_id":null,"body":"Keep this other assessment","provenance":"test"})).unwrap();
+    lib.call("update_note", &json!({"id":note["id"],"project_id":null,"expected_revision":1,"body":"Revised specific assessment","provenance":"test"})).unwrap();
+    let db = dir.path().join("library.db");
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute("INSERT INTO note_images VALUES(?1,'image/png',1,1,'hash','/tmp/paper.pdf',1,'{}',X'00')",[note["id"].as_str().unwrap()]).unwrap();
+    drop(c);
+    let preview = lib.call("delete_note_preview", &json!({"id":note["id"]})).unwrap();
+    assert_eq!(preview["ref_id"], rid);
+    assert_eq!(preview["revision"], 2);
+    assert_eq!(preview["has_image"], true);
+    assert!(preview["excerpt"].as_str().unwrap().contains("Revised"));
+    let args = json!({"id":note["id"],"expected_revision":2,"confirm_ref_id":rid,"idempotency_key":"delete-note-once"});
+    for (field, wrong) in [("expected_revision",json!(1)),("confirm_ref_id",json!("wrong"))] {
+        let mut bad = args.clone();bad[field]=wrong;
+        assert!(lib.call("delete_note", &bad).is_err(), "{field}");
+    }
+    let deleted = lib.call("delete_note", &args).unwrap();
+    assert_eq!(deleted["image_deleted"], true);
+    assert_eq!(lib.call("delete_note", &args).unwrap(), deleted);
+    assert!(lib.call("delete_note_preview", &json!({"id":note["id"]})).is_err());
+    let reference = lib.call("get_reference", &json!({"id":rid,"include_notes":true})).unwrap();
+    assert_eq!(reference["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(reference["notes"][0]["id"], keep["id"]);
+    assert!(lib.call("search", &json!({"query":"Revised specific assessment"})).unwrap()["results"].as_array().unwrap().is_empty());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    for table in ["note_revisions","note_images"] {
+        let count:i64=c.query_row(&format!("SELECT count(*) FROM {table}"),[],|r|r.get(0)).unwrap();
+        assert_eq!(count,0,"{table}");
+    }
+    let docs:i64=c.query_row("SELECT count(*) FROM docs WHERE note_id=?",[note["id"].as_str().unwrap()],|r|r.get(0)).unwrap();
+    assert_eq!(docs,0);
+}
+#[test]
 fn search_and_roundtrip() {
     let (_d, l, r) = setup();
     for q in [
@@ -45,6 +132,95 @@ fn search_and_roundtrip() {
     let again = l.call("import_bibtex", &json!({"bibtex":BIB})).unwrap();
     assert_eq!(again["items"].as_array().unwrap().len(), 3);
     assert_eq!(l.call("status", &json!({})).unwrap()["references"], 3);
+}
+#[test]
+fn blank_browse_sorts_by_date_added_with_stable_pages() {
+    let (d, l, _) = setup();
+    let c = rusqlite::Connection::open(d.path().join("library.db")).unwrap();
+    for (key, added) in [
+        ("Book2020", "2026-09-13T10:00:00.000Z"),
+        ("Chapter2020", "2026-09-13T11:00:00.000Z"),
+        ("Smith2024", "2026-09-13T12:00:00.000Z"),
+    ] {
+        c.execute("UPDATE refs SET created_at=? WHERE citekey=?", [added, key])
+            .unwrap();
+    }
+    drop(c);
+    let first_page = l
+        .call("search", &json!({"query":"","sort":"added_desc","limit":2}))
+        .unwrap();
+    assert_eq!(first_page["ranking"], "added_desc");
+    assert_eq!(first_page["results"][0]["citekey"], "Smith2024");
+    assert_eq!(first_page["results"][1]["citekey"], "Chapter2020");
+    assert_eq!(
+        first_page["results"][0]["created_at"],
+        "2026-09-13T12:00:00.000Z"
+    );
+    let second_page = l
+        .call(
+            "search",
+            &json!({"query":"","sort":"added_desc","limit":2,"cursor":first_page["next_cursor"]}),
+        )
+        .unwrap();
+    assert_eq!(second_page["results"][0]["citekey"], "Book2020");
+    assert!(second_page["next_cursor"].is_null());
+    let by_key = l.call("search", &json!({"query":"","limit":3})).unwrap();
+    assert_eq!(by_key["ranking"], "citekey");
+    assert_eq!(by_key["results"][0]["citekey"], "Book2020");
+    assert_eq!(by_key["results"][2]["citekey"], "Smith2024");
+    let year = l
+        .call(
+            "search",
+            &json!({"query":"","sort":"added_desc","year":"2020"}),
+        )
+        .unwrap();
+    assert_eq!(year["results"][0]["citekey"], "Chapter2020");
+    assert_eq!(year["results"].as_array().unwrap().len(), 2);
+    let project = l.call("create_project", &json!({"name":"test"})).unwrap();
+    let smith = l.call("get_reference", &json!({"id":"Smith2024"})).unwrap();
+    l.call(
+        "associate",
+        &json!({"ref_id":smith["id"],"project_id":project["id"]}),
+    )
+    .unwrap();
+    let scoped = l
+        .call(
+            "search",
+            &json!({"query":"","sort":"added_desc","project_filter":project["id"]}),
+        )
+        .unwrap();
+    assert_eq!(scoped["results"].as_array().unwrap().len(), 1);
+    assert_eq!(scoped["results"][0]["id"], smith["id"]);
+    assert_eq!(
+        l.call("search", &json!({"query":"collective","sort":"added_desc"}))
+            .unwrap()["ranking"],
+        "bounded_field_weighted"
+    );
+    assert!(
+        l.call("search", &json!({"query":"","sort":"unknown"}))
+            .is_err()
+    );
+}
+
+#[test]
+fn old_library_gets_date_added_index_on_open() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("library.db");
+    drop(Library::open(&path).unwrap());
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch("DROP INDEX refs_added;").unwrap();
+    drop(c);
+    drop(Library::open(&path).unwrap());
+    let c = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='refs_added'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
 }
 #[test]
 fn notes_scope_revisions_retry_and_backup() {
@@ -429,6 +605,12 @@ fn enter_target_pdf_url_doi_and_missing() {
             .as_str()
             .unwrap()
             .contains("paper%20with%20spaces.pdf")
+    );
+    // prefer:"link" skips the PDF attachment even though one exists.
+    assert_eq!(
+        l.call("open_target", &json!({"id":rid,"prefer":"link"}))
+            .unwrap()["url"],
+        "https://example.org/paper"
     );
     std::fs::remove_file(pdf).unwrap();
     assert_eq!(

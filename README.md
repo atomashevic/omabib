@@ -2,13 +2,49 @@
 
 A native Omarchy bibliography picker with a Rust service, SQLite search, and project-aware research notes.
 
+## Supported setup
+
+Omabib currently supports **Omarchy with its Quickshell plugin system**, **Zathura** for PDFs, and **Codex CLI or ChatGPT Desktop in Codex mode** for reference-aware chats. Other desktop shells, PDF viewers, and ChatGPT modes have not been tested. The ChatGPT button opens a draft in Desktop's Codex mode with **GPT-5.6 Sol Medium** selected. Press Send to start that chat.
+
+Install Rust/Cargo, a C compiler, Git, Zathura with a PDF backend, and Codex CLI. ChatGPT Desktop is optional. On Omarchy, install Zathura with your package manager, then build and install the plugin and service:
+
+```bash
+git clone https://github.com/atomashevic/omabib.git
+cd omabib
+./scripts/install.sh
+xdg-mime default org.pwmt.zathura.desktop application/pdf
+omarchy plugin validate "$HOME/.config/omarchy/plugins/omabib"
+omabib status
+```
+
+The installer copies the Rust CLI, user service, Quickshell plugin, launch helpers, and Omabib skill into user-owned locations. It enables the user service and plugin. It does not change Hyprland keybindings. After checking that the keys are free or intentionally replacing them, add the following to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + B", "Omabib bibliography", "omabib open")
+o.rebind("SUPER + W", "Close Omabib or window", "omabib-close-first")
+o.bind("SUPER + ALT + B", "Omabib: add reference", "omabib add")
+o.bind("SUPER + N", "Omabib: PDF note", "omabib-quick-note")
+```
+
+Run `hyprctl reload` and `hyprctl configerrors`, then open Omabib with Super+B. If your shell keeps an older cached plugin, run `omarchy restart shell` when no Omabib editor is open. To enable Codex MCP separately, use the private companion repository [omabib-mcp](https://github.com/atomashevic/omabib-mcp), or run `codex mcp add omabib --env "OMABIB_SOCKET=$XDG_RUNTIME_DIR/omabib/socket" -- "$HOME/.local/bin/omabib" mcp`.
+
+## Typical uses
+
+- Sort by newest addition to scan fresh Scholar alerts, then narrow the search to a project.
+- Open a paper in Zathura, press Super+N, capture a page-aware text note or image clip, and keep its project context.
+- Open the paper from Zathura with Super+B, or use the detail pane to inspect its abstract, notes, PDF, and AlphaXiv overview.
+- Press **Codex** for a new CLI chat or **ChatGPT** for a Desktop Codex-mode draft. Both receive a private reference snapshot with all project-labelled notes, image clips, and PDF paths, plus Omabib MCP access to the same library.
+- Ask an agent to compare project assessments, read a saved image clip, or retrieve the PDF. Library writes still require an explicit request.
+
 ## Use it
 
-Open **Super+B** on the configured desktop, or run `omabib open`. Type a title, author, abstract term, citation key, or note fragment. Enter opens the PDF or reference link. Tab opens details. Ctrl+K opens actions. Ctrl+O also opens the selected PDF or reference link. Set `OMABIB_PDF_SHORTCUT` in the shell launch environment to change this shortcut. Esc returns or closes.
+When Zathura is focused, **Super+B** opens the Omabib item attached to its exact PDF and shows the reference details in All references. An unlinked or ambiguous PDF opens ordinary search and shows a notification.
 
-Use the book icon in the top bar or Super+B to open Omabib. In Actions, type **1–20** to select a numbered command. For a first digit that could still start a two-digit action (1 or 2), press Enter immediately or wait 700 ms for a possible second digit.
+Open **Super+B** on the configured desktop, or run `omabib open`. An empty search field shows the newest additions first; **Ctrl+S** switches between date-added and citation-key order. Type a title, author, abstract term, citation key, or note fragment. Enter opens the PDF, or the reference link if there's no PDF. Ctrl+O opens the PDF specifically (downloading an open-access copy first if none is attached); Ctrl+U opens the reference's link/DOI specifically, skipping any attached PDF. Set `OMABIB_PDF_SHORTCUT` in the shell launch environment to change the PDF shortcut from Ctrl+O. Tab opens details. Ctrl+K opens actions. Esc closes the main popup; Q also closes it while the search field is empty, so searches can still contain q. Opening a link focuses the browser, and opening a PDF focuses the configured PDF viewer.
 
-Choose **6 · Import BibTeX file** to browse folders or paste an absolute file path. Enter opens a folder or imports a file; Ctrl+L focuses the path. **5 · Paste BibTeX** remains available.
+Use the book icon in the top bar or Super+B to open Omabib. In Actions, type **1–23** to select a numbered command; **1 · Add new item** is the DOI/arXiv/URL/BibTeX add box (see [Adding references](#adding-references)). For a first digit that could still start a two-digit action (1 or 2), press Enter immediately or wait 700 ms for a possible second digit.
+
+Choose **7 · Import BibTeX file** to browse folders or paste an absolute file path. Enter opens a folder or imports a file; Ctrl+L focuses the path. **6 · Paste BibTeX** remains available.
 
 Use Actions to add a DOI, create projects, write notes, or copy bibliographies. DOI lookup is a preview; import is a separate action. No abstract is invented when metadata lacks one.
 
@@ -26,7 +62,21 @@ The normal library starts empty. Test fixtures and benchmarks use separate datab
 
 ## Adding references
 
-Paste a DOI, an arXiv ID, a paper's URL, several of those separated by spaces/commas, or a whole BibTeX entry — into the search field itself (press Enter when there are no results and it's recognized), or **18 · Add entry** / Super+Alt+B. Omabib fetches title/author/year, an abstract when one can be found, and an open-access PDF link, previews the citation key it would assign (`family_word_year`, e.g. `watts_collective_1998`) alongside each item, and only writes on Import. Adding a single identifier fetches and attaches its PDF automatically; an identifier already in the library is filled in rather than duplicated.
+Paste a DOI, an arXiv ID, a paper's URL, several of those separated by spaces/commas, or a whole BibTeX entry — into the search field itself (press Enter when there are no results and it's recognized), or **1 · Add new item** / Super+Alt+B. Omabib fetches title/author/year, an abstract when one can be found, and an open-access PDF link, previews the citation key it would assign (`family_word_year`, e.g. `watts_collective_1998`) alongside each item, and only writes on Import. Adding a single identifier fetches and attaches its PDF automatically; an identifier already in the library is filled in rather than duplicated. After Import, the added (or first, for several) reference becomes the current search and detail view.
+
+For an arXiv paper, **AlphaXiv AI Overview** checks for a published overview, imports it on first click, and renders the full Markdown report within the reference details. The report scrolls with the rest of the item and its text can be selected. Later clicks use the local cache; unavailable overviews leave the reference unchanged. The source link remains beside the report.
+
+**Delete item…** in the detail pane (or action **21** in Ctrl+K) previews the exact citation key and counts of notes, attachment links, project links, and cached summaries before confirmation. Deletion removes the reference and those library records atomically. PDF files stay on disk, and the history repository is not changed by this action. The MCP tools `delete_reference_preview` and `delete_reference` expose the same reviewed operation; deletion requires the current revision and note/attachment counts from the preview, the exact citation key, and an idempotency key.
+
+Each note in the detail pane also has **Delete…** beside Edit. Its confirmation shows the project and a note excerpt. Deleting one note removes its saved image clip and revisions but keeps the reference and its other notes. The MCP tools `delete_note_preview` and `delete_note` provide the same operation with a current note revision, matching reference ID, and idempotency key.
+
+**Codex** in the detail pane (or Ctrl+K action **22**) opens a separate Codex CLI terminal for that entry. It passes a private context file containing metadata, BibTeX, all project-labelled notes, PDF/attachment paths, and exported image clips. Images are available for inspection on demand; MCP can retrieve current data and saved clips from the same library. The active project is the default scope for notes you ask Codex to save. Codex starts by acknowledging the entry, then waits for your question.
+
+**ChatGPT** in the detail pane (or Ctrl+K action **23**) opens a prefilled chat in ChatGPT Desktop Codex mode. It uses a stable Omabib workspace per library with `gpt-5.6-sol` and medium reasoning, a local Omabib skill, MCP pointed at that library, and a private snapshot for each entry. The draft remains unsent until you press Send.
+
+This requires `codex` and `xdg-terminal-exec`. The chat uses **gpt-5.6-sol** with **medium** reasoning and a per-launch Omabib MCP override. Context snapshots are retained under `$XDG_DATA_HOME/omabib/codex/chat-*` (normally `~/.local/share/omabib/codex`) so a resumed chat can still read its files. The stable parent directory is the Codex working directory; Codex may ask you to trust it on first use. Each note body is bounded at 65,536 characters and explicitly marked if truncated.
+
+The top **All references** dropdown filters the whole result list to one project. Changing it keeps the current search text. If the focused reference is outside the new project, the detail pane closes and focus returns to search. **Assign to project** in a reference's detail pane opens a separate project picker, including when All references is selected.
 
 ```bash
 omabib add 10.1145/3025453.3025717                    # by DOI
@@ -48,7 +98,7 @@ cargo build --release --locked
 codex mcp add omabib -- "$HOME/.local/bin/omabib" mcp
 ```
 
-The installer manages only the Omabib binary, plugin, service and skill. It does not replace existing Hyprland shortcuts. The local installation has Super+B configured; on another machine, inspect available bindings and add `omabib open` to a free shortcut.
+The installer manages the Omabib binary, plugin, service, skill, and the `omabib-close-first` and `omabib-quick-note` helpers. It does not replace existing Hyprland shortcuts. The local installation has Super+B to open and Super+W to close Omabib first, then the focused window when Omabib is hidden. On another machine, inspect available bindings before adding either shortcut. Set `application/pdf` to Zathura, the PDF viewer supported by the page-aware note workflow.
 
 After an update, the plugin normally reloads through `omarchy-shell shell rescanPlugins`. If Quickshell retains cached component code, `omarchy restart shell` loads the new version. Do not restart while the desktop is locked.
 
@@ -80,7 +130,7 @@ JSON
 
 A global note explicitly uses `"project_id": null`. An update supplies `id` and `expected_revision`, as well as the current body, scope, provenance, labels and evidence. Stale revisions fail. Repeating the same request and idempotency key returns the previous result; reusing a key for different content fails.
 
-The stdio MCP server exposes twelve tools: `search`, `get_reference`, `project_context`, `list_projects`, `add_note`, `update_note`, `export_bibtex`, `add_pdf`, `pull_pdf`, `remove_pdf`, `get_pdf`, and `add_reference`. Restart/reconnect the MCP client after registration if it has not discovered the tools. The installed `omabib` Codex skill teaches selective retrieval, evidence-aware note writing, adding references, and reading PDFs through `get_pdf`.
+The stdio MCP server exposes search, retrieval, note, PDF, reference, and deletion tools. Use `omabib schema` for the current tool list and schemas; reconnect the MCP client after updating the executable. The installed `omabib` Codex skill covers selective retrieval, evidence-aware notes, reviewed deletions, adding references, and reading PDFs through `get_pdf`.
 
 - Search defaults to eight results, capped at 25 per page. `cursor` continues the result set.
 - With a project, metadata is searched globally but note bodies are limited to global/current-project notes. Explicit `include_other_projects` broadens note search.
@@ -95,7 +145,7 @@ The stdio MCP server exposes twelve tools: `search`, `get_reference`, `project_c
 
 SQLite word/prefix and trigram indexes generate candidates. A separate title/author/key pass protects those matches. Rust ranks a bounded candidate set by field weight and a modest project boost. Exact keys/DOIs precede keyword, substring and typo stages. SymSpell handles one-edit misspellings for words of at least four characters, using library vocabulary. Numeric identifiers are excluded from typo dictionaries.
 
-This deliberately avoids exhaustive BM25 sorting of every match on every keystroke. Broad queries return a bounded ranked selection; the UI indicates when narrowing is useful. This is not a globally exhaustive relevance ordering. Blank-query browsing uses citation-key order. Typo vocabulary initializes in the background so keyword search can start immediately.
+This deliberately avoids exhaustive BM25 sorting of every match on every keystroke. Broad queries return a bounded ranked selection; the UI indicates when narrowing is useful. This is not a globally exhaustive relevance ordering. With an empty search field, the popup shows newest additions first; click **Sort** or press **Ctrl+S** to switch to citation-key order. The date-added order uses a SQLite index and pages without sorting the whole library. Search terms keep relevance ranking. Typo vocabulary initializes in the background so keyword search can start immediately.
 
 Results include a short matching excerpt and attributed note matches, plus `has_pdf` and `has_abstract`. Search never sends full PDFs or the entire note collection to an agent.
 
@@ -168,7 +218,7 @@ omabib repo show
 
 ## Sync and status
 
-Use the header status chip in the search popup (or action **15**) to sync: export, commit and push the current library. It reads "Set up sync", "✓ Synced 2h ago", "● Changes pending", "↓ N behind" or "⚠ Sync issue" depending on `repo_status`. Action **16** opens repository settings.
+Use the header status chip in the search popup (or action **19**) to sync: export, commit and push the current library. It reads "Set up sync", "✓ Synced 2h ago", "● Changes pending", "↓ N behind" or "⚠ Sync issue" depending on `repo_status`. Action **20** opens repository settings.
 
 Sync preserves local edits and refuses divergent pushes; it never force-pushes or merges remote metadata into SQLite. A push that fails *after* a successful local commit is reported as such (`ok:false, committed:true`) rather than losing the commit — fix what's described and sync again. The operation runs off the search thread. `omabib-history` uses this same repository configuration.
 
@@ -181,9 +231,21 @@ omabib repo status [--fetch] [--json]
 
 `repo_status` (also the JSON operation) reports the current HEAD, how far ahead/behind the remote, local edits, pending changes since the last successful sync, and the last attempt's result or a classified error (`diverged`, `auth`, `network`, `lfs`, `dirty`, `branch`, `origin-changed`, `busy`, `unknown`) with a hint — `diverged`, for instance, points at `git pull --rebase`, since Omabib itself never merges.
 
+## Quick PDF notes
+
+Focus a PDF in Zathura and press **Super+N**. Drag a rectangle for an image, or click without dragging for a text note. Escape cancels selection. The compact quick note editor shows the reference title and current PDF page, prefills the evidence location, and keeps the project used when opening the PDF (or Global). **Ctrl+Enter** saves; **Esc** cancels and returns to the PDF. No note is written until Save.
+
+The shortcut checks the foreground Zathura PID, window title, and exact document path against the remembered reference's PDF attachments. If that context is missing or does not match, it resolves the PDF through Omabib's exact attachment-path index. Missing or ambiguous matches stop without creating a note. Page numbers are physical PDF pages, counted from 1. This also restores reading context after a shell restart. `omabib-quick-note --print` validates the current context without opening or saving a note. The helper requires Python with PyGObject, and Zathura's D-Bus interface.
+
+## Visual notes
+
+Press **Super+N** while reading the reference's PDF and select a region inside Zathura. A compact popup opens with a lossless PNG preview. A click without dragging opens a text-only note instead. Add optional commentary and press **Ctrl+Enter** to save, or **Esc** to discard. Recapture (Ctrl+Shift+C) and Remove are available before saving. Capture is rejected if the original document/page changes or the rectangle extends outside its window.
+
+Clips are stored atomically with their notes in SQLite, included in database backups, and exported as `notes/images/*.png` by history snapshots. Ordinary note/search responses carry compact image metadata. The MCP tool **get_note_image** returns the original PNG as an image content block for reading numbers, math, text, or code. Image-only notes are supported; the captured PDF page and source path remain attached. No OCR is required at capture time. The first release supports one PNG per visual note, up to 8 MiB and 32 million pixels. Capture requires `slurp` and `grim`.
+
 ## PDFs
 
-Open an entry with Tab and choose **Attach PDF**, or use action **9**, to link an existing local file. Use **Get PDF** (action **19**) to have Omabib find one itself — an existing attachment, one restored from the history archive, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it; **Copy PDF path** (action **20**) copies the path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file and its Git/LFS history.
+Open an entry with Tab and choose **Attach PDF**, or use action **10**, to link an existing local file. Use **Open PDF** (Ctrl+O, action **12**) to have Omabib find one itself — an existing attachment, one restored from the history archive, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it; **Open link** (Ctrl+U, action **11**) opens the reference's own URL/DOI instead, even if a PDF is attached; **Copy PDF path** (action **13**) copies the PDF's path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file and its Git/LFS history.
 
 Downloaded and restored PDFs are stored as `pdfs/<citekey>.pdf` (e.g. `pdfs/watts_collective_1998.pdf`), with a short hash suffix only on a genuine name collision — not a content hash, so they're findable by browsing. The history repository keeps its own separate content-addressed naming.
 
@@ -203,12 +265,14 @@ The MCP tools `add_pdf`, `pull_pdf`, `remove_pdf`, and `get_pdf` expose these op
 
 ## Online metadata and opening references
 
-Enter opens an existing attached PDF, then the bibliographic URL/PDF link, then the DOI landing page. Missing local PDFs fall back to the available web link. Copying a citation key remains action 1 in Ctrl+K.
+Enter opens an existing attached PDF, then the bibliographic URL/PDF link, then the DOI landing page. Missing local PDFs fall back to the available web link. Copying a citation key is action **2** in Ctrl+K.
 
-Select a reference, open its details with Tab, and choose **Fill metadata**, or use action **17**. Crossref looks up DOIs or returns five title/author/year candidates. DataCite handles repository DOIs, including arXiv URLs/eprints. A missing abstract is then looked for via OpenAlex, Semantic Scholar and Europe PMC, in that order, stopping at the first substantial one. No API key is required for any of these. Gateway coverage varies; unavailable fields remain missing.
+Select a reference, open its details with Tab, and choose **Fill metadata**, or use action **14**. Crossref looks up DOIs or returns five title/author/year candidates. DataCite handles repository DOIs, including arXiv URLs/eprints. A missing abstract is then looked for via OpenAlex, Semantic Scholar and Europe PMC, in that order, stopping at the first substantial one. No API key is required for any of these. Gateway coverage varies; unavailable fields remain missing.
 
 Review the matching record and choose **Fill missing fields** (Ctrl+Enter). Existing values, citation keys, IDs, attachments and notes are preserved. Concurrent edits reject stale previews. Nothing is fetched during normal search and no bulk enrichment is run automatically — see [Abstracts](#abstracts) for the explicit, opt-in `omabib enrich --abstracts` backfill.
 
 `omabib lookup CITEKEY` returns the unsaved candidate preview. JSON CLI operations are `lookup_metadata` (`id`), `supplement_metadata` (`id`, `doi`), `lookup_abstract` (`id`; a single reference's abstract-only preview by its exact DOI/arXiv ID), and `apply_metadata` (`id`, `expected_revision`, `fields`, `source`, optional `idempotency_key`). Apply accepts missing bibliographic fields only and records the source. `open_target` (`id`) resolves the preferred target without launching it; `get_pdf` (`id`, optional `download`) resolves — and, unless told not to, downloads — a readable PDF path.
 
 Gateway documentation: [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/), [DataCite REST API](https://support.datacite.org/docs/rest-api), [OpenAlex API](https://docs.openalex.org/), [Semantic Scholar Graph API](https://api.semanticscholar.org/api-docs/graph), [Europe PMC](https://europepmc.org/RestfulWebService).
+
+If the remembered reference is unavailable or belongs to another PDF, Super+N resolves Zathura’s exact canonical PDF path through an indexed attachment lookup. It reconnects the popup to the matching library. Recovery starts at Global scope so an unrelated project is never carried over. Missing or ambiguous matches stop with a notification; matching basenames alone are insufficient.

@@ -422,7 +422,10 @@ pub fn open_target(lib: &Library, a: &Value) -> Result<Value> {
         "get_reference",
         &json!({"id":required(a,"id")?,"include_attachments":true}),
     )?;
-    if let Some(items) = r["attachments"].as_array() {
+    // `prefer:"link"` skips a local PDF attachment even if one exists, for
+    // an explicit "open the web link/DOI" action distinct from "open PDF".
+    let link_only = a.get("prefer") == Some(&json!("link"));
+    if !link_only && let Some(items) = r["attachments"].as_array() {
         for p in items {
             if p["exists"] == true && text(p, "file_type").eq_ignore_ascii_case("pdf") {
                 return Ok(
@@ -441,6 +444,13 @@ pub fn open_target(lib: &Library, a: &Value) -> Result<Value> {
     let doi = inferred_doi(&r);
     if !doi.is_empty() {
         return Ok(json!({"url":endpoint("https://doi.org/",&doi)?.as_str(),"kind":"doi"}));
+    }
+    if link_only
+        && r["attachments"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|p| p["exists"] == true))
+    {
+        anyhow::bail!("No URL or DOI available, but a local PDF is. Use Open PDF instead.")
     }
     anyhow::bail!("No PDF, URL or DOI available. Use Fill metadata to look up this reference.")
 }

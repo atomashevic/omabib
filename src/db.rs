@@ -13,7 +13,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub struct Library {
     pub path: PathBuf,
-    writer: Mutex<Connection>,
+    pub(crate) writer: Mutex<Connection>,
     pub history_lock: Mutex<()>,
     readers: Mutex<Vec<Connection>>,
     pub spell_ready: std::sync::atomic::AtomicBool,
@@ -259,6 +259,13 @@ impl Library {
             }
             c.execute_batch("COMMIT;")?;
         }
+        // Existing v1 libraries need the browse index too. IF NOT EXISTS is
+        // cheap after the first open and keeps the data format unchanged.
+        c.execute_batch(
+            "CREATE INDEX IF NOT EXISTS refs_added ON refs(created_at DESC, id DESC); CREATE INDEX IF NOT EXISTS attachments_pdf_path ON attachments(path,ref_id) WHERE file_type='pdf';",
+        )?;
+        c.execute_batch(crate::visual::SCHEMA)?;
+        c.execute_batch(crate::alphaxiv::SCHEMA)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let lib = Self {
@@ -333,17 +340,29 @@ impl Library {
             "repo_status" => crate::history::status(self, a),
             "add_pdf" => crate::attachments::add(self, a),
             "pull_pdf" => crate::attachments::pull(self, a),
+            "get_note_image" => crate::visual::get(&read_connection(&self.path)?, a),
+            "get_alphaxiv_overview" => crate::alphaxiv::get(self, a),
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(a),
             "lookup_abstract" => lookup_abstract(self, a),
             "missing_abstracts" => missing_abstracts(self, a),
             "add_reference" => self.add_reference(a),
+            "find_reference_by_pdf" => {
+                let path = std::fs::canonicalize(required(a, "path")?)?;
+                let c = read_connection(&self.path)?;
+                let mut stmt = c.prepare("SELECT DISTINCT ref_id FROM attachments WHERE path=? AND file_type='pdf' LIMIT 2")?;
+                let ids = stmt.query_map([path.to_string_lossy().as_ref()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                anyhow::ensure!(ids.len() == 1, "PDF must match exactly one Omabib reference (found {})", ids.len());
+                Ok(json!({"ref_id":ids[0]}))
+            }
             "get_attachment" => {
                 let c = read_connection(&self.path)?;
                 c.query_row("SELECT id,ref_id,path,file_type,fingerprint FROM attachments WHERE id=?",[required(a,"id")?],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"file_type":r.get::<_,String>(3)?,"fingerprint":r.get::<_,Option<String>>(4)?}))).context("Unknown attachment")
             }
             "search" => crate::search::search(self, a),
             "get_reference" => get_reference(&read_connection(&self.path)?, a),
+            "delete_reference_preview" => delete_reference_preview(&read_connection(&self.path)?, a),
+            "delete_note_preview" => delete_note_preview(&read_connection(&self.path)?, a),
             "list_projects" => list_projects(&read_connection(&self.path)?, a),
             "project_context" => self.project_context(a),
             "export_bibtex" => export_bibtex(&read_connection(&self.path)?, a),
@@ -390,8 +409,8 @@ impl Library {
                 Ok(json!({"path":dest}))
             }
             "import_bibtex" | "upsert_reference" | "create_project" | "update_project"
-            | "associate" | "add_note" | "update_note" | "attach" | "remove_pdf"
-            | "relink_attachment" | "apply_metadata" => self.write(method, a),
+            | "associate" | "add_note" | "add_visual_note" | "update_note" | "attach"
+            | "remove_pdf" | "relink_attachment" | "apply_metadata" | "delete_reference" | "delete_note" => self.write(method, a),
             _ => bail!("Unknown operation: {method}"),
         }
     }
@@ -460,7 +479,61 @@ impl Library {
                 )?;
                 json!({"associated":true})
             }
+            "add_visual_note" => {
+                let n = write_note(&tx, method, a)?;
+                crate::visual::insert(&tx, a, text(&n, "id"))?;
+                note(&tx, text(&n, "id"))?
+            }
             "add_note" | "update_note" => write_note(&tx, method, a)?,
+            "delete_note" => {
+                ensure!(!key.is_empty(), "idempotency_key required for deletion");
+                let preview = delete_note_preview(&tx, a)?;
+                ensure!(
+                    a.get("expected_revision").and_then(Value::as_i64) == preview["revision"].as_i64(),
+                    "Note changed since preview; reopen Delete note"
+                );
+                ensure!(
+                    a.get("confirm_ref_id").and_then(Value::as_str) == preview["ref_id"].as_str(),
+                    "Reference confirmation does not match this note"
+                );
+                let nid = required(&preview, "id")?;
+                tx.execute("DELETE FROM note_revisions WHERE note_id=?", [nid])?;
+                tx.execute("DELETE FROM note_images WHERE note_id=?", [nid])?;
+                tx.execute("DELETE FROM docs WHERE note_id=?", [nid])?;
+                ensure!(tx.execute("DELETE FROM notes WHERE id=?", [nid])? == 1, "Note not found");
+                json!({"id":nid,"ref_id":preview["ref_id"],"deleted":true,"image_deleted":preview["has_image"]})
+            }
+            "delete_reference" => {
+                ensure!(!key.is_empty(), "idempotency_key required for deletion");
+                let preview = delete_reference_preview(&tx, a)?;
+                ensure!(
+                    a.get("expected_revision").and_then(Value::as_i64) == preview["revision"].as_i64(),
+                    "Reference changed since preview; reopen Delete item"
+                );
+                ensure!(
+                    a.get("confirm_citekey").and_then(Value::as_str) == preview["citekey"].as_str(),
+                    "Citation key confirmation does not match"
+                );
+                ensure!(
+                    a.get("expected_notes").and_then(Value::as_i64) == preview["note_count"].as_i64()
+                        && a.get("expected_attachments").and_then(Value::as_i64) == preview["attachment_count"].as_i64(),
+                    "Notes or attachments changed since preview; reopen Delete item"
+                );
+                let rid = required(&preview, "id")?;
+                for sql in [
+                    "DELETE FROM note_revisions WHERE note_id IN (SELECT id FROM notes WHERE ref_id=?)",
+                    "DELETE FROM note_images WHERE note_id IN (SELECT id FROM notes WHERE ref_id=?)",
+                    "DELETE FROM docs WHERE ref_id=?",
+                    "DELETE FROM notes WHERE ref_id=?",
+                    "DELETE FROM attachments WHERE ref_id=?",
+                    "DELETE FROM associations WHERE ref_id=?",
+                    "DELETE FROM external_summaries WHERE ref_id=?",
+                ] {
+                    tx.execute(sql, [rid])?;
+                }
+                ensure!(tx.execute("DELETE FROM refs WHERE id=?", [rid])? == 1, "Reference not found");
+                json!({"id":rid,"citekey":preview["citekey"],"deleted":true,"notes_deleted":preview["note_count"],"attachments_unlinked":preview["attachment_count"],"files_deleted":false})
+            }
             "remove_pdf" => {
                 let id = required(a, "attachment_id")?;
                 let removed = tx.execute(
@@ -506,7 +579,7 @@ impl Library {
         }
         tx.commit()?;
         drop(c);
-        if method == "import_bibtex" || method == "upsert_reference" || method == "apply_metadata" {
+        if method == "import_bibtex" || method == "upsert_reference" || method == "apply_metadata" || method == "delete_reference" || method == "delete_note" {
             self.load_vocabulary()?;
         } else if method.ends_with("note") {
             self.add_words(text(a, "body"));
@@ -577,7 +650,10 @@ impl Library {
             )
             .optional()?
         {
-            ensure!(old == payload, "Idempotency key reused with different request");
+            ensure!(
+                old == payload,
+                "Idempotency key reused with different request"
+            );
             return Ok(Some(serde_json::from_str(&result)?));
         }
         Ok(None)
@@ -614,7 +690,10 @@ impl Library {
             crate::ingest::preview(&json!({"input":input}))?
         } else {
             let identified = crate::attachments::identify_pdf(&json!({"path":pdf_path.unwrap()}))?;
-            let candidates = identified["candidates"].as_array().cloned().unwrap_or_default();
+            let candidates = identified["candidates"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             ensure!(
                 !candidates.is_empty(),
                 "Could not identify this PDF. Pass its DOI, arXiv ID or a URL as input instead."
@@ -652,7 +731,10 @@ impl Library {
                 )
                 .optional()?
         {
-            ensure!(old == payload, "Idempotency key reused with different request");
+            ensure!(
+                old == payload,
+                "Idempotency key reused with different request"
+            );
             return Ok(serde_json::from_str(&result)?);
         }
         let changes = import(&tx, &preview)?;
@@ -962,7 +1044,16 @@ fn upsert(c: &Connection, a: &Value) -> Result<Value> {
 }
 fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
     validate_labels(a)?;
-    let body = required(a, "body")?;
+    let body = a
+        .get("body")
+        .and_then(Value::as_str)
+        .context("Note body required; may be empty for a visual note")?;
+    ensure!(
+        !body.trim().is_empty()
+            || method == "add_visual_note"
+            || (method == "update_note" && crate::visual::metadata(c, text(a, "id"))?.is_some()),
+        "Note body is empty"
+    );
     ensure!(body.len() <= 65536, "Note exceeds 64 KiB");
     required(a, "provenance")?;
     ensure!(
@@ -975,7 +1066,7 @@ fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
         Some(required(a, "project_id")?)
     };
     let nid;
-    if method == "add_note" {
+    if method == "add_note" || method == "add_visual_note" {
         nid = id();
         c.execute("INSERT INTO notes(id,ref_id,project_id,body,labels,evidence,provenance) VALUES(?,?,?,?,?,?,?)",params![nid,required(a,"ref_id")?,project,body,json_field(a,"labels",json!([])),a.get("evidence").and_then(Value::as_str),text(a,"provenance")])?;
     } else {
@@ -1010,8 +1101,48 @@ fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
     Ok(n)
 }
 pub fn note(c: &Connection, nid: &str) -> Result<Value> {
-    Ok(c.query_row("SELECT id,ref_id,project_id,body,labels,evidence,provenance,revision,created_at,updated_at FROM notes WHERE id=?",[nid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"project_id":r.get::<_,Option<String>>(2)?,"body":r.get::<_,String>(3)?,"labels":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!([])),"evidence":r.get::<_,Option<String>>(5)?,"provenance":r.get::<_,String>(6)?,"revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?,"updated_at":r.get::<_,String>(9)?})))?)
+    let mut result: Value = c.query_row("SELECT id,ref_id,project_id,body,labels,evidence,provenance,revision,created_at,updated_at FROM notes WHERE id=?",[nid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"project_id":r.get::<_,Option<String>>(2)?,"body":r.get::<_,String>(3)?,"labels":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!([])),"evidence":r.get::<_,Option<String>>(5)?,"provenance":r.get::<_,String>(6)?,"revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?,"updated_at":r.get::<_,String>(9)?})))?;
+    if let Some(image) = crate::visual::metadata(c, nid)? {
+        result["image"] = image;
+    }
+    Ok(result)
 }
+fn delete_note_preview(c: &Connection, a: &Value) -> Result<Value> {
+    let id = required(a, "id")?;
+    c.query_row(
+        "SELECT n.id,n.ref_id,r.citekey,n.project_id,coalesce(p.name,'Global'),n.revision,substr(n.body,1,200),\
+         EXISTS(SELECT 1 FROM note_images WHERE note_id=n.id) \
+         FROM notes n JOIN refs r ON r.id=n.ref_id LEFT JOIN projects p ON p.id=n.project_id WHERE n.id=?",
+        [id],
+        |r| Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,
+            "citekey":r.get::<_,String>(2)?,"project_id":r.get::<_,Option<String>>(3)?,
+            "project_name":r.get::<_,String>(4)?,"revision":r.get::<_,i64>(5)?,
+            "excerpt":r.get::<_,String>(6)?,"has_image":r.get::<_,bool>(7)?})),
+    ).context("Note not found")
+}
+fn delete_reference_preview(c: &Connection, a: &Value) -> Result<Value> {
+    let target = required(a, "id")?;
+    let (id, citekey, title, revision): (String, String, String, i64) = c
+        .query_row(
+            "SELECT id,citekey,title,revision FROM refs WHERE id=?1 OR citekey=?1",
+            [target],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .context("Reference not found")?;
+    let (note_count, attachment_count, project_count, summary_count): (i64, i64, i64, i64) = c
+        .query_row(
+            "SELECT (SELECT count(*) FROM notes WHERE ref_id=?1), \
+             (SELECT count(*) FROM attachments WHERE ref_id=?1), \
+             (SELECT count(*) FROM associations WHERE ref_id=?1), \
+             (SELECT count(*) FROM external_summaries WHERE ref_id=?1)",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+    Ok(json!({"id":id,"citekey":citekey,"title":title,"revision":revision,
+        "note_count":note_count,"attachment_count":attachment_count,
+        "project_count":project_count,"summary_count":summary_count}))
+}
+
 pub fn get_reference(c: &Connection, a: &Value) -> Result<Value> {
     let rid = required(a, "id")?;
     let mut out=c.query_row("SELECT id,citekey,title,authors,year,entry_type,abstract,fields,bibtex,revision,source FROM refs WHERE id=? OR citekey=?",params![rid,rid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"authors":r.get::<_,String>(3)?,"year":r.get::<_,String>(4)?,"entry_type":r.get::<_,String>(5)?,"abstract":r.get::<_,String>(6)?,"fields":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!({})),"bibtex":r.get::<_,String>(8)?,"revision":r.get::<_,i64>(9)?,"source":r.get::<_,String>(10)?}))).context("Reference not found")?;
@@ -1251,13 +1382,16 @@ fn missing_abstracts(lib: &Library, a: &Value) -> Result<Value> {
         .and_then(Value::as_i64)
         .unwrap_or(5000)
         .clamp(1, 20000);
-    let mut s = c.prepare("SELECT id,citekey FROM refs WHERE abstract='' ORDER BY citekey LIMIT ?")?;
+    let mut s =
+        c.prepare("SELECT id,citekey FROM refs WHERE abstract='' ORDER BY citekey LIMIT ?")?;
     let items = s
         .query_map([limit], |r| {
             Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?}))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let total: i64 = c.query_row("SELECT count(*) FROM refs WHERE abstract=''", [], |r| r.get(0))?;
+    let total: i64 = c.query_row("SELECT count(*) FROM refs WHERE abstract=''", [], |r| {
+        r.get(0)
+    })?;
     Ok(json!({"items":items,"total":total}))
 }
 /// Preview an abstract for one reference that already has an exact DOI or

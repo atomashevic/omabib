@@ -7,6 +7,7 @@ CREATE TABLE refs (
  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX refs_year ON refs(year);
+CREATE INDEX refs_added ON refs(created_at DESC, id DESC);
 CREATE TABLE imports(id TEXT PRIMARY KEY, source TEXT NOT NULL, original TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE projects(id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT NOT NULL DEFAULT '', roots TEXT NOT NULL DEFAULT '[]');
 CREATE TABLE associations(ref_id TEXT REFERENCES refs(id), project_id TEXT REFERENCES projects(id), labels TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(ref_id,project_id));

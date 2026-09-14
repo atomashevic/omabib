@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Capture a rectangle from a verified Zathura document into a temporary draft."""
+import argparse
+import json
+import os
+import pathlib
+import re
+import runpy
+import subprocess
+import sys
+import uuid
+
+helpers = runpy.run_path(str(pathlib.Path(__file__).with_name('omabib-quick-note')))
+command = helpers['command']
+properties = helpers['document_properties']
+
+
+def staging():
+    path = pathlib.Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')) / 'omabib-clips'
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def discard(path):
+    target = pathlib.Path(path)
+    if target.parent == staging() and re.fullmatch(r'[0-9a-f]{32}\.png', target.name):
+        target.unlink(missing_ok=True)
+
+
+def check(context):
+    active = json.loads(command('hyprctl', 'activewindow', '-j'))
+    if active.get('pid') != context['source_pid'] or active.get('address') != context['source_window']:
+        raise ValueError('Focus the original PDF before capturing.')
+    props = properties(active['pid'])
+    if pathlib.Path(props['filename']).resolve() != pathlib.Path(context['pdf_path']).resolve() or props['pagenumber'] + 1 != context['page']:
+        raise ValueError('The PDF or page changed. Reopen the quick note on the desired page.')
+    return active
+
+
+def capture(context, geometry=None):
+    before = check(context)
+    if geometry is None:
+        selected = subprocess.run(['slurp'], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=180)
+        if selected.returncode != 0:
+            return {'cancelled': True}
+        geometry = selected.stdout.strip()
+    match = re.fullmatch(r'(-?\d+),(-?\d+) (\d+)x(\d+)', geometry)
+    if not match:
+        raise ValueError('No rectangle selected.')
+    x, y, width, height = map(int, match.groups())
+    wx, wy = before['at']; ww, wh = before['size']
+    if not (width >= 0 and height >= 0 and wx <= x and wy <= y and x+width <= wx+ww and y+height <= wy+wh):
+        raise ValueError('Select a rectangle inside the original Zathura window.')
+    after = check(context)
+    if after['at'] != before['at'] or after['size'] != before['size']:
+        raise ValueError('The PDF window moved. Select the rectangle again.')
+    if width <= 3 and height <= 3:
+        return {'text_only': True}
+    path = staging() / (uuid.uuid4().hex + '.png')
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
+        subprocess.run(['grim', '-g', geometry, '-t', 'png', str(path)], check=True, timeout=10)
+        check(context)
+        if path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError('Clip exceeds 8 MiB. Select a smaller rectangle.')
+        return dict(path=str(path), rectangle=dict(x=x, y=y, width=width, height=height))
+    except Exception:
+        discard(path)
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('context', nargs='?')
+    parser.add_argument('--discard')
+    parser.add_argument('--geometry', help='Use explicit compositor coordinates instead of the interactive picker')
+    args = parser.parse_args()
+    if args.discard:
+        discard(args.discard); return
+    try:
+        print(json.dumps(capture(json.loads(args.context), args.geometry)))
+    except Exception as error:
+        print(json.dumps({'error': str(error)}))
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

@@ -15,6 +15,12 @@ install -m644 "$source_dir/packaging/omabib.service" "$HOME/.config/systemd/user
 install -m644 "$source_dir/plugin/manifest.json" "$source_dir/plugin/App.qml" "$source_dir/plugin/BarWidget.qml" "$plugin_dir/"
 touch "$plugin_dir/.omabib-managed"
 install -m755 "$source_dir/scripts/omabib-history" "$HOME/.local/bin/omabib-history"
+install -m755 "$source_dir/scripts/omabib-close-first" "$HOME/.local/bin/omabib-close-first"
+install -m755 "$source_dir/scripts/omabib-quick-note" "$HOME/.local/bin/omabib-quick-note"
+install -m755 "$source_dir/scripts/omabib-capture-note" "$HOME/.local/bin/omabib-capture-note"
+install -m755 "$source_dir/scripts/omabib-chatgpt" "$HOME/.local/bin/omabib-chatgpt"
+install -m755 "$source_dir/scripts/omabib-codex" "$HOME/.local/bin/omabib-codex"
+install -m755 "$source_dir/scripts/omabib-overview" "$HOME/.local/bin/omabib-overview"
 install -m644 "$source_dir/skills/omabib/SKILL.md" "$HOME/.codex/skills/omabib/SKILL.md"
 omarchy plugin validate "$plugin_dir"
 systemctl --user daemon-reload

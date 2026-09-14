@@ -103,6 +103,84 @@ fn run(c: &Connection, a: &Value, table: &str, q: &str, limit: usize) -> Result<
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+fn browse(
+    c: &Connection,
+    a: &Value,
+    sort: &str,
+    limit: usize,
+    offset: usize,
+    start: std::time::Instant,
+) -> Result<Value> {
+    let (index, order) = if sort == "added_desc" {
+        ("INDEXED BY refs_added", "r.created_at DESC, r.id DESC")
+    } else {
+        ("", "r.citekey")
+    };
+    // Drive blank-query browsing from refs so ORDER BY can stop at LIMIT
+    // instead of sorting every row in the FTS docs table.
+    let sql = format!(
+        "SELECT r.id,r.citekey,r.title,r.authors,r.year,r.entry_type,r.created_at,\
+         EXISTS(SELECT 1 FROM associations aa WHERE aa.ref_id=r.id AND aa.project_id=?6),\
+         r.abstract<>'' FROM refs r {index} WHERE \
+         (?1 IS NULL OR r.year=?1) AND (?2 IS NULL OR r.entry_type=?2) AND \
+         (?3 IS NULL OR EXISTS(SELECT 1 FROM associations aa WHERE aa.ref_id=r.id AND aa.project_id=?3)) AND \
+         (?4='' OR EXISTS(SELECT 1 FROM docs d WHERE d.ref_id=r.id AND d.note_id IS NULL AND d.authors LIKE '%'||?4||'%')) AND \
+         (?5='' OR EXISTS(SELECT 1 FROM associations aa,json_each(aa.labels) j WHERE aa.ref_id=r.id AND (?6 IS NULL OR aa.project_id=?6) AND j.value=?5) \
+          OR EXISTS(SELECT 1 FROM notes nn,json_each(nn.labels) j WHERE nn.ref_id=r.id AND (?7 OR nn.project_id IS NULL OR nn.project_id=?6) AND j.value=?5)) \
+         ORDER BY {order} LIMIT ?8 OFFSET ?9"
+    );
+    let all = a["include_other_projects"] == true || optional(a, "project_id").is_none();
+    let mut statement = c.prepare_cached(&sql)?;
+    let rows = statement.query_map(
+        params![
+            optional(a, "year"),
+            optional(a, "entry_type"),
+            optional(a, "project_filter"),
+            normalize(text(a, "author")),
+            text(a, "label"),
+            optional(a, "project_id"),
+            all,
+            (limit + 1) as i64,
+            offset as i64
+        ],
+        |r| {
+            Ok(json!({
+                "id":r.get::<_,String>(0)?, "citekey":r.get::<_,String>(1)?,
+                "title":r.get::<_,String>(2)?, "authors":clip(&r.get::<_,String>(3)?,180),
+                "year":r.get::<_,String>(4)?, "entry_type":r.get::<_,String>(5)?,
+                "created_at":r.get::<_,String>(6)?, "in_project":r.get::<_,bool>(7)?,
+                "has_abstract":r.get::<_,bool>(8)?, "match_type":"browse",
+                "snippet":"", "note_matches":[]
+            }))
+        },
+    )?;
+    let mut results = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = results.len() > limit;
+    results.truncate(limit);
+    for h in &mut results {
+        let id = text(h, "id").to_string();
+        h["note_count"] = json!(c.query_row(
+            "SELECT count(*) FROM notes WHERE ref_id=?",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )?);
+        let pdf_path: Option<String> = c
+            .query_row(
+                "SELECT path FROM attachments WHERE ref_id=? AND file_type='pdf' ORDER BY rowid",
+                [&id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        h["has_pdf"] = json!(pdf_path.is_some_and(|p| Path::new(&p).is_file()));
+    }
+    Ok(json!({
+        "results":results,
+        "next_cursor":if more { json!(offset+limit) } else { Value::Null },
+        "corrections":[], "ranking":sort, "candidate_limited":false,
+        "elapsed_ms":start.elapsed().as_secs_f64()*1000.0
+    }))
+}
+
 pub fn search(lib: &Library, a: &Value) -> Result<Value> {
     search_cancellable(lib, a, None)
 }
@@ -121,6 +199,11 @@ pub fn search_cancellable(
     }
     let q = text(a, "query");
     ensure!(q.len() <= 2048, "Query is too long");
+    let sort = optional(a, "sort").unwrap_or("citekey");
+    ensure!(
+        matches!(sort, "citekey" | "added_desc"),
+        "Unknown sort order"
+    );
     let limit = a
         .get("limit")
         .and_then(Value::as_u64)
@@ -128,6 +211,9 @@ pub fn search_cancellable(
         .clamp(1, 25) as usize;
     let offset = a.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
     ensure!(offset <= 10000, "Cursor exceeds 10000; narrow the query");
+    if q.trim().is_empty() {
+        return browse(&c, a, sort, limit, offset, start);
+    }
     let cap = if q.trim().is_empty() {
         offset + limit + 1
     } else {

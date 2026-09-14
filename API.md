@@ -12,13 +12,15 @@ A response echoes `v` and `id`, with either `result` or `error.message`. Search 
 
 | Method | Parameters |
 |---|---|
-| `search` | `query`; optional `project_id`, `include_other_projects`, `limit` (1–25), `cursor`, `author`, `year` (string), `entry_type`, `project_filter`, `label` |
+| `search` | `query`; optional `project_id`, `include_other_projects`, `limit` (1–25), `cursor`, `author`, `year` (string), `entry_type`, `project_filter`, `label`, `sort` (`added_desc` or `citekey` for blank-query browsing) |
 | `get_reference` | `id` (UUID or citation key); optional `include_metadata` (default true), `include_notes`, `include_attachments`, `project_id`, `include_other_projects`, `note_limit`, `note_cursor`, `note_chars`, `include_history` |
 | `project_context` | `project_id`; optional `query`, `cursor`, `max_chars` (1,000–32,000; default 8,000) |
 | `list_projects` | optional `cwd`; returns all projects and longest-root resolution, or explicit ambiguity |
 | `status` | none |
 
 Search metadata is compact; a note match includes its project identity. The `ranking` field names the bounded scoring strategy. Broad candidate sets are identified by `candidate_limited`. Refine a query rather than assuming every matching record is present in that ranked selection.
+
+Blank-query browsing uses `citekey` order by default for API compatibility. `sort:"added_desc"` returns newest additions first using an index on the stored `created_at` timestamp, with ID as a stable tie-breaker. The popup selects this order by default and lets the user switch to citation-key order. Search terms still use relevance ranking.
 
 `get_reference` returns source field values and a normalized editable BibTeX-family representation. Notes are opt-in. `include_history` explicitly asks for prior revisions and is CLI-only. Full original import text is retained in the database. It always includes `pdf_path` (an existing local PDF, or `null`); full attachment detail stays opt-in via `include_attachments`. Search hits carry `has_pdf` and `has_abstract`.
 
@@ -39,6 +41,8 @@ Search metadata is compact; a note match includes its project identity. The `ran
 |---|---|
 | `import_bibtex` | `bibtex` (up to 64 MiB), optional `source`, `idempotency_key` |
 | `upsert_reference` | one-entry `bibtex`; for edits, `id` and `expected_revision`; optional `source`, `idempotency_key` |
+| `delete_reference_preview` | `id` (UUID or citation key); read-only. Returns exact ID/key, current revision, and counts of notes, attachment links, project links, and cached summaries. |
+| `delete_reference` | `id`, `expected_revision`, `confirm_citekey`, `expected_notes`, `expected_attachments`, `idempotency_key`. Removes the reviewed reference and its library children in one transaction; keeps PDF files and Git history. A changed revision or child count rejects the request. |
 | `create_project` | `name`; optional `description`, absolute `roots` array |
 | `update_project` | `id`, `name`, `description`, `roots`; replaces these project fields |
 | `associate` | `ref_id`, `project_id`, optional `labels`; replaces the association's labels |
@@ -53,6 +57,8 @@ Attachments are pointers, not file copies. Missing paths remain visible and can 
 ## Notes
 
 `add_note` requires `ref_id`, explicit `project_id` (UUID or null), `body` and `provenance`. Optional `labels` is an array of strings; `evidence` is a string. `update_note` requires the note `id` and `expected_revision` instead of a new reference ID. Updates preserve the previous snapshot in `note_revisions` and cannot silently overwrite a later revision.
+
+`delete_note_preview {id}` returns the note's reference, project, revision, excerpt, and image presence without writing. `delete_note {id, expected_revision, confirm_ref_id, idempotency_key}` removes only that note, its image clip, revision history, and search row in one transaction. A stale revision or mismatched reference rejects the request. Both are MCP tools.
 
 Supply all note fields being retained when updating. Note bodies are limited to 64 KiB. Use `idempotency_key` for retried writes; MCP requires that parameter. Adding a project-specific note also associates the reference with that project.
 
@@ -94,3 +100,13 @@ For large exports, redirect CLI output to a file rather than loading it into an 
 - `apply_metadata {id, expected_revision, fields, source, idempotency_key?}` fills only empty fields, keeps IDs/keys/notes/attachments, rejects stale revisions or DOI collisions, and updates the search index. Pass the reviewed candidate's additions and provenance. None of these operations is automatically invoked during search.
 
 `omabib lookup REFERENCE` invokes `lookup_metadata`; `omabib enrich --abstracts [--limit N] [--dry-run]` loops `missing_abstracts` → `lookup_abstract` → `apply_metadata` across the library, about one request per second, resumable since already-filled references are skipped on a rerun. These operations are available through the JSON CLI; existing compact MCP tool discovery is unchanged (now 12 tools: the original 10 plus `get_pdf` and `add_reference`).
+
+## Visual notes
+
+`add_visual_note` (JSON/CLI) atomically creates a note and stores a PNG. Parameters: `ref_id` (UUID), explicit `project_id` (or null), `body` (may be empty), `provenance`, `image_path` (absolute PNG path), `source_pdf` (an attached PDF), `page` (physical page, from 1), `rectangle` (`x`, `y`, `width`, `height` in compositor coordinates), optional `labels`, `evidence`, and `idempotency_key`. Limit: 8 MiB / 32 million pixels. Reusing the same request key returns the saved note even after the draft PNG is removed.
+
+Notes returned by `get_reference` include optional compact `image` metadata. `get_note_image {note_id, project_id}` checks note scope and returns metadata plus base64 PNG `data` via JSON. MCP returns metadata as text and PNG as an `image` block. `update_note` edits commentary without altering the image. SQLite backups contain image bytes; history exports include PNGs linked from note Markdown.
+
+`find_reference_by_pdf` (JSON/CLI, read-only) accepts `path`, resolves it canonically, and returns `ref_id` only for exactly one matching PDF attachment. Uses a partial attachment-path index; missing and ambiguous matches return errors.
+
+`get_alphaxiv_overview` accepts a reference `id` for a modern arXiv paper. It returns a cached, source-labelled Markdown overview when available, otherwise fetches the first-party AlphaXiv overview with a 12-second timeout and stores it under the reference. A 404 returns `available:false`; other retrieval errors leave the cache unchanged. The operation is also available as an MCP tool. Cached overviews are exported under `metadata/alphaxiv/` by history snapshots.

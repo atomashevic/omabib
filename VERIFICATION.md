@@ -1,5 +1,37 @@
 # Verification: Omabib 0.1.0
 
+## Inline AlphaXiv Markdown (2026-09-14)
+
+The AI Overview button now renders the cached Markdown report as read-only, selectable rich text in the reference detail pane. The report uses the pane's main scroll instead of a fixed-height nested text box. The installed popup was visually inspected with a 13,834-character cached AlphaXiv report: headings, emphasis, and lists rendered correctly. Plugin validation passed, and the previous hidden GRL selection and open overview state were restored after the shell reload. No library record changed.
+
+## Open Zathura's reference with Super+B (2026-09-14)
+
+Super+B now reads the focused Zathura window's D-Bus PDF path and resolves that exact canonical path through Omabib's attachment index. The popup opens the matched citation key in All references with its detail pane expanded. Outside Zathura, Super+B retains the normal toggle. A missing or ambiguous attachment gives a notification and opens ordinary search. The installed command and popup passed an isolated live test with two references attached to different PDFs named `paper.pdf`, a prior project filter, repeated invocation, and non-Zathura toggling. The shell was restarted to load the changed QML. No fixture entered the real library.
+
+## Project selector and AlphaXiv overview (2026-09-14)
+
+The top project selector now sends both `project_filter` and `project_id`. Switching scope preserves search text; an expanded reference outside the new project closes back to search, while a reference still included remains open. The detail pane's Assign button opens a separate target picker from All references or any project. The assignment and subsequent filtered search were verified against an isolated service and temporary library.
+
+The AlphaXiv AI Overview button fetches first-party overview Markdown on demand through a separate service connection, caches it by reference ID, and displays it in the detail pane with source attribution. Cached text is included in database backups and history snapshots. The isolated live test verified first fetch, cache hit, exported Markdown, and rendered popup display. It also inspected the rendered project selector and overview panel. No test references or summaries were written to the real library. Rust tests and Clippy passed; the installed plugin validated and the real service remained active.
+
+## Compact selection-first notes (2026-09-14)
+
+Super+N now validates Zathura, then selects a region before showing the editor. A point selection opens a text-only note; a rectangle opens a PNG draft. The popup is 440 logical pixels wide, 260 high for text or 410 for an image, with theme colors, an opaque background, title/page context, commentary and project selection. The rendered image popup was inspected after its opening animation.
+
+The full existing Rust suite passed, plus a new exact-path lookup test covering symlink canonicalization, same-basename rejection and ambiguous attachment rejection (38 tests total). Clippy with warnings denied and the release build passed. Live isolated-library checks passed for saved images, cancellation, real slurp Escape, filename recovery without remembered context, switching the popup back from a different service socket, and selection-first point/image drafts through the installed helper. Rectangle/point coordinates were supplied at the mouse-selection boundary; physical mouse dragging/clicking was not automated. No test notes were added to the real library.
+
+## Visual notes (2026-09-14)
+
+Super+N opens the verified Zathura reference and page context. The rectangle action hides the popup, runs slurp and grim, previews the PNG, and saves optional commentary with the image. Capture checks the same PDF, page, window and rectangle bounds. Picker stdin is closed explicitly so it cannot wait on the popup process before showing its overlay.
+
+`cargo test --locked --offline` passed all 37 tests; Clippy with warnings denied and the release build passed. Visual-note coverage includes project isolation, atomic rollback on invalid images, image-only notes, retained images after commentary edits, idempotent retries after staging-file removal, and SQLite backups.
+
+`OMABIB_TEST_VISUAL=1 python scripts/test_quick_note_ui.py` passed against an isolated temporary library: fixed reference/project/page targeting, real grim capture with supplied rectangle coordinates, image-only save, identical PNG bytes through the actual MCP image response and history export, draft-file cleanup, real slurp Escape cancellation with editor restoration, and rejection of another PDF with the same basename. Mouse dragging itself was not automated. The final quick-note invocation opened the editor in 360 ms including CLI startup and polling. The real library was restored without adding test notes. Installed plugin validation and source/install comparisons passed.
+
+## Date-added browsing (2026-09-14)
+
+Blank-query browsing reads `refs` in indexed `created_at DESC, id DESC` order when the popup's default newest-added sort is selected. Citation-key order remains available. On a consistent copy of the 102,010-reference synthetic fixture, 25 repeated 25-item requests had a newest-added backend p95 of 1.05 ms and socket round-trip p95 of 4.52 ms; citation-key browsing measured 1.00 ms and 4.41 ms, respectively. `EXPLAIN QUERY PLAN` showed `SCAN refs USING INDEX refs_added`. Copying the fixture and initial index creation were outside these request timings. Library tests cover ordering, pagination, filters, relevance ranking for nonblank queries, and adding the index when opening an older database.
+
 Measured on 2026-09-13 on this Omarchy desktop: AMD Ryzen 5 5500U, 12 logical CPUs, Quickshell 0.3.1, Rust 1.98.1, 1920×1080 display at approximately 60 Hz and 1.25 scale. The desktop remained in normal use during testing.
 
 ## Performance
@@ -99,3 +131,21 @@ An earlier version of `omabib enrich` listed references missing an abstract via 
 `omarchy plugin validate plugin` passes. `qmllint` was tried against the modified `plugin/App.qml`; its output (a silent non-zero exit) was identical before and after this round of changes, which also reproduces on the pre-existing unmodified file, so it reflects a limitation of running `qmllint` on a Quickshell-dependent file outside a Quickshell environment, not a defect introduced here. A brace/paren/bracket balance check and manual review of the diff found no imbalance or obvious error. The updated UI (search-field magic add, quick-add preview showing abstract/PDF status per item and calling `add_reference` for a single recognized identifier, the sync status chip, the repository setup dialog's live prerequisite checks and two setup paths, and the Get PDF/Copy PDF path actions) has **not** been exercised with live keyboard input against the running desktop this round — doing so would take over the user's keyboard via `wtype`, which needs their go-ahead first (as `scripts/test_ui.py` itself already notes, "should run while no one else is typing").
 
 The production library was not modified during any of this round's testing: reference count checked at 1,584 both before this work began and after it concluded, and no `updated_at` timestamp from today was found.
+
+## Reference and individual-note deletion
+
+The reference detail view now offers **Delete item…** (also Ctrl+K action 21), and each note in that view offers **Delete…** beside Edit. Both require a preview and confirmation. Reference deletion removes its notes, image clips, attachment and project links, cached overview, and search rows in one transaction. Individual-note deletion removes only that note, its image clip, revisions, and search row. PDF files remain on disk. MCP exposes read-only previews and the two destructive operations, with revision and identity checks plus idempotent retries.
+
+`cargo test --locked` passed (14 unit, 26 library, and 2 visual tests), as did `cargo clippy --locked --all-targets -- -D warnings` and `git diff --check`. The library tests verify stale-preview rejection, idempotent retries, child-row and FTS cleanup, other-reference and other-note preservation, and PDF-file preservation. `scripts/test_transport.py` passed against the release executable, including actual stdio MCP discovery and note/reference deletion through `tools/call` in an isolated library.
+
+After installation and shell restart, `scripts/test_delete_ui.py` passed against an isolated service. It opened both confirmation dialogs in the running Omabib popup, cancelled each with Escape, deleted one of two notes with Ctrl+Enter, then deleted the reference with Ctrl+Enter. It verified search cleanup and the retained PDF file. Both dialogs were visually inspected in the installed theme. The normal window was restored to its prior hidden search state. The installed plugin validates and the user service is active. No production reference or note was deleted during testing.
+
+## Codex entry chat
+
+The detail-view Codex button and action 22 launch a separate terminal with a private context snapshot, all paginated notes with project labels, exported image clips, PDF paths, and a per-session Omabib MCP connection to the originating library. `scripts/test_codex.py` passed against an isolated service with 28 notes, a visual clip, and a PDF filename containing spaces and shell metacharacters. It verifies exact image bytes, private file permissions, the actual Codex MCP configuration, and the explicit `gpt-5.6-sol` model with medium reasoning.
+
+The installed popup launched and focused a new Ghostty window. After the normal first-use directory trust prompt, Codex read the context file, successfully called Omabib `get_reference` for the temporary fixture, and acknowledged its note before waiting for input. This live chat used the prior inherited model; the subsequent Sol/medium change was verified in the launcher test and installed without running another model response. The temporary chat and service were closed, and the normal hidden library view was restored. Production status remained 1,592 references and 5 notes.
+
+## ChatGPT Desktop entry handoff
+
+The installed ChatGPT button opens Desktop's Codex mode with a prefilled, unsent Omabib prompt. Its stable Omabib project has a local Omabib skill, an MCP configuration for the originating service socket, and a private snapshot per entry. `scripts/test_codex.py` verifies the generated mode, context, skill, MCP socket, model and effort. In the live DYNAMITE handoff, the draft displayed **GPT-5.6 Sol Medium**. Desktop's Work mode retained its previously selected Astra model despite the workspace config; only Codex mode is supported for the Omabib Desktop button.

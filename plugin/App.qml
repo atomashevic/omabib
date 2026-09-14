@@ -16,11 +16,38 @@ Item {
     property bool expanded: false
     property var projects: []
     property var hits: []
+    property string browseSort: "added_desc"
     property var selected: null
+    property var deletePreview: null
+    property bool deleteBusy: false
+    property int deleteRequest: -1
+    property var noteDeletePreview: null
+    property bool noteDeleteBusy: false
+    property int noteDeleteRequest: -1
+    property string pendingOpenRefId: ""
+    property bool codexBusy: false
+    property var readingContext: null
+    property bool quickNoteMode: false
+    property var quickNoteContext: null
+    property string noteTargetId: ""
+    property string noteTargetTitle: ""
+    property int noteSaveRequest: -1
+    property bool noteSaving: false
+    property string clipPath: ""
+    property var clipRectangle: null
+    property bool captureBusy: false
+    property var pendingQuickNote: null
     property string projectId: ""
     property string serviceSocket: Quickshell.env("OMABIB_SOCKET") || ((Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/omabib/socket")
     readonly property string pdfShortcut: Quickshell.env("OMABIB_PDF_SHORTCUT") || "Ctrl+O"
     property string projectName: "All references"
+    property string assignTargetId: ""
+    property string overviewRefId: ""
+    property string overviewBody: ""
+    property string overviewUrl: ""
+    property bool overviewVisible: false
+    property bool overviewBusy: false
+    property string overviewRequestId: ""
     property bool allNotes: false
     property string error: ""
     property string notice: ""
@@ -92,7 +119,11 @@ Item {
     function open(payloadJson) {
         var payload = {}
         try { payload = JSON.parse(payloadJson || "{}") } catch (e) {}
-        if(payload.socket_path && payload.socket_path!==serviceSocket){socket.connected=false;serviceSocket=payload.socket_path;Qt.callLater(function(){socket.connected=true})}
+        if(payload.action==="quick_note") { openQuickNote(payload); return }
+        if(editorDialog.opened) { editor.forceActiveFocus(); return }
+        if(payload.socket_path && payload.socket_path!==serviceSocket){readingContext=null;overviewRefId="";overviewBody="";overviewUrl="";overviewVisible=false;socket.connected=false;serviceSocket=payload.socket_path;Qt.callLater(function(){socket.connected=true})}
+        pendingOpenRefId=payload.ref_id||""
+        if(pendingOpenRefId){authorFilter.text="";yearFilter.text="";typeFilter.text="";labelFilter.text=""}
         if(payload.query!==undefined) query.text=payload.query
         if (payload.project_id !== undefined) projectId = payload.project_id || ""
         openedAt = Date.now()
@@ -102,21 +133,165 @@ Item {
         else socket.connected = true
         Qt.callLater(function() { if(payload.action==="add"){commandDialog.close();bibFileDialog.close();metadataDialog.close();previewDialog.close();repoDialog.close();projectDialog.close();if(editorDialog.opened)editor.forceActiveFocus();else edit("quick");}else{query.forceActiveFocus(); query.selectAll()} })
     }
-    function close() { opened = false }
+    function close() {
+        opened = false
+        if(quickNoteMode) { quickNoteMode=false; editorDialog.close() }
+    }
+    function readingTarget(hit) {
+        return hit ? {ref_id:hit.id,project_id:projectId,socket_path:serviceSocket} : null
+    }
+    function discardClip(path) {
+        if(path)Quickshell.execDetached(["omabib-capture-note","--discard",path])
+    }
+    function captureClip() {
+        if(!quickNoteMode || captureBusy || noteSaving)return
+        error=""
+        captureBusy=true
+        clipStart.restart()
+    }
+    Timer {id:clipStart;interval:80;onTriggered:{clipCapture.command=["omabib-capture-note",JSON.stringify(root.quickNoteContext)];clipCapture.running=true}}
+    Process {
+        id:clipCapture
+        stdout:SplitParser {
+        onRead: data => {
+            var result={}
+            try{result=JSON.parse(data)}catch(e){result.error="Capture did not return an image"}
+            root.captureBusy=false
+            if(!root.opened || !root.quickNoteMode){root.discardClip(result.path);return}
+            if(result.path){root.discardClip(root.clipPath);root.clipPath=result.path;root.clipRectangle=result.rectangle}
+            else if(result.error)root.error=result.error
+            Qt.callLater(function(){editor.forceActiveFocus()})
+        }
+        }
+    }
+    function openQuickNote(payload) {
+        if(editorDialog.opened) { editor.forceActiveFocus(); return }
+        if(!payload.ref_id || !payload.socket_path || !Number.isInteger(payload.page) || payload.page<1) return
+        if(payload.socket_path!==serviceSocket || !socket.connected) {
+            pendingQuickNote=payload
+            overviewRefId="";overviewBody="";overviewUrl="";overviewVisible=false
+            socket.connected=false
+            serviceSocket=payload.socket_path
+            Qt.callLater(function(){socket.connected=true})
+            return
+        }
+        readingContext={ref_id:payload.ref_id,project_id:payload.project_id||"",socket_path:payload.socket_path}
+        quickNoteContext=payload
+        quickNoteMode=true
+        opened=true
+        error=""
+        rpc("list_projects",{},function(r){
+            if(!opened || !quickNoteMode || quickNoteContext!==payload)return
+            projects=r.projects
+            rpc("get_reference",{id:payload.ref_id,include_attachments:true},function(ref){
+                if(!opened || !quickNoteMode || quickNoteContext!==payload)return
+                selected=ref
+                edit("note",null)
+                editorDialog.title="Note  ·  p. "+payload.page
+                if(payload.clip && payload.clip.path){clipPath=payload.clip.path;clipRectangle=payload.clip.rectangle}
+                evidence.text="PDF p. "+payload.page+" · "+payload.pdf_path
+                noteScope.currentIndex=0
+                for(var i=0;i<projects.length;i++)if(projects[i].id===payload.project_id)noteScope.currentIndex=i+1
+            })
+        })
+    }
     function fileUrl(path) { return "file://" + path.split("/").map(encodeURIComponent).join("/") }
+    function openExternal(url, context) {
+        readingContext=context || readingTarget(selected || currentHit())
+        // The browser launcher explicitly focuses an existing browser window.
+        // Drop our exclusive layer focus before starting either application.
+        dismiss()
+        if(/^https?:\/\//i.test(url)) {
+            Quickshell.execDetached(["omarchy-launch-browser", url])
+        } else {
+            Qt.callLater(function() {
+                if(!Qt.openUrlExternally(url)) {
+                    error="Could not open "+url
+                    if(shell && shell.summon) shell.summon("omabib", "{}")
+                }
+            })
+        }
+    }
     function openPdf() {
         var hit=currentHit();if(!hit)return
-        rpc("open_target",{id:hit.id},function(r){if(Qt.openUrlExternally(r.url))dismiss();else error="Could not open "+r.url})
+        var context=readingTarget(hit)
+        rpc("open_target",{id:hit.id},function(r){openExternal(r.url,context)})
+    }
+    function openLink() {
+        var hit=currentHit();if(!hit)return
+        var context=readingTarget(hit)
+        rpc("open_target",{id:hit.id,prefer:"link"},function(r){openExternal(r.url,context)})
+    }
+    // Reads the arXiv ID off a fetched reference's own fields (its DOI, if
+    // inferred from arXiv, or a url/eprint field), for the AlphaXiv link —
+    // purely client-side since it's just a URL, no RPC needed.
+    function arxivIdOf(ref) {
+        if(!ref || !ref.fields)return ""
+        var doi=ref.fields.doi||""
+        var m=/^10\.48550\/arxiv\.(.+)$/i.exec(doi)
+        if(m)return m[1]
+        var s=(ref.fields.url||"")+" "+(ref.fields.eprint||"")
+        m=/arxiv\.org\/(?:abs|pdf)\/([^\s?#]+)/i.exec(s)
+        if(m)return m[1].replace(/\.pdf$/i,"")
+        if(/^\d{4}\.\d{4,5}(v\d+)?$/.test(ref.fields.eprint||""))return ref.fields.eprint
+        return ""
+    }
+    function openCodex(desktop) {
+        var hit=currentHit()
+        if(!hit || codexBusy)return
+        codexBusy=true;error=""
+        codexProcess.command=[desktop?"omabib-chatgpt":"omabib-codex",serviceSocket,hit.id,projectId||""]
+        codexProcess.running=true
+    }
+    Process {
+        id:codexProcess
+        stdout:SplitParser {onRead:data=>{
+            try {
+                var r=JSON.parse(data)
+                if(r.error)root.error=r.error
+                else if(r.opened)root.dismiss()
+            } catch(e){root.error="Could not launch chat: "+e}
+        }}
+        onExited:(exitCode,exitStatus)=>{root.codexBusy=false;if(exitCode!==0&&!root.error)root.error="Could not launch chat. Check that the selected application is installed."}
+    }
+    function openAlphaXiv() {
+        var id=root.arxivIdOf(root.selected)
+        if(!id){notice="Not recognized as an arXiv paper";noticeTimer.restart();return}
+        openExternal("https://www.alphaxiv.org/abs/"+id)
+    }
+    function showAlphaXivOverview() {
+        if(!selected || overviewBusy)return
+        if(overviewRefId===selected.id && overviewBody){overviewVisible=!overviewVisible;return}
+        overviewRequestId=selected.id
+        overviewBusy=true
+        overviewProcess.command=["omabib-overview",serviceSocket,selected.id]
+        overviewProcess.running=true
+    }
+    Process {
+        id:overviewProcess
+        stdout:SplitParser {onRead:data=>{
+            var r={}
+            try{r=JSON.parse(data)}catch(e){r.error="Invalid AlphaXiv response"}
+            root.overviewBusy=false
+            if(r.error){root.notice="AlphaXiv: "+r.error;noticeTimer.restart();return}
+            if(!r.available){root.notice="No AlphaXiv AI Overview available";noticeTimer.restart();return}
+            if(!root.selected || root.selected.id!==root.overviewRequestId)return
+            root.overviewRefId=root.overviewRequestId
+            root.overviewBody=r.body
+            root.overviewUrl=r.source_url
+            root.overviewVisible=true
+        }}
+        onExited:(code,status)=>{if(root.overviewBusy){root.overviewBusy=false;root.notice="AlphaXiv overview could not be loaded";noticeTimer.restart()}}
     }
     property bool pdfBusy: false
     property int pdfRequest: -1
     function getPdf() {
         var hit=currentHit();if(!hit||pdfBusy)return
+        var context=readingTarget(hit)
         pdfBusy=true
         pdfRequest=rpc("get_pdf",{ref_id:hit.id},function(r){
             pdfBusy=false
-            if(Qt.openUrlExternally(root.fileUrl(r.path))){notice="PDF ready ("+r.source+")";noticeTimer.restart();if(expanded)showDetail()}
-            else error="Could not open "+r.path
+            openExternal(root.fileUrl(r.path),context)
         })
         if(pdfRequest<0)pdfBusy=false
     }
@@ -188,7 +363,7 @@ Item {
         metadataRequest=rpc("apply_metadata",{id:metadataLookup.id,expected_revision:metadataLookup.expected_revision,fields:metadataChoice.additions,source:metadataChoice.source},function(r){metadataDialog.close();refresh();notice="Filled "+r.filled.length+" metadata fields";noticeTimer.restart()})
     }
     function dismiss() {
-        opened = false
+        close()
         if (shell && shell.hide) shell.hide("omabib")
     }
     function rpc(method, params, callback) {
@@ -230,6 +405,12 @@ Item {
         projectName = "All references"
         for (var i=0; i<projects.length; ++i) if (projects[i].id===projectId) projectName = projects[i].name
     }
+    function toggleBrowseSort() {
+        if(query.text.trim()!=="")return
+        browseSort = browseSort==="added_desc" ? "citekey" : "added_desc"
+        search(false)
+        query.forceActiveFocus()
+    }
     function search(append) {
         debounce.stop()
         searchPending = true
@@ -237,7 +418,8 @@ Item {
         var serial = ++searchSequence
         var priorId = currentHit() ? currentHit().id : ""
         var args = {query:query.text,limit:25,include_other_projects:allNotes}
-        if (projectId) args.project_id = projectId
+        if(query.text.trim()==="")args.sort=browseSort
+        if (projectId) { args.project_id = projectId; args.project_filter = projectId }
         if (append && nextCursor !== null) args.cursor = nextCursor
         if (authorFilter.text) args.author = authorFilter.text
         if (yearFilter.text) args.year = yearFilter.text
@@ -248,8 +430,14 @@ Item {
             searchPending = false
             hits = append ? hits.concat(r.results) : r.results
             nextCursor = r.next_cursor
-            if (!append) { var keep=hits.findIndex(function(h){return h.id===priorId});results.currentIndex=keep>=0?keep:(hits.length?0:-1) }
-            error = ""
+            if (!append) {
+                var requested=pendingOpenRefId
+                var keep=hits.findIndex(function(h){return h.id===(requested||priorId)})
+                results.currentIndex=keep>=0?keep:(hits.length?0:-1)
+                if(requested){pendingOpenRefId="";selected=null;expanded=keep>=0;overviewVisible=false}
+                else if (expanded && keep<0) { selected=null; expanded=false; overviewVisible=false }
+            }
+            error = requested && keep<0 ? "The PDF reference could not be shown in this search." : ""
             responseMs = Date.now() - searchedAt
             paintStartedAt = lastInputAt || searchedAt
             paintPending = true
@@ -257,7 +445,7 @@ Item {
             if (expanded && hits.length) showDetail()
         })
     }
-    function currentHit() { return results.currentIndex >= 0 && results.currentIndex < hits.length ? hits[results.currentIndex] : null }
+    function currentHit() { return hits.length ? hits[results.currentIndex >= 0 && results.currentIndex < hits.length ? results.currentIndex : 0] : null }
     function navigate(delta) {
         if (!hits.length) return
         results.currentIndex = Math.max(0, Math.min(hits.length-1, results.currentIndex+delta))
@@ -269,8 +457,10 @@ Item {
         if (!hit) return
         expanded = true
         var requestedId = hit.id
+        if(!selected || selected.id!==requestedId)overviewVisible=false
+        var requestedProjectId = projectId
         rpc("get_reference", {id:hit.id,project_id:projectId||null,include_notes:true,include_attachments:true,include_other_projects:otherNotes.checked,note_chars:65536}, function(r) {
-            if (currentHit() && currentHit().id===requestedId) selected = r
+            if (projectId===requestedProjectId && currentHit() && currentHit().id===requestedId) selected = r
         })
     }
     function copy(text) {
@@ -304,6 +494,8 @@ Item {
         editToken = "ui-"+Date.now()+"-"+Math.random().toString(36).slice(2)
         editKind = kind
         editingNote = n || null
+        discardClip(clipPath);clipPath="";clipRectangle=null
+        if(kind==="note") { noteTargetId=selected?selected.id:""; noteTargetTitle=selected?selected.title:"" }
         editorDialog.title = kind==="note" ? (n ? "Edit contextual note" : "New contextual note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add: DOI, arXiv ID, URL or BibTeX" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
         editor.text = kind==="note" ? (n ? n.body : "") : kind==="metadata" && selected ? selected.bibtex : kind==="import" ? "@article{key,\n  title = {},\n  author = {},\n  year = {}\n}" : ""
         labels.text = n ? (n.labels || []).join(", ") : ""
@@ -316,12 +508,14 @@ Item {
     }
     function saveEditor() {
         var body=editor.text
-        if (!body.trim()) return
+        if ((!body.trim() && !clipPath && !(editingNote && editingNote.image)) || noteSaving || captureBusy) return
+        var wasQuick=quickNoteMode
         var method, args
         if (editKind==="note") {
-            if (!selected) return
-            method = editingNote ? "update_note" : "add_note"
-            args={ref_id:selected.id,project_id:noteScope.currentIndex===0 ? null : projects[noteScope.currentIndex-1].id,body:body,provenance:"human",labels:labels.text.split(",").map(function(s){return s.trim()}).filter(function(s){return s.length>0}),evidence:evidence.text}
+            if (!noteTargetId) return
+            method = editingNote ? "update_note" : clipPath ? "add_visual_note" : "add_note"
+            args={ref_id:noteTargetId,project_id:noteScope.currentIndex===0 ? null : projects[noteScope.currentIndex-1].id,body:body,provenance:"human",labels:labels.text.split(",").map(function(s){return s.trim()}).filter(function(s){return s.length>0}),evidence:evidence.text}
+            if(clipPath){args.image_path=clipPath;args.source_pdf=quickNoteContext.pdf_path;args.page=quickNoteContext.page;args.rectangle=clipRectangle}
             if(editingNote){args.id=editingNote.id;args.expected_revision=editingNote.revision}
         } else if(editKind==="metadata") {
             method="upsert_reference";args={id:selected.id,expected_revision:selected.revision,bibtex:body}
@@ -334,7 +528,10 @@ Item {
         } else if(editKind==="project") {method="create_project";args={name:body.trim()}}
         else {if(!selected)return;method="attach";args={ref_id:selected.id,path:body.trim(),file_type:"pdf"}}
         args.idempotency_key=editToken
-        rpc(method,args,function(r){editorDialog.close();notice="Saved";noticeTimer.restart();refresh();if(expanded)showDetail();showImportReport(r)})
+        noteSaving=editKind==="note"
+        var submittedToken=editToken
+        noteSaveRequest=rpc(method,args,function(r){if(editToken!==submittedToken)return;editorDialog.close();if(wasQuick)return;notice="Saved";noticeTimer.restart();refresh();if(expanded)showDetail();showImportReport(r)})
+        if(noteSaveRequest<0)noteSaving=false
     }
     function showImportReport(r) {
         if(r.duplicates_merged || (r.repairs||[]).length) {
@@ -398,7 +595,7 @@ Item {
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){notice="PDF attached";noticeTimer.restart();showDetail()})
     }
-    readonly property int actionCount: 20
+    readonly property int actionCount: 23
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
@@ -409,27 +606,39 @@ Item {
     function runAction(number) {
         commandDialog.close()
         switch(number) {
-        case 1:copyKey();break
-        case 2:copyFormat("latex");break
-        case 3:copyFormat("pandoc");break
-        case 4:copyFormat("bibtex");break
-        case 5:edit("import");break
-        case 6:pickerKind="bib";bibFileDialog.open();break
-        case 7:edit("doi");break
-        case 8:detailThenEdit("note");break
-        case 9:choosePdf();break
-        case 10:projectDialog.open();break
-        case 11:edit("project");break
-        case 12:if(projectId)rpc("export_bibtex",{project_id:projectId},function(r){copy(r.bibtex)});else{notice="Choose a project first";noticeTimer.restart()}break
-        case 13:if(projectId)rpc("export_notes",{project_id:projectId},function(r){copy(r.markdown)});else{notice="Choose a project first";noticeTimer.restart()}break
-        case 14:openPdf();break
-        case 15:syncHistory();break
-        case 16:openRepoSettings();break
-        case 17:lookupMetadata();break
-        case 18:edit("quick");break
-        case 19:getPdf();break
-        case 20:copyPdfPath();break
+        case 1:edit("quick");break
+        case 2:copyKey();break
+        case 3:copyFormat("latex");break
+        case 4:copyFormat("pandoc");break
+        case 5:copyFormat("bibtex");break
+        case 6:edit("import");break
+        case 7:pickerKind="bib";bibFileDialog.open();break
+        case 8:edit("doi");break
+        case 9:detailThenEdit("note");break
+        case 10:choosePdf();break
+        case 11:openLink();break
+        case 12:getPdf();break
+        case 13:copyPdfPath();break
+        case 14:lookupMetadata();break
+        case 15:projectDialog.open();break
+        case 16:edit("project");break
+        case 17:if(projectId)rpc("export_bibtex",{project_id:projectId},function(r){copy(r.bibtex)});else{notice="Choose a project first";noticeTimer.restart()}break
+        case 18:if(projectId)rpc("export_notes",{project_id:projectId},function(r){copy(r.markdown)});else{notice="Choose a project first";noticeTimer.restart()}break
+        case 19:syncHistory();break
+        case 20:openRepoSettings();break
+        case 21:requestDelete();break
+        case 22:openCodex();break
+        case 23:openCodex(true);break
         }
+    }
+    // After adding, replace whatever search/display was up with the newly
+    // added reference itself, expanded — it's what the user just asked for.
+    function focusOnReference(citekey) {
+        if(!citekey)return
+        expanded=true
+        authorFilter.text="";yearFilter.text="";typeFilter.text="";labelFilter.text=""
+        query.text=citekey
+        query.forceActiveFocus();query.selectAll()
     }
     function importPreview() {
         if(!pendingImport)return
@@ -437,13 +646,19 @@ Item {
         if(items.length===1 && items[0].recognized!=="bibtex") {
             var item=items[0]
             rpc("add_reference",{input:item.input,download_pdf:true,project_id:projectId||null,idempotency_key:editToken+"-add"},function(r){
-                previewDialog.close();refresh();if(expanded)showDetail()
+                previewDialog.close();refresh()
+                root.focusOnReference(r.citekey)
                 notice="Added "+r.citekey+(r.merged?" (filled an existing reference)":"")+(r.attachment&&r.attachment.exists?" · PDF attached":"")+(r.abstract_source?" · abstract via "+r.abstract_source:"")
                 noticeTimer.restart()
             })
             return
         }
-        rpc("import_bibtex",pendingImport,function(r){previewDialog.close();refresh();notice="Imported";noticeTimer.restart();showImportReport(r)})
+        rpc("import_bibtex",pendingImport,function(r){
+            previewDialog.close();refresh()
+            var first=(r.items||[])[0]
+            if(first)root.focusOnReference(first.citekey)
+            notice="Imported";noticeTimer.restart();showImportReport(r)
+        })
     }
     function importBibFile(url) {
         if (!url.startsWith("file://")) {error="Choose a local BibTeX file";return}
@@ -463,8 +678,9 @@ Item {
         onLoadFailed:error=>{root.importingFile=false;root.error="Could not read BibTeX file: "+root.importPath}
     }
     function chooseProject(index) {
+        if(index<0 || index>projects.length)return
         projectId = index===0 ? "" : projects[index-1].id
-        updateProjectName(); projectDialog.close(); search(false)
+        updateProjectName(); search(false)
         Qt.callLater(function(){query.forceActiveFocus()})
     }
     function detailThenEdit(kind) {
@@ -472,13 +688,78 @@ Item {
         rpc("get_reference",{id:hit.id,project_id:projectId||null,include_notes:true,include_attachments:true},function(r){selected=r;expanded=true;edit(kind,null)})
     }
     function assign() {
-        if(!selected || !projectId){notice="Choose a project first";noticeTimer.restart();return}
-        rpc("associate",{ref_id:selected.id,project_id:projectId,labels:[]},function(){notice="Assigned to "+projectName;noticeTimer.restart();search(false)})
+        var hit=currentHit()
+        if(!hit || !projects.length)return
+        assignTargetId=hit.id
+        projectDialog.open()
+    }
+    function requestDelete() {
+        var hit=currentHit()
+        if(!hit || deleteBusy)return
+        var id=hit.id
+        error=""
+        rpc("delete_reference_preview",{id:id},function(r){
+            if(!currentHit() || currentHit().id!==id)return
+            deletePreview=r
+            deleteDialog.open()
+        })
+    }
+    function confirmDelete() {
+        if(!deletePreview || deleteBusy)return
+        var target=deletePreview
+        deleteBusy=true
+        error=""
+        deleteRequest=rpc("delete_reference",{id:target.id,expected_revision:target.revision,confirm_citekey:target.citekey,expected_notes:target.note_count,expected_attachments:target.attachment_count,idempotency_key:"ui-delete-"+Date.now()+"-"+Math.random().toString(36).slice(2)},function(r){
+            deleteBusy=false;deleteRequest=-1;deleteDialog.close()
+            if(readingContext && readingContext.ref_id===target.id)readingContext=null
+            if(overviewRefId===target.id){overviewRefId="";overviewBody="";overviewUrl="";overviewVisible=false}
+            selected=null;expanded=false
+            if(query.text.trim()===target.citekey)query.text=""
+            notice="Deleted "+r.citekey+" · PDF files kept";noticeTimer.restart()
+            refresh();query.forceActiveFocus()
+        })
+        if(deleteRequest<0)deleteBusy=false
+    }
+    function requestNoteDelete(id) {
+        if(!selected || noteDeleteBusy)return
+        var refId=selected.id
+        error=""
+        rpc("delete_note_preview",{id:id},function(r){
+            if(!selected || selected.id!==refId || r.ref_id!==refId)return
+            noteDeletePreview=r
+            noteDeleteDialog.open()
+        })
+    }
+    function confirmNoteDelete() {
+        if(!noteDeletePreview || noteDeleteBusy)return
+        var target=noteDeletePreview
+        noteDeleteBusy=true
+        error=""
+        noteDeleteRequest=rpc("delete_note",{id:target.id,expected_revision:target.revision,confirm_ref_id:target.ref_id,idempotency_key:"ui-delete-note-"+Date.now()+"-"+Math.random().toString(36).slice(2)},function(){
+            noteDeleteBusy=false;noteDeleteRequest=-1;noteDeleteDialog.close()
+            notice="Note deleted";noticeTimer.restart()
+            refresh();showDetail()
+        })
+        if(noteDeleteRequest<0)noteDeleteBusy=false
+    }
+    function assignToProject(index) {
+        if(index<0 || index>=projects.length || !assignTargetId)return
+        var refId=assignTargetId, target=projects[index]
+        assignTargetId=""
+        projectDialog.close()
+        rpc("associate",{ref_id:refId,project_id:target.id,labels:[],idempotency_key:"ui-associate-"+Date.now()+"-"+Math.random().toString(36).slice(2)},function(){notice="Assigned to "+target.name;noticeTimer.restart();search(false)})
     }
     IpcHandler {
         target: "omabib"
         function setQuery(text: string): void { query.text = text }
-        function state(): string { return JSON.stringify({opened:root.opened,expanded:root.expanded,query:query.text,results:root.hits.map(function(h){return h.citekey}),selected:root.selected?root.selected.id:null,error:root.error,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function selectProject(index: int): void { root.chooseProject(index) }
+        function openAssign(): void { root.assign() }
+        function openCodex(): void { root.openCodex() }
+        function openChatGPT(): void { root.openCodex(true) }
+        function openDelete(): void { root.requestDelete() }
+        function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
+        function loadOverview(): void { root.showAlphaXivOverview() }
+        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:projectSelect.currentIndex,assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,overview_visible:root.overviewVisible,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
@@ -488,8 +769,8 @@ Item {
         path: root.serviceSocket
         connected: true
         onConnectedChanged: {
-            if(connected){root.error="";if(root.opened)root.refresh()}
-            else {root.pending=({});root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
+            if(connected){root.error="";if(root.pendingQuickNote){var p=root.pendingQuickNote;root.pendingQuickNote=null;root.openQuickNote(p)}else if(root.opened)root.refresh()}
+            else {root.pending=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
         }
         parser: SplitParser {
             onRead: data => {
@@ -500,6 +781,9 @@ Item {
                     if(message.id===root.syncRequest)root.syncBusy=false
                     if(message.id===root.metadataRequest)root.metadataBusy=false
                     if(message.id===root.pdfRequest)root.pdfBusy=false
+                    if(message.id===root.noteSaveRequest)root.noteSaving=false
+                    if(message.id===root.deleteRequest){root.deleteBusy=false;root.deleteRequest=-1}
+                    if(message.id===root.noteDeleteRequest){root.noteDeleteBusy=false;root.noteDeleteRequest=-1}
                     if(message.error){if(message.id===root.metadataRequest)root.metadataInfo=message.error.message;if(message.id===root.pendingSearch)root.searchPending=false;root.error=message.error.message;return}
                     if(callback)callback(message.result)
                 } catch(e){root.error="Could not read the library response: "+e}
@@ -515,7 +799,7 @@ Item {
     }
     PanelWindow {
         id: window
-        visible: root.opened
+        visible: root.opened && !root.captureBusy
         color: "transparent"
         anchors { top: true; bottom: true; left: true; right: true }
         exclusionMode: ExclusionMode.Ignore
@@ -523,8 +807,10 @@ Item {
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
         MouseArea { anchors.fill:parent;onClicked:root.dismiss() }
+        Label {anchors.centerIn:parent;visible:root.quickNoteMode&&!editorDialog.opened;text:root.error||"Opening note…";color:root.fg;wrapMode:Text.Wrap;width:Math.min(600,parent.width-60)}
         Rectangle {
             id: card
+            visible: !root.quickNoteMode
             anchors.centerIn: parent
             width: Math.min(parent.width-48,root.expanded?1100:760)
             height: Math.min(parent.height-64,root.expanded?800:550)
@@ -539,7 +825,19 @@ Item {
                     Layout.fillWidth:true
                     Label { text:"omabib";color:root.fg;font.family:root.fontFamily;font.pixelSize:22;font.bold:true }
                     Label { text:root.referenceCount.toLocaleString()+" references";color:root.fg;opacity:.755;font.pixelSize:12;Layout.fillWidth:true }
-                    BibButton { text:root.projectName+"  ▾";onClicked:projectDialog.open() }
+                    ComboBox {
+                        id:projectSelect
+                        objectName:"projectSelect"
+                        Layout.preferredWidth:Math.min(190,Math.max(140,implicitWidth))
+                        model:["All references"].concat(root.projects.map(function(p){return p.name}))
+                        currentIndex:{for(var i=0;i<root.projects.length;i++)if(root.projects[i].id===root.projectId)return i+1;return 0}
+                        onActivated:index=>root.chooseProject(index)
+                        palette.window:root.bg
+                        palette.windowText:root.fg
+                        palette.button:root.bg
+                        palette.buttonText:root.fg
+                        background:Rectangle{color:root.bg;border.color:root.borderColor;border.width:1;radius:Style.cornerRadius}
+                    }
                     BibButton {text:root.syncChipText();enabled:!root.syncBusy;onClicked:root.syncHistory()}
                     BibButton {text:"Repo";onClicked:root.openRepoSettings()}
                     BibButton { text:"⌘  Actions";onClicked:commandDialog.open() }
@@ -548,8 +846,15 @@ Item {
                     id:query;objectName:"searchField";Layout.fillWidth:true;placeholderText:"Search title, author, abstract, or notes…";font.pixelSize:20;font.family:root.fontFamily;color:root.fg;selectByMouse:true
                     background:Rectangle{color:"transparent";radius:5;border.width:query.activeFocus?2:1;border.color:root.borderColor}
                     onTextChanged:{++root.searchSequence;root.searchPending=true;root.lastInputAt=Date.now();debounce.restart()}
+                    Keys.onShortcutOverride:event=>{
+                        if((event.modifiers & Qt.ControlModifier) && (event.key===Qt.Key_U || event.key===Qt.Key_O))event.accepted=true
+                        else if(event.key===Qt.Key_Q && event.modifiers===Qt.NoModifier && query.text.trim()==="")event.accepted=true
+                    }
                     Keys.onPressed:event=>{
-                        if(event.key===Qt.Key_Down || (event.key===Qt.Key_N && event.modifiers & Qt.ControlModifier)){root.navigate(1);event.accepted=true}
+                        if(event.key===Qt.Key_Q && event.modifiers===Qt.NoModifier && query.text.trim()===""){root.dismiss();event.accepted=true}
+                        else if(event.key===Qt.Key_U && event.modifiers & Qt.ControlModifier){root.openLink();event.accepted=true}
+                        else if(event.key===Qt.Key_O && event.modifiers & Qt.ControlModifier){root.getPdf();event.accepted=true}
+                        else if(event.key===Qt.Key_Down || (event.key===Qt.Key_N && event.modifiers & Qt.ControlModifier)){root.navigate(1);event.accepted=true}
                         else if(event.key===Qt.Key_Up || (event.key===Qt.Key_P && event.modifiers & Qt.ControlModifier)){root.navigate(-1);event.accepted=true}
                         else if(event.key===Qt.Key_Return || event.key===Qt.Key_Enter){
                             if(root.hits.length===0 && root.looksLikeIdentifier(query.text)){var pasted=query.text.trim();root.edit("quick");editor.text=pasted}
@@ -562,6 +867,7 @@ Item {
                 RowLayout {
                     Layout.fillWidth:true
                     BibButton {text:filters.visible?"Hide filters":"Filters";onClicked:filters.visible=!filters.visible}
+                    BibButton {objectName:"sortButton";text:query.text.trim()!==""?"Sort: relevance":(root.browseSort==="added_desc"?"Sort: newest added ↓":"Sort: citation key A–Z");enabled:query.text.trim()==="";onClicked:root.toggleBrowseSort()}
                     CheckBox {text:"Search other projects’ notes";checked:root.allNotes;onToggled:{root.allNotes=checked;root.search(false)}}
                     Item {Layout.fillWidth:true}
                     Label {text:root.notice;color:root.fg;font.pixelSize:12}
@@ -581,6 +887,7 @@ Item {
                         Layout.fillHeight:true;Layout.fillWidth:true;Layout.preferredWidth:root.expanded?380:700
                         ListView {
                             id:results;objectName:"results";Layout.fillWidth:true;Layout.fillHeight:true;clip:true;model:root.hits;spacing:4;currentIndex:-1;reuseItems:true
+                            onCountChanged:if(count>0 && currentIndex<0)currentIndex=0
                             ScrollBar.vertical:ScrollBar{}
                             delegate:ItemDelegate {
                                 required property var modelData
@@ -592,7 +899,7 @@ Item {
                                     spacing:4
                                     Label {width:parent.width;text:modelData.title||modelData.citekey;elide:Text.ElideRight;maximumLineCount:2;wrapMode:Text.Wrap;color:results.currentIndex===index?root.selectedFg:root.fg;font.pixelSize:15;font.bold:true;textFormat:Text.PlainText}
                                     Label {width:parent.width;text:modelData.authors+" · "+modelData.year;elide:Text.ElideRight;color:results.currentIndex===index?root.selectedFg:root.fg;opacity:.7;font.pixelSize:12;textFormat:Text.PlainText}
-                                    Label {width:parent.width;text:modelData.citekey+"  ·  "+modelData.match_type+(modelData.note_count?"  ·  "+modelData.note_count+" notes":"");elide:Text.ElideRight;color:results.currentIndex===index?root.selectedFg:root.fg;opacity:.8;font.pixelSize:11;textFormat:Text.PlainText}
+                                    Label {width:parent.width;text:modelData.citekey+"  ·  "+(modelData.created_at?"added "+root.relativeTime(modelData.created_at):modelData.match_type)+(modelData.note_count?"  ·  "+modelData.note_count+" notes":"");elide:Text.ElideRight;color:results.currentIndex===index?root.selectedFg:root.fg;opacity:.8;font.pixelSize:11;textFormat:Text.PlainText}
                                 }
                                 onClicked:{results.currentIndex=index;root.showDetail();query.forceActiveFocus()}
                             }
@@ -610,14 +917,46 @@ Item {
                             RowLayout {
                                 BibButton{text:"Attach PDF";onClicked:root.choosePdf()}
                                 BibButton{text:"New note";onClicked:root.edit("note",null)}
-                                BibButton{text:"Assign to project";enabled:root.projectId!=="";onClicked:root.assign()}
+                                BibButton{text:"Assign to project";enabled:root.selected!==null&&root.projects.length>0;onClicked:root.assign()}
                                 BibButton{text:"Edit BibTeX";onClicked:root.edit("metadata",null)}
                             }
                             RowLayout {
-                                BibButton{text:"Open PDF / link";onClicked:root.openPdf()}
-                                BibButton{text:root.metadataBusy?"Looking up…":"Fill metadata";enabled:!root.metadataBusy;onClicked:root.lookupMetadata()}
-                                BibButton{text:root.pdfBusy?"Finding PDF…":"Get PDF";enabled:!root.pdfBusy;onClicked:root.getPdf()}
+                                BibButton{text:"Open link";onClicked:root.openLink()}
+                                BibButton{text:root.pdfBusy?"Opening PDF…":"Open PDF";enabled:!root.pdfBusy;onClicked:root.getPdf()}
                                 BibButton{text:"Copy PDF path";onClicked:root.copyPdfPath()}
+                                BibButton{text:root.codexBusy?"Opening Codex…":"Codex";enabled:root.selected!==null&&!root.codexBusy;onClicked:root.openCodex()}
+                            }
+                            RowLayout {
+                                BibButton{text:"ChatGPT";enabled:root.selected!==null&&!root.codexBusy;onClicked:root.openCodex(true)}
+                            }
+                            RowLayout {
+                                BibButton{text:root.metadataBusy?"Looking up…":"Fill metadata";enabled:!root.metadataBusy;onClicked:root.lookupMetadata()}
+                                BibButton{visible:root.selected&&root.arxivIdOf(root.selected)!=="";text:root.overviewBusy?"Loading AlphaXiv…":root.overviewVisible?"Hide AI Overview":"AlphaXiv AI Overview";enabled:!root.overviewBusy;onClicked:root.showAlphaXivOverview()}
+                                BibButton{text:"Delete item…";enabled:root.selected!==null;onClicked:root.requestDelete()}
+                            }
+                            ColumnLayout {
+                                visible:root.overviewVisible&&root.selected&&root.overviewRefId===root.selected.id
+                                Layout.fillWidth:true;spacing:6
+                                RowLayout {Layout.fillWidth:true
+                                    Label{text:"AlphaXiv AI Overview";color:root.fg;font.bold:true;Layout.fillWidth:true}
+                                    BibButton{text:"Open source";onClicked:root.openAlphaXiv()}
+                                }
+                                Label{text:"AI-generated source summary · cached locally";color:root.fg;opacity:.65;font.pixelSize:11}
+                                TextEdit {
+                                    id: overviewMarkdown
+                                    objectName: "overviewMarkdown"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: contentHeight
+                                    text: root.overviewBody
+                                    textFormat: TextEdit.MarkdownText
+                                    readOnly: true
+                                    selectByMouse: true
+                                    wrapMode: TextEdit.Wrap
+                                    color: root.fg
+                                    font.family: root.fontFamily
+                                    font.pixelSize: 13
+                                    onLinkActivated: url => root.openExternal(url)
+                                }
                             }
                             Label {text:root.selected?(root.selected.abstract||"No abstract available."):"";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;font.pixelSize:14;textFormat:Text.PlainText}
                             Repeater {
@@ -625,7 +964,7 @@ Item {
                                 RowLayout {
                                     required property var modelData
                                     Layout.fillWidth:true
-                                    BibButton{text:(modelData.exists?"Open PDF: ":"Missing: ")+modelData.path.split("/").pop();enabled:modelData.exists;Layout.fillWidth:true;onClicked:Qt.openUrlExternally(root.fileUrl(modelData.path))}
+                                    BibButton{text:(modelData.exists?"Open PDF: ":"Missing: ")+modelData.path.split("/").pop();enabled:modelData.exists;Layout.fillWidth:true;onClicked:root.openExternal(root.fileUrl(modelData.path))}
                                     BibButton{text:"Pull";visible:!modelData.exists;onClicked:root.rpc("pull_pdf",{attachment_id:modelData.id},function(){root.notice="PDF restored";noticeTimer.restart();root.showDetail()})}
                                     BibButton{text:"Remove link";onClicked:root.rpc("remove_pdf",{attachment_id:modelData.id},function(){root.notice="Attachment removed; file kept";noticeTimer.restart();root.showDetail()})}
                                 }
@@ -639,9 +978,11 @@ Item {
                                     Layout.fillWidth:true;implicitHeight:noteColumn.implicitHeight+24;color:"transparent";radius:5;border.color:root.borderColor
                                     ColumnLayout {
                                         id:noteColumn;anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:12;spacing:8
-                                        RowLayout {Layout.fillWidth:true;Label{text:modelData.project_name||"Global";color:root.fg;font.bold:true;Layout.fillWidth:true}BibButton{text:"Edit";onClicked:root.edit("note",modelData)}}
+                                        RowLayout {Layout.fillWidth:true;Label{text:modelData.project_name||"Global";color:root.fg;font.bold:true;Layout.fillWidth:true}BibButton{text:"Edit";onClicked:root.edit("note",modelData)}BibButton{text:"Delete…";onClicked:root.requestNoteDelete(modelData.id)}}
                                         Label {text:modelData.body;color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
                                         Label {text:(modelData.labels||[]).join(" · ")+(modelData.evidence?" · "+modelData.evidence:"");color:root.fg;opacity:.8;font.pixelSize:11;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
+                                        BibButton {visible:!!modelData.image;text:savedClip.source.toString()?"Hide clip":"Show image clip · PDF p. "+(modelData.image?modelData.image.page:"");onClicked:{if(savedClip.source.toString()){savedClip.source="";return}root.rpc("get_note_image",{note_id:modelData.id,project_id:modelData.project_id},function(r){savedClip.source="data:image/png;base64,"+r.data})}}
+                                        Image {id:savedClip;visible:source.toString()!=="";Layout.fillWidth:true;Layout.preferredHeight:220;fillMode:Image.PreserveAspectFit}
                                         Label {text:modelData.provenance+" · revision "+modelData.revision;color:root.fg;opacity:.75;font.pixelSize:11;textFormat:Text.PlainText}
                                     }
                                 }
@@ -651,27 +992,30 @@ Item {
                         }
                     }
                 }
-                RowLayout {Layout.fillWidth:true;Label{text:"↑↓ navigate   Enter open PDF / link   Tab details   Ctrl+K actions   Esc close";color:root.fg;opacity:.75;font.pixelSize:11;Layout.fillWidth:true}BibButton{visible:root.expanded;text:"Compact";onClicked:{root.expanded=false;query.forceActiveFocus()}}}
+                RowLayout {Layout.fillWidth:true;Label{text:"↑↓ navigate   Enter open   "+root.pdfShortcut+" PDF   Ctrl+U link   Ctrl+S sort   Tab details   Ctrl+K actions   Q/Esc close";color:root.fg;opacity:.75;font.pixelSize:11;Layout.fillWidth:true}BibButton{visible:root.expanded;text:"Compact";onClicked:{root.expanded=false;query.forceActiveFocus()}}}
             }
         }
-        Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.openPdf()}
+        Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.getPdf()}
+        Shortcut {sequence:"Ctrl+U";enabled:root.opened&&!editorDialog.opened;onActivated:root.openLink()}
+        Shortcut {sequence:"Ctrl+S";enabled:root.opened&&!editorDialog.opened&&!commandDialog.opened&&!projectDialog.opened&&!previewDialog.opened&&!bibFileDialog.opened&&!repoDialog.opened&&!metadataDialog.opened;onActivated:root.toggleBrowseSort()}
         Shortcut {sequence:"Ctrl+K";enabled:root.opened&&!editorDialog.opened;onActivated:commandDialog.open()}
-        Shortcut {sequence:"Ctrl+P";enabled:root.opened&&!query.activeFocus&&!editorDialog.opened;onActivated:projectDialog.open()}
-        Shortcut {sequence:"Escape";enabled:root.opened&&!editorDialog.opened&&!commandDialog.opened&&!projectDialog.opened&&!previewDialog.opened&&!bibFileDialog.opened&&!repoDialog.opened&&!metadataDialog.opened;onActivated:root.dismiss()}
+        Shortcut {sequence:"Ctrl+P";enabled:root.opened&&!editorDialog.opened;onActivated:projectSelect.popup.open()}
+        Shortcut {sequence:"Escape";enabled:root.opened&&!editorDialog.opened&&!commandDialog.opened&&!projectDialog.opened&&!previewDialog.opened&&!bibFileDialog.opened&&!repoDialog.opened&&!metadataDialog.opened&&!deleteDialog.opened&&!noteDeleteDialog.opened;onActivated:root.dismiss()}
+        Shortcut {sequence:"Q";enabled:root.opened&&query.text.trim()===""&&!editorDialog.opened&&!commandDialog.opened&&!projectDialog.opened&&!previewDialog.opened&&!bibFileDialog.opened&&!repoDialog.opened&&!metadataDialog.opened&&!deleteDialog.opened&&!noteDeleteDialog.opened;onActivated:root.dismiss()}
         BibDialog {
             id:commandDialog;title:"Actions";anchors.centerIn:parent;width:480;height:Math.min(window.height-50,630);modal:true;closePolicy:Popup.CloseOnEscape|Popup.CloseOnPressOutside
             onOpened:root.actionDigits=""
             onClosed:{root.actionDigits="";actionTimer.stop()}
             ColumnLayout {
                 anchors.fill:parent
-                Label {text:root.actionDigits ? "Number: "+root.actionDigits+" · Enter to select" : "Type 1–20 to select an action";color:root.fg;Layout.fillWidth:true}
+                Label {text:root.actionDigits ? "Number: "+root.actionDigits+" · Enter to select" : "Type 1–23 to select an action";color:root.fg;Layout.fillWidth:true}
                 ScrollView {
                     id:actionsScroll
                     Layout.fillWidth:true;Layout.fillHeight:true
                     ColumnLayout {
                         width:actionsScroll.availableWidth
                         Repeater {
-                            model:["Copy citation key","Copy LaTeX citation","Copy Pandoc / Quarto citation","Copy BibTeX","Paste BibTeX","Import BibTeX file…","Add DOI","New contextual note","Attach PDF","Choose project","Create project","Copy project bibliography","Copy project notes","Open PDF / link","Sync history","Repository settings","Fill metadata online","Add entry from URL / DOI / BibTeX","Get PDF (download if needed)","Copy PDF path"]
+                            model:["Add new item (DOI / arXiv / URL / BibTeX)","Copy citation key","Copy LaTeX citation","Copy Pandoc / Quarto citation","Copy BibTeX","Paste BibTeX","Import BibTeX file…","Add DOI","New contextual note","Attach PDF","Open link","Open PDF (download if needed)","Copy PDF path","Fill metadata online","Choose project","Create project","Copy project bibliography","Copy project notes","Sync history","Repository settings","Delete current item…","Chat about item in Codex","Chat about item in ChatGPT Desktop"]
                             BibButton {
                                 required property string modelData
                                 required property int index
@@ -691,6 +1035,34 @@ Item {
             }
             Shortcut {sequence:"Return";enabled:commandDialog.opened && root.actionDigits!=="";onActivated:root.runAction(Number(root.actionDigits))}
             Shortcut {sequence:"Backspace";enabled:commandDialog.opened;onActivated:{root.actionDigits="";actionTimer.stop()}}
+        }
+        BibDialog {
+            id:deleteDialog;title:"Delete reference";anchors.centerIn:parent;width:Math.min(460,window.width-60);height:270;modal:true;closePolicy:Popup.CloseOnEscape
+            onClosed:{if(!root.deleteBusy)root.deletePreview=null}
+            ColumnLayout {
+                anchors.fill:parent;spacing:12
+                Label {text:root.deletePreview ? root.deletePreview.title+" ["+root.deletePreview.citekey+"]" : "";color:root.fg;font.bold:true;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
+                Label {text:root.deletePreview ? "Delete this reference, "+root.deletePreview.note_count+" note(s), "+root.deletePreview.attachment_count+" attachment link(s), "+root.deletePreview.project_count+" project link(s), and "+root.deletePreview.summary_count+" cached summary?" : "";color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
+                Label {text:"PDF files stay on disk. There is no in-app undo. Ctrl+Enter deletes.";color:root.fg;opacity:.75;wrapMode:Text.Wrap;Layout.fillWidth:true}
+                Label {visible:root.error!=="";text:root.error;color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true}
+                Item {Layout.fillHeight:true}
+                RowLayout {Layout.alignment:Qt.AlignRight;BibButton{text:"Cancel";enabled:!root.deleteBusy;onClicked:deleteDialog.close()}BibButton{text:root.deleteBusy?"Deleting…":"Delete item";enabled:!root.deleteBusy;onClicked:root.confirmDelete()}}
+            }
+            Shortcut {sequence:"Ctrl+Return";enabled:deleteDialog.opened&&!root.deleteBusy;onActivated:root.confirmDelete()}
+        }
+        BibDialog {
+            id:noteDeleteDialog;title:"Delete note";anchors.centerIn:parent;width:Math.min(460,window.width-60);height:245;modal:true;closePolicy:Popup.CloseOnEscape
+            onClosed:{if(!root.noteDeleteBusy)root.noteDeletePreview=null}
+            ColumnLayout {
+                anchors.fill:parent;spacing:12
+                Label {text:root.noteDeletePreview ? root.noteDeletePreview.project_name+" note on ["+root.noteDeletePreview.citekey+"]" : "";color:root.fg;font.bold:true;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
+                Label {text:root.noteDeletePreview ? (root.noteDeletePreview.excerpt||"Image-only note") : "";color:root.fg;wrapMode:Text.Wrap;elide:Text.ElideRight;maximumLineCount:3;Layout.fillWidth:true;textFormat:Text.PlainText}
+                Label {text:root.noteDeletePreview&&root.noteDeletePreview.has_image ? "Its saved image clip and revisions will also be deleted." : "Its revisions will also be deleted.";color:root.fg;opacity:.75;wrapMode:Text.Wrap;Layout.fillWidth:true}
+                Label {visible:root.error!=="";text:root.error;color:root.fg;wrapMode:Text.Wrap;Layout.fillWidth:true}
+                Item {Layout.fillHeight:true}
+                RowLayout {Layout.alignment:Qt.AlignRight;BibButton{text:"Cancel";enabled:!root.noteDeleteBusy;onClicked:noteDeleteDialog.close()}BibButton{text:root.noteDeleteBusy?"Deleting…":"Delete note";enabled:!root.noteDeleteBusy;onClicked:root.confirmNoteDelete()}}
+            }
+            Shortcut {sequence:"Ctrl+Return";enabled:noteDeleteDialog.opened&&!root.noteDeleteBusy;onActivated:root.confirmNoteDelete()}
         }
         BibDialog {
             id:bibFileDialog
@@ -824,28 +1196,47 @@ Item {
             }
         }
         BibDialog {
-            id:projectDialog;title:"Choose project";anchors.centerIn:parent;width:400;height:Math.min(window.height-60,450);modal:true
+            id:projectDialog;title:"Assign to project";anchors.centerIn:parent;width:400;height:Math.min(window.height-60,450);modal:true
             contentItem:ListView {
-                clip:true;model:[{name:"All references"}].concat(root.projects);currentIndex:0
-                delegate:ItemDelegate{required property var modelData;required property int index;text:modelData.name;width:ListView.view.width;highlighted:ListView.isCurrentItem;onClicked:root.chooseProject(index)}
-                Keys.onReturnPressed:root.chooseProject(currentIndex)
+                clip:true;model:root.projects;currentIndex:0
+                delegate:ItemDelegate{required property var modelData;required property int index;text:modelData.name;width:ListView.view.width;highlighted:ListView.isCurrentItem;onClicked:root.assignToProject(index)}
+                Keys.onReturnPressed:root.assignToProject(currentIndex)
                 Component.onCompleted:forceActiveFocus()
             }
             onOpened:contentItem.forceActiveFocus()
         }
         BibDialog {
-            id:editorDialog;anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(640,window.height-60);modal:true;closePolicy:Popup.CloseOnEscape
+            id:editorDialog;anchors.centerIn:parent
+            width:Math.min(root.quickNoteMode?440:760,window.width-60)
+            height:Math.min(root.quickNoteMode?(root.clipPath?410:260):640,window.height-60)
+            padding:root.quickNoteMode?16:20
+            modal:true;closePolicy:Popup.CloseOnEscape
+            background: Rectangle {color:Qt.rgba(root.bg.r,root.bg.g,root.bg.b,1);radius:Style.cornerRadius;border.color:root.borderColor;border.width:1}
+            header: Label {text:editorDialog.title;color:root.fg;font.family:root.fontFamily;font.pixelSize:12;opacity:.65;padding:16;bottomPadding:4}
+            onClosed:{if(!root.noteSaving){root.discardClip(root.clipPath);root.clipPath=""}if(root.quickNoteMode){root.quickNoteMode=false;root.dismiss()}}
             ColumnLayout {
                 anchors.fill:parent
-                Label {visible:root.editKind==="note";text:"Assessment scope"}
-                ComboBox{id:noteScope;visible:root.editKind==="note";model:["Global"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
-                ScrollView {Layout.fillWidth:true;Layout.fillHeight:true;TextArea{id:editor;objectName:"editor";wrapMode:TextEdit.Wrap;selectByMouse:true;font.family:root.fontFamily;placeholderText:root.editKind==="quick"?"Paste a DOI, arXiv ID, URL, several of those, or a whole BibTeX entry…":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""}}
-                TextField{id:labels;visible:root.editKind==="note";placeholderText:"Optional labels, separated by commas";Layout.fillWidth:true}
-                TextField{id:evidence;visible:root.editKind==="note";placeholderText:"Optional evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
+                Label {visible:root.editKind==="note";text:root.noteTargetTitle;color:root.fg;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText;font.pixelSize:13;font.bold:true}
+                Label {visible:false;text:root.quickNoteContext?"PDF page "+root.quickNoteContext.page+" of "+root.quickNoteContext.total_pages+" · Ctrl+Enter saves":"";color:root.fg}
+                RowLayout {
+                    visible:root.quickNoteMode
+                    BibButton {text:root.clipPath?"Recapture":"Add clip";enabled:!root.noteSaving&&!root.captureBusy;onClicked:root.captureClip()}
+                    BibButton {visible:root.clipPath!=="";text:"Remove";enabled:!root.noteSaving;onClicked:{root.discardClip(root.clipPath);root.clipPath="";root.clipRectangle=null}}
+                    Item {Layout.fillWidth:true}
+                    Label {text:"Ctrl+Shift+C";color:root.fg;opacity:.4;font.pixelSize:10}
+                }
+                Image {visible:root.clipPath!=="";source:root.clipPath?root.fileUrl(root.clipPath):"";Layout.fillWidth:true;Layout.preferredHeight:130;fillMode:Image.PreserveAspectFit;cache:false}
+
+                Label {visible:root.editKind==="note"&&!root.quickNoteMode;text:"Assessment scope"}
+                ComboBox{id:noteScope;visible:root.editKind==="note";model:["Global · all projects"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
+                ScrollView {Layout.fillWidth:true;Layout.fillHeight:true;TextArea{id:editor;objectName:"editor";wrapMode:TextEdit.Wrap;selectByMouse:true;font.family:root.fontFamily;placeholderText:root.quickNoteMode?(root.clipPath?"Add a comment…":"Write a note…"):root.editKind==="quick"?"Paste a DOI, arXiv ID, URL, several of those, or a whole BibTeX entry…":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""}}
+                TextField{id:labels;visible:root.editKind==="note"&&!root.quickNoteMode;placeholderText:"Optional labels, separated by commas";Layout.fillWidth:true}
+                TextField{id:evidence;visible:root.editKind==="note"&&!root.quickNoteMode;placeholderText:"Optional evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
                 Label{visible:root.error!=="";text:root.error;wrapMode:Text.Wrap;Layout.fillWidth:true}
-                RowLayout {Layout.alignment:Qt.AlignRight;BibButton{text:"Cancel";onClicked:editorDialog.close()}BibButton{text:(root.editKind==="doi"||root.editKind==="quick")?"Preview":"Save";onClicked:root.saveEditor()}}
+                RowLayout {Layout.fillWidth:true;Label{visible:root.quickNoteMode;text:"Esc cancel · Ctrl+Enter save";color:root.fg;opacity:.45;font.pixelSize:10;Layout.fillWidth:true}BibButton{text:"Cancel";visible:!root.quickNoteMode;onClicked:editorDialog.close()}BibButton{text:(root.editKind==="doi"||root.editKind==="quick")?"Preview":"Save";onClicked:root.saveEditor()}}
             }
             Shortcut{sequence:"Ctrl+Return";enabled:editorDialog.opened;onActivated:root.saveEditor()}
+            Shortcut{sequence:"Ctrl+Shift+C";enabled:editorDialog.opened&&root.quickNoteMode;onActivated:root.captureClip()}
         }
         BibDialog {
             id:metadataDialog;title:"Fill metadata online";anchors.centerIn:parent;width:Math.min(780,window.width-60);height:Math.min(680,window.height-60);modal:true

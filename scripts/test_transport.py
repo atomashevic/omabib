@@ -29,7 +29,10 @@ with tempfile.TemporaryDirectory(prefix='omabib-test-')as d:
   mcp=subprocess.run([binary,'mcp'],input=''.join(json.dumps(x)+'\n'for x in messages),text=True,capture_output=True,env=env,timeout=15)
   assert mcp.returncode==0,mcp.stderr
   replies=[json.loads(x)for x in mcp.stdout.splitlines()];assert len(replies)==3
-  assert {'search','add_pdf','pull_pdf','remove_pdf'}.issubset({t['name']for t in replies[1]['result']['tools']})
+  listed={t['name']:t for t in replies[1]['result']['tools']}
+  assert {'search','add_pdf','pull_pdf','remove_pdf','delete_reference_preview','delete_reference','delete_note_preview','delete_note'}.issubset(listed)
+  assert listed['delete_reference']['annotations']['destructiveHint'] and listed['delete_note']['annotations']['destructiveHint']
+  assert listed['delete_reference_preview']['annotations']['readOnlyHint'] and listed['delete_note_preview']['annotations']['readOnlyHint']
   assert json.loads(replies[2]['result']['content'][0]['text'])['results'][0]['id']==rid
   backup=pathlib.Path(d)/'backup.db';restored=pathlib.Path(d)/'restored.db'
   assert 'result'in call('backup',{'path':str(backup)})
@@ -61,5 +64,19 @@ with tempfile.TemporaryDirectory(prefix='omabib-test-')as d:
      break
    except (ConnectionRefusedError,FileNotFoundError):time.sleep(.05)
   else:raise AssertionError('Restart failed')
-  print('PASS: concurrent retry-safe writes; stale revision protection; service lock; stdio MCP discovery/search; backup/restore; interrupted-import recovery')
+  def mcp_call(name,arguments):
+   request={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':arguments}}
+   run=subprocess.run([binary,'mcp'],input=json.dumps(request)+'\n',text=True,capture_output=True,env=env,timeout=15)
+   assert run.returncode==0,run.stderr
+   reply=json.loads(run.stdout.strip())
+   assert not reply['result'].get('isError'),reply
+   return json.loads(reply['result']['content'][0]['text'])
+  note_preview=mcp_call('delete_note_preview',{'id':n['id']})
+  assert note_preview['revision']==2 and note_preview['ref_id']==rid
+  assert mcp_call('delete_note',{'id':n['id'],'expected_revision':note_preview['revision'],'confirm_ref_id':rid,'idempotency_key':'mcp-delete-note'})['deleted']
+  ref_preview=mcp_call('delete_reference_preview',{'id':rid})
+  assert ref_preview['note_count']==0 and ref_preview['citekey']=='key'
+  assert mcp_call('delete_reference',{'id':rid,'expected_revision':ref_preview['revision'],'confirm_citekey':ref_preview['citekey'],'expected_notes':0,'expected_attachments':ref_preview['attachment_count'],'idempotency_key':'mcp-delete-reference'})['deleted']
+  assert call('status',{})['result']['references']==0
+  print('PASS: concurrent retry-safe writes; stale revision protection; service lock; stdio MCP discovery/search/deletion; backup/restore; interrupted-import recovery')
  finally:service.terminate();service.wait(timeout=10)

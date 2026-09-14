@@ -1,4 +1,5 @@
 pub mod abstracts;
+pub mod alphaxiv;
 pub mod attachments;
 pub mod db;
 pub mod history;
@@ -7,3 +8,4 @@ pub mod mcp;
 pub mod metadata;
 pub mod search;
 pub mod transport;
+pub mod visual;

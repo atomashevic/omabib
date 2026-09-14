@@ -21,10 +21,12 @@ def git(*args, check=True):
 
 def write(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_text() == body:
+    binary = isinstance(body, bytes)
+    if path.exists() and (path.read_bytes() if binary else path.read_text()) == body:
         return
     temporary = path.with_name(path.name + '.tmp')
-    temporary.write_text(body)
+    if binary: temporary.write_bytes(body)
+    else: temporary.write_text(body)
     temporary.replace(path)
 
 def serialized(value):
@@ -44,6 +46,10 @@ def snapshot(db):
         raise RuntimeError(f'Unsupported Omabib schema {schema}')
     rows = {table: [dict(r) for r in c.execute(f'SELECT * FROM {table}')]
             for table in ['refs','projects','associations','notes','note_revisions','attachments']}
+    has_images = c.execute("SELECT 1 FROM sqlite_master WHERE name='note_images'").fetchone()
+    images = {r['note_id']: dict(r) for r in c.execute('SELECT * FROM note_images')} if has_images else {}
+    has_summaries = c.execute("SELECT 1 FROM sqlite_master WHERE name='external_summaries'").fetchone()
+    summaries = [dict(r) for r in c.execute('SELECT * FROM external_summaries')] if has_summaries else []
     c.commit()
     c.close()
     expected = set()
@@ -57,6 +63,10 @@ def snapshot(db):
     emit("notes/.gitkeep", "", raw=True)
     for r in rows['refs']:
         emit('metadata/references/' + safe_id(r['id']) + '.json', decode(r, 'fields'))
+    for summary in summaries:
+        body = summary.pop('body')
+        emit('metadata/alphaxiv/' + safe_id(summary['ref_id']) + '.md',
+             '---\n' + serialized(summary) + '---\n\n' + body, raw=True)
     for p in rows['projects']:
         emit('metadata/projects/' + safe_id(p['id']) + '.json', decode(p, 'roots'))
     associations = sorted(rows['associations'], key=lambda r:(r['project_id'],r['ref_id']))
@@ -64,6 +74,14 @@ def snapshot(db):
     for n in rows['notes']:
         decode(n, 'labels')
         body = n.pop('body')
+        if image := images.get(n['id']):
+            data = image.pop('data')
+            image['rectangle'] = json.loads(image['rectangle'])
+            n['image'] = image
+            relative = 'notes/images/' + safe_id(n['id']) + '.png'
+            emit(relative, data, raw=True)
+            body += '\n\n![PDF page ' + str(image['page']) + '](images/' + safe_id(n['id']) + '.png)'
+
         # JSON is valid YAML, making this a Markdown file with exact structured metadata.
         emit('notes/' + safe_id(n['id']) + '.md', '---\n' + serialized(n) + '---\n\n' + body, raw=True)
     revisions = {}

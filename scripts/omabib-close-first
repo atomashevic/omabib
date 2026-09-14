@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if omarchy-shell omabib state 2>/dev/null | jq -e '.opened == true' >/dev/null 2>&1; then
+  omarchy-shell shell hide omabib >/dev/null
+else
+  hyprctl dispatch 'hl.dsp.window.close()' >/dev/null
+fi

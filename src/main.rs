@@ -29,6 +29,9 @@ enum Command {
         project: Option<String>,
         #[arg(long)]
         all_notes: bool,
+        /// Blank-query browse order: added_desc or citekey.
+        #[arg(long, value_parser = ["added_desc", "citekey"])]
+        sort: Option<String>,
     },
     /// Import a BibTeX file without overwriting existing values.
     Import { file: PathBuf },
@@ -288,9 +291,10 @@ fn run() -> Result<()> {
             query,
             project,
             all_notes,
+            sort,
         } => omabib::transport::request(
             "search",
-            &json!({"query":query,"project_id":project,"include_other_projects":all_notes}),
+            &json!({"query":query,"project_id":project,"include_other_projects":all_notes,"sort":sort}),
         )?,
         Command::Import { file } => omabib::transport::request(
             "import_bibtex",
@@ -551,8 +555,39 @@ fn run() -> Result<()> {
         },
         Command::Status => omabib::transport::request("status", &json!({}))?,
         Command::Open => {
+            let zathura_active = std::process::Command::new("hyprctl")
+                .args(["activewindow", "-j"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok())
+                .and_then(|active| active["class"].as_str().map(str::to_owned))
+                .is_some_and(|class| {
+                    matches!(
+                        class.to_lowercase().as_str(),
+                        "org.pwmt.zathura" | "zathura"
+                    )
+                });
+            let payload = if zathura_active {
+                let output = std::process::Command::new("omabib-quick-note")
+                    .arg("--open-reference")
+                    .output()?;
+                if output.status.success() {
+                    String::from_utf8(output.stdout)?.trim().to_owned()
+                } else {
+                    // The helper explains an unlinked or changed PDF in a desktop notification.
+                    "{}".to_owned()
+                }
+            } else {
+                "{}".to_owned()
+            };
             let status = std::process::Command::new("omarchy-shell")
-                .args(["shell", "toggle", "omabib", "{}"])
+                .args([
+                    "shell",
+                    if zathura_active { "summon" } else { "toggle" },
+                    "omabib",
+                    &payload,
+                ])
                 .status()?;
             anyhow::ensure!(status.success(), "Unable to open Omabib");
             return Ok(());
