@@ -336,6 +336,7 @@ impl Library {
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(a),
             "lookup_abstract" => lookup_abstract(self, a),
+            "missing_abstracts" => missing_abstracts(self, a),
             "add_reference" => self.add_reference(a),
             "get_attachment" => {
                 let c = read_connection(&self.path)?;
@@ -1238,6 +1239,26 @@ fn preview_doi(a: &Value) -> Result<Value> {
     ensure!(raw.len() <= 1024 * 1024, "DOI response too large");
     parse_bibtex(&raw).map_err(|e| anyhow::anyhow!("DOI returned invalid BibTeX: {e}"))?;
     Ok(json!({"doi":doi,"bibtex":raw,"saved":false,"source":format!("https://doi.org/{doi}")}))
+}
+/// List references with no abstract yet, for `enrich --abstracts`. Goes
+/// through the service's own connection (this library's `path`) rather
+/// than a path the caller guesses, so the CLI never risks reading a
+/// different database than the one it will then write through.
+fn missing_abstracts(lib: &Library, a: &Value) -> Result<Value> {
+    let c = read_connection(&lib.path)?;
+    let limit = a
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(5000)
+        .clamp(1, 20000);
+    let mut s = c.prepare("SELECT id,citekey FROM refs WHERE abstract='' ORDER BY citekey LIMIT ?")?;
+    let items = s
+        .query_map([limit], |r| {
+            Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?}))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let total: i64 = c.query_row("SELECT count(*) FROM refs WHERE abstract=''", [], |r| r.get(0))?;
+    Ok(json!({"items":items,"total":total}))
 }
 /// Preview an abstract for one reference that already has an exact DOI or
 /// arXiv identifier, without writing anything. Used by `enrich --abstracts`

@@ -372,18 +372,25 @@ fn run() -> Result<()> {
                 abstracts,
                 "Specify --abstracts (the only supported enrichment kind in this release)"
             );
-            let conn = omabib::db::read_connection(&omabib::transport::data_path())?;
-            let mut stmt = conn.prepare("SELECT id,citekey FROM refs WHERE abstract='' ORDER BY citekey")?;
-            let rows: Vec<(String, String)> = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<rusqlite::Result<_>>()?;
-            drop(stmt);
-            drop(conn);
-            let total = rows.len();
-            let rows: Vec<_> = match limit {
-                Some(n) => rows.into_iter().take(n).collect(),
-                None => rows,
-            };
+            // Listed through the running service (not a direct file read),
+            // so this always sees the exact same database the subsequent
+            // lookup_abstract/apply_metadata calls below will write to.
+            let listing = omabib::transport::request(
+                "missing_abstracts",
+                &json!({"limit":limit.unwrap_or(5000)}),
+            )?;
+            let total = listing["total"].as_i64().unwrap_or(0);
+            let rows: Vec<(String, String)> = listing["items"]
+                .as_array()
+                .context("missing_abstracts returned no items array")?
+                .iter()
+                .map(|v| {
+                    (
+                        v["id"].as_str().unwrap_or_default().to_string(),
+                        v["citekey"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect();
             eprintln!(
                 "{total} reference(s) have no abstract; checking {}{}",
                 rows.len(),
@@ -572,7 +579,7 @@ fn run() -> Result<()> {
             json!({"restored_to":to})
         }
         Command::Schema => {
-            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","get_repo_config","set_repo_config","sync_repo","repo_check","repo_setup","repo_status","identify_pdf","lookup_abstract","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
+            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","get_repo_config","set_repo_config","sync_repo","repo_check","repo_setup","repo_status","identify_pdf","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
         }
     };
     println!("{}", serde_json::to_string_pretty(&result)?);

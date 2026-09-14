@@ -182,7 +182,15 @@ fn from_doi(doi: &str, recognized: &str) -> Result<Value> {
         fields["url"] = json!(format!("https://doi.org/{doi}"));
     }
     let arxiv_id = crate::metadata::arxiv_from_doi(doi);
-    let mut abstract_source = Value::Null;
+    // The primary record (Crossref or DataCite) may already carry an
+    // abstract; report that gateway as the source so agents always see
+    // where an abstract came from, not only when the enrichment chain
+    // below had to add one.
+    let mut abstract_source = if text(&fields, "abstract").is_empty() {
+        Value::Null
+    } else {
+        candidate["gateway"].clone()
+    };
     let mut pdf_url = Value::Null;
     if text(&fields, "abstract").is_empty() || text(&fields, "pdf").is_empty() {
         match crate::abstracts::enrich(doi, &arxiv_id) {

@@ -268,6 +268,11 @@ pub fn lookup(lib: &Library, a: &Value) -> Result<Value> {
         let mut conflicts = Map::new();
         // Identifier matches (not broad title search) run the abstract chain
         // server-side, so an agent never has to make a second round trip.
+        // The primary record itself may already carry an abstract; report
+        // its gateway as the source so this is never left unattributed.
+        if !text(&candidate["fields"], "abstract").is_empty() {
+            candidate["abstract_source"] = candidate["gateway"].clone();
+        }
         if !doi.is_empty()
             && (text(&candidate["fields"], "abstract").is_empty()
                 || text(&candidate["fields"], "pdf").is_empty())
