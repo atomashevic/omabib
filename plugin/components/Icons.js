@@ -49,7 +49,10 @@ var GLYPHS = {
   checkboxBlank: 0xF0131, // checkbox-blank-outline
   checkboxMarked: 0xF0135,// checkbox-marked-outline
   cloudCheck: 0xF12CC,    // cloud-check-outline
-  folderUp: 0xF19F0       // folder-arrow-up
+  folderUp: 0xF19F0,      // folder-arrow-up
+  cog: 0xF08BB,           // cog-outline
+  radioOn: 0xF043E,       // radiobox-marked
+  radioOff: 0xF043D       // radiobox-blank
 }
 
 function has(name) {

@@ -88,6 +88,18 @@ test('nested bullets stay with their parent item', () => {
   assert.deepStrictEqual(b[0].items[1].sub, []);
 });
 
+test('rich-text document keeps escaping and structure', () => {
+  const style = {reading: 'Noto Sans', mono: 'JetBrainsMono Nerd Font', size: 14, heading: 16, small: 11, text: '#b9bec6', bright: '#eceff2', muted: '#9a9ea5', dim: '#71757c', line: '#2b2f37', codeBg: '#181a1f', link: '#ff5c5c'};
+  const md = 'Intro <script>x</script>.\n\n### 1. Authors\n\n**Ada** at [lab](https://example.org).\n\n*   **Patterns:**\n    *   **One:** a\n*   Two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n<code>\n```';
+  const html = O.toHtml(O.blocks(md), style);
+  assert(!html.includes('<script>') && html.includes('&lt;script&gt;'), html);
+  assert(/<p style="[^"]*font-size:16px[^"]*font-weight:600[^"]*"><span[^>]*>1<\/span>/.test(html), html);
+  assert(html.includes('<a href="https://example.org"><font color="#ff5c5c">lab</font></a>'), html);
+  assert(html.includes('<b><font color="#eceff2">Ada</font></b>'), html);
+  assert(/<li[^>]*><b>.*Patterns:.*<ul style="[^"]*list-style-type:circle"><li[^>]*><b>.*One:/.test(html), html);
+  assert(html.includes('<table') && html.includes('<th ') && html.includes('&lt;code&gt;'), html);
+});
+
 test('format helpers', () => {
   assert.strictEqual(F.shortAuthors('Wang, Steven and Hunt, Kyle and Tang, Shaojie'), 'Wang et al.');
   assert.strictEqual(F.shortAuthors('Das, Anath Bandhu and Pal, Pinaki'), 'Das & Pal');

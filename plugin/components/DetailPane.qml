@@ -119,8 +119,8 @@ Rectangle {
                     tooltip: "AI overview"; shortcut: "Ctrl+2"
                     onClicked: root.app.selectTab("ai")
                 }
-                IconButton { theme: root.theme; icon: "terminal"; iconSize: root.theme.title + 3; tooltip: "Chat about this in Codex"; busy: root.app.codexBusy; onClicked: root.app.openCodex(false) }
-                IconButton { theme: root.theme; icon: "chat"; iconSize: root.theme.title + 3; tooltip: "Chat about this in ChatGPT"; enabled: !root.app.codexBusy; onClicked: root.app.openCodex(true) }
+                IconButton { theme: root.theme; icon: "terminal"; iconSize: root.theme.title + 3; tooltip: "Chat about this in " + root.app.cliName; busy: root.app.codexBusy; onClicked: root.app.openCodex(false) }
+                IconButton { theme: root.theme; icon: "chat"; iconSize: root.theme.title + 3; tooltip: "Chat about this in " + root.app.desktopName; enabled: !root.app.codexBusy; onClicked: root.app.openCodex(true) }
                 Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(6); Layout.rightMargin: root.theme.space(6) }
                 Repeater {
                     model: root.ref && root.ref.projects ? root.ref.projects.slice(0, 3) : []

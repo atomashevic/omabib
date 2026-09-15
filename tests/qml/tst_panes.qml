@@ -48,6 +48,23 @@ Rectangle {
         property string actionDigits: ""
         property bool overflowOpen: overflowMenu.opened
         property var calls: []
+        property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
+        property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
+        property var settings: ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+        property bool settingsBusy: false
+        property var settingsInfo: ({
+            settings: settings, path: "/home/reader/.config/omabib/settings.json", claude_desktop_mcp: false,
+            pdf_viewers: [
+                {id: "org.pwmt.zathura-pdf-mupdf.desktop", name: "Zathura", program: "zathura", system_default: true},
+                {id: "org.gnome.Evince.desktop", name: "Document Viewer", program: "evince", system_default: false},
+                {id: "com.github.xournalpp.xournalpp.desktop", name: "Xournal++", program: "xournalpp-wrapper", system_default: false}
+            ],
+            clis: [{id: "codex", name: "Codex CLI", available: true}, {id: "claude", name: "Claude Code", available: true}],
+            desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: false}]
+        })
+        function setSetting(key, value) { var next = Object.assign({}, settings); next[key] = value; settings = next; note("setSetting:" + key + "=" + value) }
+        function registerClaudeDesktop() { note("registerClaudeDesktop") }
+        function openSettings() { settingsSheet.visible = true }
 
         function note(name) { calls = calls.concat([name]) }
         function looksLikeIdentifier(text) { return /^10\.|arxiv|^https?:/i.test(String(text || "").trim()) }
@@ -126,6 +143,15 @@ Rectangle {
         }
     }
 
+    Rectangle {
+        id: settingsSheet
+        visible: false
+        anchors.centerIn: parent
+        width: 640; height: settingsPanel.implicitHeight + 40
+        color: ui.card
+        border.width: 1; border.color: ui.border
+        SettingsPanel { id: settingsPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
+    }
     MenuPopup { id: overflowMenu; theme: ui; menuWidth: 250 }
     CommandPalette { id: palette; theme: ui; app: app }
 
@@ -167,24 +193,78 @@ Rectangle {
         }
         function test_2_ai_summary() {
             app.detailTab = "ai"
-            wait(100)
-            var column = find(detail, "overviewMarkdown")
-            verify(column, "AI summary column keeps objectName overviewMarkdown")
-            verify(column.children.length > 8, "overview renders its blocks")
+            wait(150)
+            var doc = find(detail, "overviewMarkdown")
+            verify(doc, "AI summary document keeps objectName overviewMarkdown")
+            var plain = doc.getText(0, doc.length)
+            verify(plain.indexOf("Authors and Institutions") >= 0, plain.slice(0, 200))
+            verify(plain.indexOf("Research Report") < 0, "title dropped")
+            verify(plain.indexOf("Dense MAE") >= 0, "table rendered")
+            doc.selectAll()
+            verify(doc.selectedText.length > 400, "whole overview selectable across blocks")
+            doc.deselect()
             shot("2-ai-summary")
             app.overviewState = "loading"
             shot("2b-ai-loading")
             app.overviewState = "unavailable"
             shot("2c-ai-unavailable")
         }
+        function test_2e_drag_selects_and_sections_scroll() {
+            app.detailTab = "ai"
+            wait(150)
+            var doc = find(detail, "overviewMarkdown")
+            var pane = doc.parent.parent.parent  // column → contentItem → Flickable
+            compare(pane.contentY, 0)
+            mousePress(doc, 10, 60)
+            mouseMove(doc, 200, 160)
+            mouseRelease(doc, 200, 160)
+            verify(doc.selectedText.length > 20, "drag selects text: " + doc.selectedText)
+            compare(pane.contentY, 0, "drag does not scroll the pane")
+            var tab = pane.parent.parent
+            tab.jumpTo(tab.sections.length - 1)
+            tryVerify(function () { return pane.contentY > 100 }, 1000, "last section chip scrolls down")
+            shot("2e-ai-jumped")
+            tab.jumpTo(0)
+            doc.deselect()
+        }
         function test_2d_prose_overview() {
             app.overviewBody = Fixture.overviewProse
             app.detailTab = "ai"
-            wait(100)
-            var column = find(detail, "overviewMarkdown")
-            verify(column.children.length >= 6, "prose overview renders its blocks")
+            wait(150)
+            var doc = find(detail, "overviewMarkdown")
+            var plain = doc.getText(0, doc.length)
+            verify(plain.indexOf("Stable routers") >= 0 && plain.indexOf("*") < 0, plain)
             shot("2d-ai-prose-nested")
             app.overviewBody = Fixture.overview
+        }
+        function test_1b_abstract_selectable() {
+            var abstract = find(detail, "abstractText")
+            verify(abstract, "abstract text")
+            abstract.selectAll()
+            verify(abstract.selectedText.indexOf("Transformers for time series") === 0, abstract.selectedText)
+            abstract.deselect()
+        }
+        function test_2f_settings_panel() {
+            app.openSettings()
+            wait(100)
+            var zathura = find(settingsPanel, "pdfViewer:org.pwmt.zathura-pdf-mupdf.desktop")
+            verify(zathura, "installed viewers listed")
+            mouseClick(zathura)
+            compare(app.settings.pdf_viewer, "org.pwmt.zathura-pdf-mupdf.desktop")
+            var claude = find(settingsPanel, "aiCli:claude")
+            mouseClick(claude)
+            compare(app.settings.ai_cli, "claude")
+            compare(app.cliName, "Claude Code")
+            var desktop = find(settingsPanel, "aiDesktop:claude")
+            mouseClick(desktop)
+            compare(app.settings.ai_desktop, "chatgpt", "an app that isn't installed can't be chosen")
+            app.settingsInfo = Object.assign({}, app.settingsInfo, {desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: true}]})
+            wait(50)
+            mouseClick(find(settingsPanel, "aiDesktop:claude"))
+            compare(app.settings.ai_desktop, "claude")
+            shot("2f-settings")
+            settingsSheet.visible = false
+            app.settings = ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
         }
         function test_3_notes() {
             app.detailTab = "notes"

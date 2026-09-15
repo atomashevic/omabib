@@ -18,6 +18,8 @@ Flickable {
     contentWidth: width
     contentHeight: column.implicitHeight + topPadding + theme.space(28)
     boundsBehavior: Flickable.StopAtBounds
+    // Mouse drags select text; the wheel, touchpad and scroll bar scroll.
+    acceptedButtons: Qt.NoButton
     flickableDirection: Flickable.VerticalFlick
 
     ColumnLayout {
@@ -33,9 +35,12 @@ Flickable {
         contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line }
     }
 
-    function scrollToItem(item) {
-        var y = item.mapToItem(column, 0, 0).y + root.topPadding - root.theme.space(8)
-        contentY = Math.max(0, Math.min(y, contentHeight - height))
+    function scrollToItem(item, offset) {
+        scrollToY(item.mapToItem(column, 0, offset || 0).y)
+    }
+    // y in the column's coordinates.
+    function scrollToY(y) {
+        contentY = Math.max(0, Math.min(y + root.topPadding - root.theme.space(8), contentHeight - height))
     }
 
     Behavior on contentY { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }

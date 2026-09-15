@@ -12,18 +12,28 @@ ScrollPane {
     readonly property var fields: ref && ref.fields ? ref.fields : ({})
     readonly property string arxiv: Format.arxivId(ref)
 
-    SectionLabel { theme: root.theme; text: "Abstract" }
-
-    Text {
+    RowLayout {
         Layout.fillWidth: true
+        SectionLabel { theme: root.theme; text: "Abstract" }
+        Item { Layout.fillWidth: true }
+        TextButton {
+            theme: root.theme
+            visible: !!(root.ref && root.ref.abstract)
+            variant: "ghost"
+            icon: "copy"
+            fontSize: root.theme.small
+            text: "Copy"
+            onClicked: root.app.copy(root.ref.abstract)
+        }
+    }
+
+    ReadingText {
+        objectName: "abstractText"
+        Layout.fillWidth: true
+        Layout.topMargin: -root.theme.space(6)
         visible: !!(root.ref && root.ref.abstract)
-        text: root.ref ? root.ref.abstract : ""
-        color: root.theme.text
-        font.family: root.theme.readingFamily
-        font.pixelSize: root.theme.title
-        lineHeight: 1.6
-        wrapMode: Text.Wrap
-        textFormat: Text.PlainText
+        theme: root.theme
+        text: root.ref && root.ref.abstract ? "<p style=\"margin:0; line-height:160%\">" + OverviewText.escapeHtml(root.ref.abstract) + "</p>" : ""
     }
 
     Rectangle {

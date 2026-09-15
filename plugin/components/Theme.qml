@@ -51,4 +51,9 @@ QtObject {
     readonly property int display: Style.font.display
 
     function space(px) { return Style.space(px) }
+    // An opaque #rrggbb for rich-text CSS, blending a translucent color over the card.
+    function css(c) {
+        var a = c.a
+        return Qt.rgba(c.r * a + card.r * (1 - a), c.g * a + card.g * (1 - a), c.b * a + card.b * (1 - a), 1).toString()
+    }
 }

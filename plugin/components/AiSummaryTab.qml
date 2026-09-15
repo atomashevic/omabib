@@ -3,8 +3,8 @@ import QtQuick.Layouts
 import "Format.js" as Format
 import "OverviewText.js" as OverviewText
 
-// The alphaXiv AI overview, laid out block by block for reading, with a
-// strip that jumps between its sections.
+// The alphaXiv AI overview as one selectable document, with a strip that
+// jumps between its sections.
 ColumnLayout {
     id: root
 
@@ -19,16 +19,44 @@ ColumnLayout {
 
     spacing: 0
 
-    function bright(html) {
-        var c = root.theme.bright.toString()
-        return String(html).replace(/<b>/g, "<b><font color=\"" + c + "\">").replace(/<\/b>/g, "</font></b>")
-    }
+    // The overview as one selectable rich-text document.
+    readonly property string html: loaded ? OverviewText.toHtml(blocks, {
+        reading: theme.readingFamily, mono: theme.mono, size: theme.title, heading: theme.heading, small: theme.small,
+        text: theme.css(theme.text), bright: theme.css(theme.bright), muted: theme.css(theme.muted), dim: theme.css(theme.dim),
+        line: theme.css(theme.line), codeBg: theme.css(theme.app), link: theme.css(theme.accentText)
+    }) : ""
+    // Character offset of each section heading in the document's plain text.
+    property var headingOffsets: []
 
+    function locateHeadings() {
+        var plain = doc.getText(0, doc.length)
+        var offsets = [], from = 0
+        for (var i = 0; i < sections.length; i++) {
+            var title = String(blocks[sections[i].block].text || "").replace(/[*_`]/g, "").slice(0, 32)
+            var at = title ? plain.indexOf(title, from) : -1
+            offsets.push(at)
+            if (at >= 0) from = at + title.length
+        }
+        headingOffsets = offsets
+    }
+    function sectionY(i) {
+        var at = headingOffsets[i]
+        return at === undefined || at < 0 ? -1 : doc.y + doc.positionToRectangle(at).y
+    }
+    function jumpTo(i) {
+        var y = sectionY(i)
+        if (y >= 0) scroll.scrollToY(y)
+        currentSection = i
+    }
     function updateCurrentSection() {
+        // At the bottom the last sections can't reach the top of the view, so
+        // count any heading that is on screen.
+        var atEnd = scroll.contentY >= scroll.contentHeight - scroll.height - 2
+        var limit = scroll.contentY + (atEnd ? scroll.height - root.theme.space(40) : root.theme.space(40))
         var best = 0
         for (var i = 0; i < sections.length; i++) {
-            var item = blockRepeater.itemAt(sections[i].block)
-            if (item && item.mapToItem(scroll.column, 0, 0).y <= scroll.contentY + root.theme.space(40)) best = i
+            var y = sectionY(i)
+            if (y >= 0 && y <= limit) best = i
         }
         currentSection = best
     }
@@ -60,6 +88,15 @@ ColumnLayout {
         Item { Layout.fillWidth: true }
         TextButton {
             theme: root.theme
+            visible: root.loaded
+            variant: "ghost"
+            icon: "copy"
+            fontSize: root.theme.small
+            text: "Copy"
+            onClicked: root.app.copy(root.app.overviewBody)
+        }
+        TextButton {
+            theme: root.theme
             variant: "ghost"
             icon: "external"
             fontSize: root.theme.small
@@ -84,11 +121,7 @@ ColumnLayout {
                 text: (modelData.number ? modelData.number + "  " : "") + modelData.title
                 selected: index === root.currentSection
                 clickable: true
-                onClicked: {
-                    var item = blockRepeater.itemAt(modelData.block)
-                    if (item) scroll.scrollToItem(item)
-                    root.currentSection = index
-                }
+                onClicked: root.jumpTo(index)
             }
         }
     }
@@ -104,27 +137,17 @@ ColumnLayout {
             anchors.fill: parent
             theme: root.theme
             visible: root.loaded
-            topPadding: root.theme.space(10)
-            column.objectName: "overviewMarkdown"
-            column.spacing: root.theme.space(12)
+            topPadding: root.theme.space(14)
             onContentYChanged: root.updateCurrentSection()
 
-            Repeater {
-                id: blockRepeater
-                model: root.blocks
-                Loader {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.topMargin: modelData.type === "h2" ? root.theme.space(12) : modelData.type === "h3" ? root.theme.space(4) : 0
-                    property var block: modelData
-                    sourceComponent: modelData.type === "h2" || modelData.type === "h3" ? heading
-                        : modelData.type === "ol" || modelData.type === "ul" ? list
-                        : modelData.type === "quote" ? quote
-                        : modelData.type === "code" ? code
-                        : modelData.type === "table" ? table
-                        : modelData.type === "hr" ? rule
-                        : paragraph
-                }
+            ReadingText {
+                id: doc
+                objectName: "overviewMarkdown"
+                Layout.fillWidth: true
+                theme: root.theme
+                text: root.html
+                onTextChanged: Qt.callLater(root.locateHeadings)
+                onOpenLink: url => root.app.openExternal(url)
             }
         }
 
@@ -171,221 +194,5 @@ ColumnLayout {
             detail: root.app.overviewMessage
             TextButton { theme: root.theme; icon: "refresh"; text: "Try again"; onClicked: root.app.loadOverview(true) }
         }
-    }
-
-    Component {
-        id: heading
-        RowLayout {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            spacing: root.theme.space(10)
-            Text {
-                visible: !!b.number
-                text: b.number || ""
-                color: root.theme.dim
-                font.family: root.theme.mono
-                font.pixelSize: b.type === "h2" ? root.theme.body : root.theme.small
-                Layout.alignment: Qt.AlignBaseline
-                textFormat: Text.PlainText
-            }
-            Text {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignBaseline
-                text: root.bright(b.html || "")
-                textFormat: Text.StyledText
-                color: root.theme.bright
-                font.family: root.theme.readingFamily
-                font.pixelSize: b.type === "h2" ? root.theme.heading : root.theme.title
-                font.weight: Font.DemiBold
-                wrapMode: Text.Wrap
-            }
-        }
-    }
-
-    Component {
-        id: paragraph
-        Text {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            text: root.bright(b.html || "")
-            textFormat: Text.StyledText
-            color: root.theme.text
-            linkColor: root.theme.accentText
-            font.family: root.theme.readingFamily
-            font.pixelSize: root.theme.title
-            lineHeight: 1.6
-            wrapMode: Text.Wrap
-            onLinkActivated: link => root.app.openExternal(link)
-        }
-    }
-
-    Component {
-        id: list
-        ColumnLayout {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            spacing: root.theme.space(10)
-            Repeater {
-                model: b.items || []
-                RowLayout {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    spacing: root.theme.space(6)
-                    Text {
-                        Layout.preferredWidth: root.theme.space(22)
-                        Layout.alignment: Qt.AlignTop
-                        text: modelData.marker
-                        color: root.theme.dim
-                        font.family: root.theme.mono
-                        font.pixelSize: root.theme.body
-                        lineHeight: 1.6 * root.theme.title / root.theme.body
-                        textFormat: Text.PlainText
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: root.theme.space(2)
-                        Text {
-                            Layout.fillWidth: true
-                            text: root.bright(modelData.html)
-                            textFormat: Text.StyledText
-                            color: root.theme.text
-                            linkColor: root.theme.accentText
-                            font.family: root.theme.readingFamily
-                            font.pixelSize: root.theme.title
-                            lineHeight: 1.6
-                            wrapMode: Text.Wrap
-                            onLinkActivated: link => root.app.openExternal(link)
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            visible: !!modelData.detail
-                            text: modelData.detail || ""
-                            textFormat: Text.StyledText
-                            color: root.theme.muted
-                            linkColor: root.theme.accentText
-                            font.family: root.theme.readingFamily
-                            font.pixelSize: root.theme.title
-                            lineHeight: 1.6
-                            wrapMode: Text.Wrap
-                            onLinkActivated: link => root.app.openExternal(link)
-                        }
-                        Repeater {
-                            model: modelData.sub || []
-                            RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Layout.topMargin: root.theme.space(4)
-                                spacing: root.theme.space(6)
-                                Text {
-                                    Layout.preferredWidth: root.theme.space(16)
-                                    Layout.alignment: Qt.AlignTop
-                                    text: "◦"
-                                    color: root.theme.dim
-                                    font.family: root.theme.mono
-                                    font.pixelSize: root.theme.body
-                                    lineHeight: 1.6 * root.theme.title / root.theme.body
-                                    textFormat: Text.PlainText
-                                }
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: root.bright(modelData)
-                                    textFormat: Text.StyledText
-                                    color: root.theme.text
-                                    linkColor: root.theme.accentText
-                                    font.family: root.theme.readingFamily
-                                    font.pixelSize: root.theme.title
-                                    lineHeight: 1.6
-                                    wrapMode: Text.Wrap
-                                    onLinkActivated: link => root.app.openExternal(link)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: quote
-        RowLayout {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            spacing: root.theme.space(12)
-            Rectangle { Layout.fillHeight: true; implicitWidth: 2; color: root.theme.line }
-            Text {
-                Layout.fillWidth: true
-                text: b.html || ""
-                textFormat: Text.StyledText
-                color: root.theme.muted
-                font.family: root.theme.readingFamily
-                font.pixelSize: root.theme.title
-                font.italic: true
-                lineHeight: 1.55
-                wrapMode: Text.Wrap
-            }
-        }
-    }
-
-    Component {
-        id: code
-        Rectangle {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            implicitHeight: codeText.implicitHeight + root.theme.space(24)
-            color: root.theme.app
-            border.width: 1
-            border.color: root.theme.line
-            radius: root.theme.radius
-            Text {
-                id: codeText
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: root.theme.space(12) }
-                text: b.text || ""
-                textFormat: Text.PlainText
-                color: root.theme.text
-                font.family: root.theme.mono
-                font.pixelSize: root.theme.body
-                wrapMode: Text.WrapAnywhere
-            }
-        }
-    }
-
-    Component {
-        id: table
-        GridLayout {
-            readonly property var b: parent ? parent.block : ({})
-            width: parent ? parent.width : 0
-            columns: Math.max(1, (b.header || []).length)
-            rowSpacing: 0
-            columnSpacing: 0
-            Repeater {
-                model: (b.header || []).map(function (h) { return {html: h, head: true} })
-                    .concat([].concat.apply([], (b.rows || []).map(function (r) { return r.map(function (c) { return {html: c, head: false} }) })))
-                Rectangle {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    implicitHeight: cell.implicitHeight + root.theme.space(12)
-                    color: modelData.head ? root.theme.app : "transparent"
-                    border.width: 1
-                    border.color: root.theme.line
-                    Text {
-                        id: cell
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: root.theme.space(8); rightMargin: root.theme.space(8) }
-                        text: root.bright(modelData.html)
-                        textFormat: Text.StyledText
-                        color: modelData.head ? root.theme.bright : root.theme.text
-                        font.family: modelData.head ? root.theme.mono : root.theme.readingFamily
-                        font.pixelSize: root.theme.body
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: rule
-        Rectangle { width: parent ? parent.width : 0; implicitHeight: 1; color: root.theme.line }
     }
 }

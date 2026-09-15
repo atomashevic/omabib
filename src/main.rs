@@ -171,6 +171,24 @@ enum PdfCommand {
     /// if needed).
     Open { reference: String },
 }
+/// The PDF viewer chosen in Omabib Settings ($XDG_CONFIG_HOME/omabib/settings.json),
+/// when one is set and gtk-launch is available to start its desktop entry.
+fn preferred_pdf_viewer() -> Option<String> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(config.join("omabib/settings.json")).ok()?).ok()?;
+    let viewer = settings["pdf_viewer"].as_str()?.trim();
+    let usable = !viewer.is_empty()
+        && viewer.ends_with(".desktop")
+        && !viewer.contains('/')
+        && std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join("gtk-launch").is_file())
+        });
+    usable.then(|| viewer.to_owned())
+}
 fn main() {
     if let Err(e) = run() {
         eprintln!("{e:#}");
@@ -548,7 +566,12 @@ fn run() -> Result<()> {
             PdfCommand::Open { reference } => {
                 let r = omabib::transport::request("get_pdf", &json!({"ref_id":reference}))?;
                 let path = r["path"].as_str().context("get_pdf returned no path")?;
-                let status = std::process::Command::new("xdg-open").arg(path).status()?;
+                let status = match preferred_pdf_viewer() {
+                    Some(viewer) => std::process::Command::new("gtk-launch")
+                        .args([viewer.as_str(), path])
+                        .status()?,
+                    None => std::process::Command::new("xdg-open").arg(path).status()?,
+                };
                 anyhow::ensure!(status.success(), "Unable to open {path}");
                 return Ok(());
             }

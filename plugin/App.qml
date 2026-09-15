@@ -106,6 +106,14 @@ Item {
     property bool syncBusy: false
     property bool repoBusy: false
     property int syncRequest: -1
+    // Preferences from omabib-settings: {pdf_viewer, ai_cli, ai_desktop}, plus
+    // the installed choices the Settings dialog offers.
+    property var settings: ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+    property var settingsInfo: null
+    property bool settingsBusy: false
+    property var settingsQueue: []
+    readonly property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
+    readonly property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
 
     // The list pane owns these controls; the verbs below address them by
     // their old names.
@@ -118,7 +126,7 @@ Item {
     readonly property string queryText: query ? query.text.trim() : ""
     readonly property bool filtersActive: !!(authorFilter && (authorFilter.text || yearFilter.text || typeFilter.text || labelFilter.text))
     readonly property bool overflowOpen: overflowMenu.opened
-    readonly property bool modalOpen: editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || repoDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
+    readonly property bool modalOpen: settingsDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || repoDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
 
     Theme {
         id: ui
@@ -389,12 +397,14 @@ Item {
         })
     }
     function fileUrl(path) { return "file://" + path.split("/").map(encodeURIComponent).join("/") }
-    function openExternal(url, context) {
+    function openExternal(url, context, isPdf) {
         readingContext=context || readingTarget(selected || currentHit())
         // The browser launcher explicitly focuses an existing browser window.
         // Drop our exclusive layer focus before starting either application.
         dismiss()
-        if(/^https?:\/\//i.test(url)) {
+        if(/^file:\/\//i.test(url) && (isPdf || /\.pdf$/i.test(url)) && settings.pdf_viewer) {
+            Quickshell.execDetached(["gtk-launch", settings.pdf_viewer, decodeURIComponent(url.slice(7))])
+        } else if(/^https?:\/\//i.test(url)) {
             Quickshell.execDetached(["omarchy-launch-browser", url])
         } else {
             Qt.callLater(function() {
@@ -408,7 +418,7 @@ Item {
     function openPdf() {
         var hit=currentHit();if(!hit)return
         var context=readingTarget(hit)
-        rpc("open_target",{id:hit.id},function(r){openExternal(r.url,context)})
+        rpc("open_target",{id:hit.id},function(r){openExternal(r.url,context,r.kind==="pdf")})
     }
     function openLink() {
         var hit=currentHit();if(!hit)return
@@ -420,7 +430,9 @@ Item {
         var hit=currentHit()
         if(!hit || codexBusy)return
         codexBusy=true;error=""
-        codexProcess.command=[desktop?"omabib-chatgpt":"omabib-codex",serviceSocket,hit.id,projectId||""]
+        var launcher=desktop ? (settings.ai_desktop==="claude" ? ["omabib-claude","--desktop"] : ["omabib-chatgpt"])
+                             : (settings.ai_cli==="claude" ? ["omabib-claude"] : ["omabib-codex"])
+        codexProcess.command=launcher.concat([serviceSocket,hit.id,projectId||""])
         codexProcess.running=true
     }
     Process {
@@ -439,6 +451,44 @@ Item {
         if(!id){flash("Not recognized as an arXiv paper");return}
         openExternal(overviewRefId===selected.id && overviewUrl ? overviewUrl : "https://www.alphaxiv.org/abs/"+id)
     }
+    // omabib-settings runs one command at a time; later requests wait their turn.
+    function runSettings(args) {
+        if(settingsProcess.running){settingsQueue=settingsQueue.concat([args]);return}
+        settingsBusy=true
+        settingsProcess.command=["omabib-settings"].concat(args)
+        settingsProcess.running=true
+    }
+    function openSettings() {
+        closeMenus()
+        commandDialog.close()
+        settingsDialog.open()
+        runSettings([])
+    }
+    function setSetting(key, value) {
+        var next=Object.assign({},settings); next[key]=value; settings=next
+        runSettings(["set",key,value])
+    }
+    function registerClaudeDesktop() { runSettings(["register-claude-desktop",serviceSocket]) }
+    Process {
+        id:settingsProcess
+        stdout:SplitParser {onRead:data=>{
+            var r={}
+            try{r=JSON.parse(data)}catch(e){r.error="Could not read settings"}
+            if(r.error){
+                root.error=r.error
+                // A refused change leaves the optimistic value showing; reread.
+                if(settingsProcess.command[1]==="set")root.settingsQueue=root.settingsQueue.concat([[]])
+                return
+            }
+            root.settingsInfo=r
+            root.settings=r.settings
+        }}
+        onExited:(code,status)=>{
+            root.settingsBusy=false
+            if(root.settingsQueue.length){var next=root.settingsQueue[0];root.settingsQueue=root.settingsQueue.slice(1);root.runSettings(next)}
+        }
+    }
+    Component.onCompleted: runSettings([])
     function resetOverview() {
         overviewRefId="";overviewBody="";overviewUrl="";overviewState="idle";overviewMessage="";overviewFetchedAt="";overviewCached=false
     }
@@ -512,7 +562,7 @@ Item {
         pdfBusy=true
         pdfRequest=rpc("get_pdf",{ref_id:hit.id},function(r){
             pdfBusy=false
-            openExternal(root.fileUrl(r.path),context)
+            openExternal(root.fileUrl(r.path),context,true)
         })
         if(pdfRequest<0)pdfBusy=false
     }
@@ -897,7 +947,7 @@ Item {
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");showDetail()})
     }
-    readonly property int actionCount: 23
+    readonly property int actionCount: 24
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
@@ -941,6 +991,7 @@ Item {
         case 21:requestDelete();break
         case 22:openCodex();break
         case 23:openCodex(true);break
+        case 24:openSettings();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
@@ -1110,11 +1161,12 @@ Item {
         function selectTab(name: string): void { root.selectTab(name) }
         function openAssign(): void { root.assign() }
         function openCodex(): void { root.openCodex() }
+        function openSettings(): void { root.openSettings() }
         function openChatGPT(): void { root.openCodex(true) }
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,settings_open:settingsDialog.opened,pdf_viewer:root.settings.pdf_viewer,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
@@ -1272,6 +1324,25 @@ Item {
         Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab","Ctrl+PgUp"];enabled:root.opened&&root.expanded&&!root.modalOpen;onActivated:root.cycleTab(-1)}
         Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen;onActivated:root.dismiss()}
         Shortcut {sequence:"Q";enabled:root.opened&&query.text.trim()===""&&!root.modalOpen;onActivated:root.dismiss()}
+        BibDialog {
+            id:settingsDialog;title:"Settings";iconName:"cog";anchors.centerIn:parent
+            width:Math.min(640,window.width-60);height:Math.min(settingsScroll.contentHeight+ui.space(130),window.height-60);modal:true
+            ColumnLayout {
+                anchors.fill:parent;spacing:ui.space(10)
+                ScrollView {
+                    id:settingsScroll
+                    Layout.fillWidth:true;Layout.fillHeight:true
+                    contentWidth:availableWidth
+                    SettingsPanel {width:settingsScroll.availableWidth;theme:ui;app:root}
+                }
+                RowLayout {
+                    Layout.fillWidth:true;spacing:ui.space(8)
+                    BibButton{variant:"ghost";iconName:"branch";text:"History repository…";onClicked:{settingsDialog.close();root.openRepoSettings()}}
+                    Item{Layout.fillWidth:true}
+                    BibButton{variant:"primary";text:"Done";onClicked:settingsDialog.close()}
+                }
+            }
+        }
         BibDialog {
             id:deleteDialog;title:"Delete reference";iconName:"trash";anchors.centerIn:parent;width:Math.min(500,window.width-60);modal:true;closePolicy:Popup.CloseOnEscape
             onClosed:{if(!root.deleteBusy)root.deletePreview=null}

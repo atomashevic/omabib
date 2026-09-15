@@ -26,6 +26,8 @@ install -m755 "$source_dir/scripts/omabib-capture-note" "$HOME/.local/bin/omabib
 install -m755 "$source_dir/scripts/omabib-chatgpt" "$HOME/.local/bin/omabib-chatgpt"
 install -m755 "$source_dir/scripts/omabib-codex" "$HOME/.local/bin/omabib-codex"
 install -m755 "$source_dir/scripts/omabib-overview" "$HOME/.local/bin/omabib-overview"
+install -m755 "$source_dir/scripts/omabib-settings" "$HOME/.local/bin/omabib-settings"
+install -m755 "$source_dir/scripts/omabib-claude" "$HOME/.local/bin/omabib-claude"
 install -m644 "$source_dir/skills/omabib/SKILL.md" "$HOME/.codex/skills/omabib/SKILL.md"
 omarchy plugin validate "$plugin_dir"
 systemctl --user daemon-reload

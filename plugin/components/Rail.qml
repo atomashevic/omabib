@@ -89,6 +89,10 @@ Rectangle {
             icon: "command"; tooltip: "Actions"; shortcut: "Ctrl+K"
             onClicked: root.app.openCommands()
         }
+        RailButton {
+            icon: "cog"; tooltip: "Settings"
+            onClicked: root.app.openSettings()
+        }
     }
 
     component RailButton: IconButton {

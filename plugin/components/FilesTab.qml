@@ -67,7 +67,7 @@ ScrollPane {
                         textFormat: Text.PlainText
                     }
                 }
-                TextButton { theme: root.theme; variant: "ghost"; visible: row.modelData.exists; icon: "external"; text: "Open"; fontSize: root.theme.small; onClicked: root.app.openExternal(root.app.fileUrl(row.modelData.path)) }
+                TextButton { theme: root.theme; variant: "ghost"; visible: row.modelData.exists; icon: "external"; text: "Open"; fontSize: root.theme.small; onClicked: root.app.openExternal(root.app.fileUrl(row.modelData.path), null, true) }
                 TextButton { theme: root.theme; variant: "ghost"; visible: row.modelData.exists; icon: "copy"; text: "Path"; fontSize: root.theme.small; onClicked: root.app.copy(row.modelData.path) }
                 TextButton { theme: root.theme; variant: "ghost"; visible: !row.modelData.exists; icon: "download"; text: "Pull"; fontSize: root.theme.small; onClicked: root.app.pullPdf(row.modelData.id) }
                 TextButton { theme: root.theme; variant: "ghost"; icon: "unlink"; text: "Remove link"; fontSize: root.theme.small; onClicked: root.app.removePdfLink(row.modelData.id) }

@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Read and change Omabib's desktop preferences: PDF viewer and chat apps.
+
+Preferences live in $XDG_CONFIG_HOME/omabib/settings.json:
+
+  pdf_viewer  desktop entry ID that opens PDFs, or "" for the system default
+  ai_cli      terminal chat: "codex" (Codex CLI) or "claude" (Claude Code)
+  ai_desktop  desktop chat: "chatgpt" (ChatGPT Desktop) or "claude" (Claude Desktop)
+
+  omabib-settings                      print preferences and the available choices
+  omabib-settings set KEY VALUE        change one preference
+  omabib-settings register-claude-desktop SOCKET
+                                       add Omabib's MCP server to Claude Desktop
+"""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+DEFAULTS = {'pdf_viewer': '', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt'}
+CLIS = [('codex', 'Codex CLI', 'codex'), ('claude', 'Claude Code', 'claude')]
+DESKTOPS = [('chatgpt', 'ChatGPT Desktop', 'chatgpt'), ('claude', 'Claude Desktop', 'claude-desktop')]
+
+
+def config_home():
+    return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+
+
+def settings_path():
+    return config_home() / 'omabib/settings.json'
+
+
+def claude_desktop_config_path():
+    return config_home() / 'Claude/claude_desktop_config.json'
+
+
+def load():
+    settings = dict(DEFAULTS)
+    try:
+        stored = json.loads(settings_path().read_text())
+        if isinstance(stored, dict):
+            settings.update({k: v for k, v in stored.items() if k in DEFAULTS and isinstance(v, str)})
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return settings
+
+
+def write_json(path, value, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+    temporary.chmod(mode)
+    temporary.replace(path)
+
+
+def _desktop_entry(path):
+    """The [Desktop Entry] group of a .desktop file, ignoring its actions."""
+    entry, group = {}, None
+    for line in path.read_text(errors='replace').splitlines():
+        line = line.strip()
+        if line.startswith('['):
+            group = line
+            continue
+        if group == '[Desktop Entry]' and '=' in line and not line.startswith('#'):
+            key, value = line.split('=', 1)
+            entry.setdefault(key.strip(), value.strip())
+    return entry
+
+
+def _application_dirs():
+    data_home = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+    data_dirs = os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share'
+    return [data_home / 'applications'] + [Path(d) / 'applications' for d in data_dirs.split(':') if d]
+
+
+def _system_default_pdf():
+    try:
+        return subprocess.run(['xdg-mime', 'query', 'default', 'application/pdf'], capture_output=True,
+                              text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def pdf_viewers():
+    """Installed applications whose desktop entry opens application/pdf."""
+    default = _system_default_pdf()
+    seen, viewers = set(), []
+    for directory in _application_dirs():
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob('*.desktop')):
+            if path.name in seen:
+                continue  # Earlier directories override later ones.
+            seen.add(path.name)
+            entry = _desktop_entry(path)
+            mimes = entry.get('MimeType', '').split(';')
+            if 'application/pdf' not in mimes or entry.get('Hidden') == 'true' or entry.get('Type', 'Application') != 'Application':
+                continue
+            program = (entry.get('TryExec') or entry.get('Exec', '').split(' ')[0]).strip('"')
+            if not program or not shutil.which(program):
+                continue
+            viewers.append(dict(id=path.name, name=entry.get('Name', path.stem), program=Path(program).name,
+                                system_default=path.name == default))
+    # A viewer can ship two entries (zathura and zathura-pdf-mupdf); keep the
+    # system default, or else the first.
+    unique = {}
+    for viewer in sorted(viewers, key=lambda v: not v['system_default']):
+        unique.setdefault(viewer['program'], viewer)
+    return sorted(unique.values(), key=lambda v: (not v['system_default'], v['name'].lower()))
+
+
+def claude_desktop_registered():
+    try:
+        config = json.loads(claude_desktop_config_path().read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+    return isinstance(config.get('mcpServers'), dict) and 'omabib' in config['mcpServers']
+
+
+def show():
+    settings = load()
+    return dict(
+        settings=settings,
+        path=str(settings_path()),
+        pdf_viewers=pdf_viewers(),
+        clis=[dict(id=i, name=n, available=bool(shutil.which(b))) for i, n, b in CLIS],
+        desktops=[dict(id=i, name=n, available=bool(shutil.which(b))) for i, n, b in DESKTOPS],
+        claude_desktop_mcp=claude_desktop_registered(),
+    )
+
+
+def set_value(key, value):
+    if key not in DEFAULTS:
+        raise ValueError(f'Unknown setting {key}')
+    if key == 'pdf_viewer' and value and value not in {v['id'] for v in pdf_viewers()}:
+        raise ValueError(f'{value} is not an installed PDF viewer')
+    if key == 'ai_cli' and value not in {i for i, _, _ in CLIS}:
+        raise ValueError('Terminal chat must be codex or claude')
+    if key == 'ai_desktop' and value not in {i for i, _, _ in DESKTOPS}:
+        raise ValueError('Desktop chat must be chatgpt or claude')
+    settings = load()
+    settings[key] = value
+    write_json(settings_path(), settings)
+
+
+def register_claude_desktop(socket_path):
+    """Merge an `omabib` MCP server into Claude Desktop's config, keeping everything else."""
+    binary = shutil.which('omabib')
+    if not binary:
+        raise RuntimeError('The omabib executable is not on PATH.')
+    path = claude_desktop_config_path()
+    config = {}
+    if path.exists():
+        config = json.loads(path.read_text())
+        if not isinstance(config, dict):
+            raise ValueError(f'{path} is not a JSON object')
+        backup = path.with_name(path.name + '.omabib-backup')
+        if not backup.exists():
+            shutil.copy2(path, backup)
+    servers = config.get('mcpServers')
+    if not isinstance(servers, dict):
+        servers = {}
+    servers['omabib'] = dict(command=binary, args=['mcp'], env=dict(OMABIB_SOCKET=socket_path))
+    config['mcpServers'] = servers
+    write_json(path, config, mode=path.stat().st_mode & 0o777 if path.exists() else 0o600)
+
+
+def main(argv):
+    if argv[:1] == ['set'] and len(argv) == 3:
+        set_value(argv[1], argv[2])
+    elif argv[:1] == ['register-claude-desktop'] and len(argv) == 2:
+        register_claude_desktop(argv[1])
+    elif argv not in ([], ['show']):
+        raise SystemExit(__doc__)
+    print(json.dumps(show()), flush=True)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except SystemExit:
+        raise
+    except Exception as error:
+        print(json.dumps({'error': str(error)}), flush=True)
+        sys.exit(1)

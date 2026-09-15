@@ -31,8 +31,9 @@ Popup {
         {n: 18, group: "Project", icon: "note", label: "Copy project notes"},
         {n: 19, group: "Sync", icon: "sync", label: "Sync history", hint: app.syncChipText()},
         {n: 20, group: "Sync", icon: "branch", label: "Repository settings"},
-        {n: 22, group: "Agents", icon: "terminal", label: "Chat about item in Codex", ref: true},
-        {n: 23, group: "Agents", icon: "chat", label: "Chat about item in ChatGPT", ref: true},
+        {n: 22, group: "Agents", icon: "terminal", label: "Chat about item in " + app.cliName, ref: true},
+        {n: 23, group: "Agents", icon: "chat", label: "Chat about item in " + app.desktopName, ref: true},
+        {n: 24, group: "Settings", icon: "cog", label: "Settings…", hint: "PDF viewer, chat apps"},
         {n: 21, group: "Danger", icon: "trash", label: "Delete current item…", danger: true, ref: true}
     ]
 

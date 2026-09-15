@@ -198,3 +198,61 @@ function _shortTitle(text) {
   var words = String(text).split(/\s+/)
   return words.slice(0, 3).join(" ")
 }
+
+// One rich-text document for a selectable TextEdit, so a selection can run
+// across paragraphs. Block html is already escaped; only fixed tags and the
+// style values passed in (colors and sizes from the theme) are added.
+//   s: {reading, mono, size, heading, small, text, bright, muted, dim, line, codeBg, link}
+function toHtml(list, s) {
+  function css(pairs) { return pairs.join(";") }
+  function emphasize(html) {
+    return String(html)
+      .replace(/<b>/g, "<b><font color=\"" + s.bright + "\">").replace(/<\/b>/g, "</font></b>")
+      .replace(/<a href="([^"]*)">/g, "<a href=\"$1\"><font color=\"" + s.link + "\">").replace(/<\/a>/g, "</font></a>")
+  }
+  var para = css(["margin-top:0", "margin-bottom:" + Math.round(s.size * 0.9) + "px", "line-height:160%"])
+  var out = ["<body style=\"" + css(["font-family:'" + s.reading + "'", "font-size:" + s.size + "px", "color:" + s.text]) + "\">"]
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i]
+    var first = out.length === 1
+    if (b.type === "h2" || b.type === "h3") {
+      var major = b.type === "h2"
+      var number = b.number ? "<span style=\"" + css(["font-family:'" + s.mono + "'", "font-size:" + (major ? s.small + 1 : s.small) + "px", "font-weight:400", "color:" + s.dim]) + "\">" + b.number + "</span>&nbsp;&nbsp;&nbsp;" : ""
+      // A styled <p>, not <h2>/<h3>: Qt scales heading tags past the given size.
+      var tag = "p"
+      out.push("<" + tag + " style=\"" + css(["margin-top:" + (first ? 0 : major ? Math.round(s.size * 1.6) : Math.round(s.size * 0.9)) + "px", "margin-bottom:" + Math.round(s.size * 0.5) + "px", "font-size:" + (major ? s.heading : s.size) + "px", "font-weight:600", "color:" + s.bright]) + "\">" + number + emphasize(b.html) + "</" + tag + ">")
+    } else if (b.type === "p") {
+      out.push("<p style=\"" + para + "\">" + emphasize(b.html) + "</p>")
+    } else if (b.type === "ol" || b.type === "ul") {
+      var items = b.items.map(function (item) {
+        var body = emphasize(item.html)
+        if (item.detail) body += "<br><font color=\"" + s.muted + "\">" + emphasize(item.detail) + "</font>"
+        if (item.sub && item.sub.length) {
+          body += "<ul style=\"" + css(["margin-top:" + Math.round(s.size * 0.4) + "px", "margin-bottom:0", "list-style-type:circle"]) + "\">"
+            + item.sub.map(function (sub) { return "<li style=\"" + css(["margin-bottom:0", "line-height:150%"]) + "\">" + emphasize(sub) + "</li>" }).join("")
+            + "</ul>"
+        }
+        return "<li style=\"" + css(["margin-bottom:" + Math.round(s.size * 0.15) + "px", "line-height:150%"]) + "\">" + body + "</li>"
+      }).join("")
+      var listTag = b.type
+      out.push("<" + listTag + " style=\"" + css(["margin-top:0", "margin-bottom:" + Math.round(s.size * 0.9) + "px", "list-style-type:" + (listTag === "ol" ? "decimal" : "disc")]) + "\">" + items + "</" + listTag + ">")
+    } else if (b.type === "quote") {
+      out.push("<p style=\"" + css(["margin-top:0", "margin-bottom:" + Math.round(s.size * 0.9) + "px", "margin-left:" + s.size + "px", "line-height:160%", "font-style:italic", "color:" + s.muted]) + "\">" + emphasize(b.html) + "</p>")
+    } else if (b.type === "code") {
+      out.push("<pre style=\"" + css(["margin-top:0", "margin-bottom:" + Math.round(s.size * 0.9) + "px", "font-family:'" + s.mono + "'", "font-size:" + s.small + "px", "background-color:" + s.codeBg]) + "\">" + escapeHtml(b.text) + "</pre>")
+    } else if (b.type === "table") {
+      var cell = function (html, head) {
+        var t = head ? "th" : "td"
+        return "<" + t + " style=\"" + css(["padding:" + Math.round(s.size * 0.4) + "px " + Math.round(s.size * 0.7) + "px", "text-align:left", head ? "font-weight:600" : "font-weight:400", "color:" + (head ? s.bright : s.text)]) + "\">" + emphasize(html) + "</" + t + ">"
+      }
+      out.push("<table cellspacing=\"0\" border=\"1\" style=\"" + css(["border-color:" + s.line, "border-style:solid", "margin-bottom:" + Math.round(s.size * 0.9) + "px"]) + "\">"
+        + "<tr>" + b.header.map(function (h) { return cell(h, true) }).join("") + "</tr>"
+        + b.rows.map(function (row) { return "<tr>" + row.map(function (c) { return cell(c, false) }).join("") + "</tr>" }).join("")
+        + "</table>")
+    } else if (b.type === "hr") {
+      out.push("<hr/>")
+    }
+  }
+  out.push("</body>")
+  return out.join("\n")
+}
