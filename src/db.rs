@@ -1147,6 +1147,17 @@ pub fn get_reference(c: &Connection, a: &Value) -> Result<Value> {
     let rid = required(a, "id")?;
     let mut out=c.query_row("SELECT id,citekey,title,authors,year,entry_type,abstract,fields,bibtex,revision,source FROM refs WHERE id=? OR citekey=?",params![rid,rid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"citekey":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"authors":r.get::<_,String>(3)?,"year":r.get::<_,String>(4)?,"entry_type":r.get::<_,String>(5)?,"abstract":r.get::<_,String>(6)?,"fields":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!({})),"bibtex":r.get::<_,String>(8)?,"revision":r.get::<_,i64>(9)?,"source":r.get::<_,String>(10)?}))).context("Reference not found")?;
     let rid = text(&out, "id").to_string();
+    // Projects and the added date are small and always useful to show.
+    let mut projects = c.prepare(
+        "SELECT p.id,p.name FROM associations a JOIN projects p ON p.id=a.project_id WHERE a.ref_id=? ORDER BY p.name",
+    )?;
+    out["projects"] = json!(
+        projects
+            .query_map([&rid], |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?})))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    );
+    out["created_at"] = json!(c.query_row("SELECT created_at FROM refs WHERE id=?", [&rid], |r| r
+        .get::<_, String>(0))?);
     // Always surface a readable PDF path (if any) for agents; full
     // attachment detail (IDs, fingerprints, missing files) stays opt-in.
     out["pdf_path"] = c

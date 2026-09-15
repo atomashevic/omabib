@@ -832,3 +832,24 @@ fn attention_views_and_overview_flag() {
         .unwrap();
     assert_eq!(hit["has_overview"], json!(true));
 }
+
+#[test]
+fn get_reference_lists_projects_and_added_date() {
+    let (_d, l, r) = setup();
+    let rid = first(&r);
+    let beta = l.call("create_project", &json!({"name":"Beta"})).unwrap();
+    let alpha = l.call("create_project", &json!({"name":"Alpha"})).unwrap();
+    for p in [&beta, &alpha] {
+        l.call("associate", &json!({"ref_id":rid,"project_id":p["id"],"labels":[]}))
+            .unwrap();
+    }
+    let got = l.call("get_reference", &json!({"id":rid})).unwrap();
+    let names: Vec<&str> = got["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Alpha", "Beta"]);
+    assert!(got["created_at"].as_str().unwrap().starts_with("20"));
+}
