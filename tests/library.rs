@@ -775,3 +775,60 @@ fn add_reference_requires_input_or_pdf_path() {
     let (_d, l, _) = setup();
     assert!(l.call("add_reference", &json!({})).is_err());
 }
+
+#[test]
+fn attention_views_and_overview_flag() {
+    let (d, l, r) = setup();
+    let book = r["items"][1]["id"].as_str().unwrap().to_string();
+    let keys = |v: &Value| -> Vec<String> {
+        v["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["citekey"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Browsing (blank query) and ranked search both honor the view.
+    let missing = l
+        .call("search", &json!({"query":"","view":"missing_abstract","limit":25}))
+        .unwrap();
+    assert!(!keys(&missing).contains(&"Smith2024".to_string()));
+    assert!(keys(&missing).contains(&"Book2020".to_string()));
+    let ranked = l
+        .call("search", &json!({"query":"networks creativity","view":"missing_abstract"}))
+        .unwrap();
+    assert!(keys(&ranked).is_empty());
+
+    let pdf = d.path().join("book.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
+    l.call("add_pdf", &json!({"ref_id":book,"path":pdf})).unwrap();
+    let no_pdf = l
+        .call("search", &json!({"query":"","view":"missing_pdf","limit":25}))
+        .unwrap();
+    assert!(!keys(&no_pdf).contains(&"Book2020".to_string()));
+    assert!(keys(&no_pdf).contains(&"Smith2024".to_string()));
+    assert!(l.call("search", &json!({"query":"","view":"everything"})).is_err());
+
+    // has_overview follows the cached-summary table.
+    let flag = |q: &str| {
+        l.call("search", &json!({"query":q}))
+            .unwrap()["results"][0]["has_overview"]
+            .clone()
+    };
+    assert_eq!(flag("measurement theory"), json!(false));
+    let c = rusqlite::Connection::open(d.path().join("library.db")).unwrap();
+    c.execute(
+        "INSERT INTO external_summaries(ref_id,source,external_id,source_url,body) VALUES(?,'alphaXiv','x','https://example.org','body')",
+        [&book],
+    )
+    .unwrap();
+    assert_eq!(flag("measurement theory"), json!(true));
+    let browsed = l.call("search", &json!({"query":"","limit":25})).unwrap();
+    let hit = browsed["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["citekey"] == "Book2020")
+        .unwrap();
+    assert_eq!(hit["has_overview"], json!(true));
+}

@@ -62,6 +62,15 @@ fn expression(ts: &[Term], prefix: bool) -> String {
         .join(" AND ")
 }
 const FILTER: &str = "(?2 IS NULL OR r.year=?2) AND (?3 IS NULL OR r.entry_type=?3) AND (?4 IS NULL OR r.id IN (SELECT ref_id FROM associations WHERE project_id=?4)) AND (?5='' OR d.authors LIKE '%'||?5||'%') AND (?6='' OR EXISTS(SELECT 1 FROM associations aa,json_each(aa.labels) j WHERE aa.ref_id=r.id AND (?7 IS NULL OR aa.project_id=?7) AND j.value=?6) OR EXISTS(SELECT 1 FROM notes nn,json_each(nn.labels) j WHERE nn.ref_id=r.id AND (?8 OR nn.project_id IS NULL OR nn.project_id=?7) AND j.value=?6)) AND (d.note_id IS NULL OR ?8 OR d.project_id IS NULL OR d.project_id=?7)";
+/// Library "needs attention" views. A reference without an abstract, or
+/// without a linked PDF (a link whose file went missing still counts as
+/// linked; Files shows it as missing and offers Pull).
+fn view_clause(n: u8) -> String {
+    format!(
+        "(?{n} IS NULL OR (?{n}='missing_abstract' AND r.abstract='') OR \
+         (?{n}='missing_pdf' AND NOT EXISTS(SELECT 1 FROM attachments av WHERE av.ref_id=r.id AND av.file_type='pdf')))"
+    )
+}
 fn optional<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
     a.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
@@ -84,11 +93,12 @@ fn run(c: &Connection, a: &Value, table: &str, q: &str, limit: usize) -> Result<
         ""
     };
     let sql = format!(
-        "SELECT r.id,r.citekey,r.title,r.authors,r.year,r.entry_type,d.note_id,d.project_id,d.citekey,d.title,d.authors,d.abstract,d.keywords,d.body,EXISTS(SELECT 1 FROM associations aa WHERE aa.ref_id=r.id AND aa.project_id=?7) FROM {from} WHERE {condition} AND {FILTER} {order} LIMIT ?9"
+        "SELECT r.id,r.citekey,r.title,r.authors,r.year,r.entry_type,d.note_id,d.project_id,d.citekey,d.title,d.authors,d.abstract,d.keywords,d.body,EXISTS(SELECT 1 FROM associations aa WHERE aa.ref_id=r.id AND aa.project_id=?7) FROM {from} WHERE {condition} AND {FILTER} AND {} {order} LIMIT ?9",
+        view_clause(10)
     );
     let mut statement = c.prepare_cached(&sql)?;
     let tokens = terms(text(a, "query"));
-    let rows=statement.query_map(params![q,optional(a,"year"),optional(a,"entry_type"),optional(a,"project_filter"),normalize(text(a,"author")),text(a,"label"),optional(a,"project_id"),all,limit as i64],|r|{
+    let rows=statement.query_map(params![q,optional(a,"year"),optional(a,"entry_type"),optional(a,"project_filter"),normalize(text(a,"author")),text(a,"label"),optional(a,"project_id"),all,limit as i64,optional(a,"view")],|r|{
   let mut best=String::new();let mut best_weight=0.0;let mut score=0.0;
   for (column,weight) in [(8,20.0),(9,12.0),(10,9.0),(11,2.0),(12,4.0),(13,1.0)] {
    let field:String=r.get(column)?;
@@ -127,7 +137,8 @@ fn browse(
          (?4='' OR EXISTS(SELECT 1 FROM docs d WHERE d.ref_id=r.id AND d.note_id IS NULL AND d.authors LIKE '%'||?4||'%')) AND \
          (?5='' OR EXISTS(SELECT 1 FROM associations aa,json_each(aa.labels) j WHERE aa.ref_id=r.id AND (?6 IS NULL OR aa.project_id=?6) AND j.value=?5) \
           OR EXISTS(SELECT 1 FROM notes nn,json_each(nn.labels) j WHERE nn.ref_id=r.id AND (?7 OR nn.project_id IS NULL OR nn.project_id=?6) AND j.value=?5)) \
-         ORDER BY {order} LIMIT ?8 OFFSET ?9"
+         AND {view} ORDER BY {order} LIMIT ?8 OFFSET ?9",
+        view = view_clause(10)
     );
     let all = a["include_other_projects"] == true || optional(a, "project_id").is_none();
     let mut statement = c.prepare_cached(&sql)?;
@@ -141,7 +152,8 @@ fn browse(
             optional(a, "project_id"),
             all,
             (limit + 1) as i64,
-            offset as i64
+            offset as i64,
+            optional(a, "view")
         ],
         |r| {
             Ok(json!({
@@ -172,6 +184,11 @@ fn browse(
             )
             .optional()?;
         h["has_pdf"] = json!(pdf_path.is_some_and(|p| Path::new(&p).is_file()));
+        h["has_overview"] = json!(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_summaries WHERE ref_id=?)",
+            [&id],
+            |r| r.get::<_, bool>(0)
+        )?);
     }
     Ok(json!({
         "results":results,
@@ -203,6 +220,10 @@ pub fn search_cancellable(
     ensure!(
         matches!(sort, "citekey" | "added_desc"),
         "Unknown sort order"
+    );
+    ensure!(
+        matches!(optional(a, "view"), None | Some("missing_abstract" | "missing_pdf")),
+        "Unknown view"
     );
     let limit = a
         .get("limit")
@@ -383,6 +404,11 @@ pub fn search_cancellable(
             )
             .optional()?;
         h["has_pdf"] = json!(pdf_path.is_some_and(|p| Path::new(&p).is_file()));
+        h["has_overview"] = json!(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_summaries WHERE ref_id=?)",
+            [&id],
+            |r| r.get::<_, bool>(0)
+        )?);
     }
     Ok(
         json!({"results":result,"next_cursor":if more{json!(offset+limit)}else{Value::Null},"corrections":corrected,"ranking":"bounded_field_weighted","candidate_limited":candidate_limited,"elapsed_ms":start.elapsed().as_secs_f64()*1000.0}),
