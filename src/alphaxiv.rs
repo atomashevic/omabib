@@ -42,16 +42,18 @@ fn arxiv_id(fields: &Value) -> Option<String> {
     Some(id.to_string())
 }
 
+/// alphaXiv serves overviews as Markdown with section headings, but the
+/// opening varies: a "# Research Report:" title, or a sentence of prose before
+/// "### 1. Authors". Accept any substantial Markdown with a heading; reject
+/// HTML (an error or login page served with 200).
 fn looks_like_overview(body: &str) -> bool {
-    let heading = body
-        .trim_start()
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim_start_matches('#')
-        .trim();
-    body.len() >= 100
-        && (heading.starts_with("Research Report:") || heading.starts_with("AI Overview"))
+    let text = body.trim_start();
+    text.len() >= 100
+        && !text.starts_with('<')
+        && text.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with('#') && line.trim_start_matches('#').starts_with(' ')
+        })
 }
 
 pub fn get(lib: &Library, args: &Value) -> Result<Value> {
@@ -80,6 +82,12 @@ pub fn get(lib: &Library, args: &Value) -> Result<Value> {
         return Ok(json!({"available":false,"arxiv_id":id,"source_url":url}));
     }
     let response = response.error_for_status()?;
+    let html = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().contains("html"));
+    ensure!(!html, "AlphaXiv did not return an AI overview");
     let mut bytes = Vec::new();
     response.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(
@@ -141,5 +149,15 @@ mod tests {
             "<html><body>{}</body></html>",
             "Text ".repeat(30)
         )));
+    }
+
+    #[test]
+    fn accepts_overviews_that_open_with_prose() {
+        assert!(looks_like_overview(&format!(
+            "This report provides a detailed analysis of the research paper.\n\n### 1. Authors and Institution(s)\n\n{}",
+            "Text ".repeat(30)
+        )));
+        assert!(!looks_like_overview(&"Plain text without any heading. ".repeat(10)));
+        assert!(!looks_like_overview(&format!("#hashtag\n{}", "Text ".repeat(30))));
     }
 }
