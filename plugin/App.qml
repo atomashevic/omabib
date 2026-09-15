@@ -112,6 +112,21 @@ Item {
     property var settingsInfo: null
     property bool settingsBusy: false
     property var settingsQueue: []
+    // Paper tabs: opened beside the library tab, sticky until closed, at most
+    // maxTabs, and kept per library socket in $XDG_STATE_HOME/omabib/tabs.json.
+    readonly property int maxTabs: 10
+    property var paperTabs: []
+    property int activeTab: -1
+    readonly property bool inPaperTab: activeTab >= 0 && activeTab < paperTabs.length
+    readonly property var activePaper: inPaperTab ? paperTabs[activeTab] : null
+    readonly property var tabIds: paperTabs.map(function(t){return t.id})
+    // The library tab's detail while a paper tab is showing.
+    property var searchView: ({selected: null, detailTab: "overview"})
+    property var paperCache: ({})
+    property var overviewCache: ({})
+    property var tabsStore: ({})
+    property bool tabsRestored: false
+    readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omabib"
     readonly property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
     readonly property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
 
@@ -318,7 +333,8 @@ Item {
         try { payload = JSON.parse(payloadJson || "{}") } catch (e) {}
         if(payload.action==="quick_note") { openQuickNote(payload); return }
         if(editorDialog.opened) { editor.forceActiveFocus(); return }
-        if(payload.socket_path && payload.socket_path!==serviceSocket){readingContext=null;resetOverview();socket.connected=false;serviceSocket=payload.socket_path;Qt.callLater(function(){socket.connected=true})}
+        if(payload.socket_path && payload.socket_path!==serviceSocket){saveTabs();readingContext=null;resetOverview();overviewCache=({});socket.connected=false;serviceSocket=payload.socket_path;applyTabs();Qt.callLater(function(){socket.connected=true})}
+        if(payload.ref_id || payload.query!==undefined || payload.action==="add") activateTab(-1)
         pendingOpenRefId=payload.ref_id||""
         if(pendingOpenRefId){authorFilter.text="";yearFilter.text="";typeFilter.text="";labelFilter.text="";attentionView=""}
         if(payload.query!==undefined) query.text=payload.query
@@ -337,6 +353,146 @@ Item {
     }
     function closeMenus() {
         projectMenu.close();attentionMenu.close();overflowMenu.close()
+    }
+    // The reference the toolbar, palette and shortcuts act on: the active
+    // paper tab's, or the library tab's current result.
+    function targetRef() {
+        if(inPaperTab) return selected && selected.id===activePaper.id ? selected : activePaper
+        return currentHit()
+    }
+    function setSearchSelected(value) {
+        if(inPaperTab) searchView=Object.assign({},searchView,{selected:value})
+        else selected=value
+    }
+    function enterSearch() {
+        activeTab=-1
+        detailTab=searchView.detailTab||"overview"
+        selected=searchView.selected
+        searchView={selected:null,detailTab:"overview"}
+        if(expanded && hits.length) showDetail()
+        Qt.callLater(function(){if(!root.inPaperTab)query.forceActiveFocus()})
+    }
+    function enterPaper(index) {
+        var tab=paperTabs[index]
+        activeTab=index
+        detailTab=tab.detail_tab||"overview"
+        selected=paperCache[tab.id]||null
+        loadPaper(index)
+        Qt.callLater(function(){if(root.inPaperTab)paperKeys.forceActiveFocus()})
+    }
+    function activateTab(index) {
+        if(index<-1 || index>=paperTabs.length)return
+        closeMenus()
+        if(index===activeTab){
+            if(index<0)query.forceActiveFocus()
+            else if(!selected)loadPaper(index)
+            return
+        }
+        if(!inPaperTab) searchView={selected:selected,detailTab:detailTab}
+        if(index<0) enterSearch()
+        else enterPaper(index)
+        saveTabs()
+    }
+    function cycleTopTab(delta) {
+        var total=paperTabs.length+1
+        activateTab((activeTab+1+delta+total)%total-1)
+    }
+    function loadPaper(index) {
+        var tab=paperTabs[index]
+        if(!tab || !socket.connected)return
+        var id=tab.id
+        rpc("get_reference",{id:id,project_id:projectId||null,include_notes:true,include_attachments:true,include_other_projects:includeOtherNotes,note_chars:65536},function(r){
+            root.paperCache[id]=r
+            var at=root.tabIds.indexOf(id)
+            if(at>=0 && (root.paperTabs[at].title!==(r.title||r.citekey) || root.paperTabs[at].citekey!==r.citekey))root.updateTab(at,{title:r.title||r.citekey,citekey:r.citekey})
+            if(root.inPaperTab && root.activePaper.id===id)root.selected=r
+        })
+    }
+    function updateTab(index, changes) {
+        var tabs=paperTabs.slice()
+        tabs[index]=Object.assign({},tabs[index],changes)
+        paperTabs=tabs
+        saveTabs()
+    }
+    // Opens a paper beside the library tab, or shows its existing tab.
+    function openInTab(ref, background) {
+        ref=ref||targetRef()
+        if(!ref)return
+        var at=tabIds.indexOf(ref.id)
+        if(at>=0){
+            if(background)flash(ref.citekey+" is already open in a tab")
+            else activateTab(at)
+            return
+        }
+        if(paperTabs.length>=maxTabs){flash(maxTabs+" tabs are open. Close one to open another.");return}
+        var current=!inPaperTab && selected && selected.id===ref.id
+        if(current)paperCache[ref.id]=selected
+        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,detail_tab:current?detailTab:"overview"}])
+        if(background){saveTabs();flash("Opened "+ref.citekey+" in a tab")}
+        else activateTab(paperTabs.length-1)
+    }
+    function closeTab(index) {
+        if(index<0 || index>=paperTabs.length)return
+        var closing=paperTabs[index]
+        var tabs=paperTabs.slice()
+        tabs.splice(index,1)
+        delete paperCache[closing.id]
+        closeMenus()
+        if(index===activeTab){
+            activeTab=-1
+            paperTabs=tabs
+            var next=index<tabs.length ? index : index-1
+            if(next<0)enterSearch()
+            else enterPaper(next)
+        } else {
+            var keep=activeTab>index ? activeTab-1 : activeTab
+            paperTabs=tabs
+            activeTab=keep
+        }
+        saveTabs()
+    }
+    function closeActiveTab() { if(inPaperTab)closeTab(activeTab) }
+    function findInLibrary() {
+        if(!inPaperTab)return
+        focusOnReference(activePaper.citekey)
+    }
+    function saveTabs() {
+        if(!tabsRestored)return
+        var store=Object.assign({},tabsStore)
+        if(paperTabs.length)store[serviceSocket]={tabs:paperTabs,active:activeTab}
+        else delete store[serviceSocket]
+        tabsStore=store
+        tabsFile.setText(JSON.stringify({version:1,libraries:store},null,2)+"\n")
+    }
+    function restoreTabs(text) {
+        if(tabsRestored)return
+        var libraries={}
+        try{
+            var parsed=JSON.parse(text||"{}")
+            if(parsed && parsed.libraries && typeof parsed.libraries==="object")libraries=parsed.libraries
+        }catch(e){}
+        tabsStore=libraries
+        tabsRestored=true
+        applyTabs()
+    }
+    // Shows the tabs saved for the current library socket.
+    function applyTabs() {
+        if(!tabsRestored)return
+        var entry=tabsStore[serviceSocket]||{}
+        var tabs=(Array.isArray(entry.tabs)?entry.tabs:[]).filter(function(t){return t && typeof t.id==="string" && typeof t.citekey==="string"})
+            .slice(0,maxTabs).map(function(t){return {id:t.id,citekey:t.citekey,title:String(t.title||t.citekey),detail_tab:detailTabs.indexOf(t.detail_tab)>=0?t.detail_tab:"overview"}})
+        if(inPaperTab){activeTab=-1;selected=searchView.selected;detailTab=searchView.detailTab||"overview";searchView={selected:null,detailTab:"overview"}}
+        paperCache=({})
+        paperTabs=tabs
+        var active=Number.isInteger(entry.active)?entry.active:-1
+        if(active>=0 && active<tabs.length){searchView={selected:selected,detailTab:detailTab};enterPaper(active)}
+    }
+    FileView {
+        id:tabsFile
+        path:root.stateDir+"/tabs.json"
+        atomicWrites:true
+        onLoaded:root.restoreTabs(text())
+        onLoadFailed:error=>root.restoreTabs("")
     }
     function readingTarget(hit) {
         return hit ? {ref_id:hit.id,project_id:projectId,socket_path:serviceSocket} : null
@@ -370,9 +526,12 @@ Item {
         if(!payload.ref_id || !payload.socket_path || !Number.isInteger(payload.page) || payload.page<1) return
         if(payload.socket_path!==serviceSocket || !socket.connected) {
             pendingQuickNote=payload
+            saveTabs()
             resetOverview()
+            overviewCache=({})
             socket.connected=false
             serviceSocket=payload.socket_path
+            applyTabs()
             Qt.callLater(function(){socket.connected=true})
             return
         }
@@ -416,18 +575,18 @@ Item {
         }
     }
     function openPdf() {
-        var hit=currentHit();if(!hit)return
+        var hit=targetRef();if(!hit)return
         var context=readingTarget(hit)
         rpc("open_target",{id:hit.id},function(r){openExternal(r.url,context,r.kind==="pdf")})
     }
     function openLink() {
-        var hit=currentHit();if(!hit)return
+        var hit=targetRef();if(!hit)return
         var context=readingTarget(hit)
         rpc("open_target",{id:hit.id,prefer:"link"},function(r){openExternal(r.url,context)})
     }
     function arxivIdOf(ref) { return Format.arxivId(ref) }
     function openCodex(desktop) {
-        var hit=currentHit()
+        var hit=targetRef()
         if(!hit || codexBusy)return
         codexBusy=true;error=""
         var launcher=desktop ? (settings.ai_desktop==="claude" ? ["omabib-claude","--desktop"] : ["omabib-chatgpt"])
@@ -488,7 +647,10 @@ Item {
             if(root.settingsQueue.length){var next=root.settingsQueue[0];root.settingsQueue=root.settingsQueue.slice(1);root.runSettings(next)}
         }
     }
-    Component.onCompleted: runSettings([])
+    Component.onCompleted: {
+        Quickshell.execDetached(["mkdir","-p",stateDir])
+        runSettings([])
+    }
     function resetOverview() {
         overviewRefId="";overviewBody="";overviewUrl="";overviewState="idle";overviewMessage="";overviewFetchedAt="";overviewCached=false
     }
@@ -500,6 +662,12 @@ Item {
         if(!ref)return
         if(!arxivIdOf(ref)){overviewRefId=ref.id;overviewBody="";overviewState="unavailable";overviewMessage="Not recognized as an arXiv paper";return}
         if(!force && overviewRefId===ref.id && overviewState!=="idle" && overviewState!=="error")return
+        var cached=overviewCache[ref.id]
+        if(!force && cached){
+            overviewRefId=ref.id;overviewBody=cached.body;overviewUrl=cached.url;overviewFetchedAt=cached.fetchedAt;overviewCached=true;overviewMessage=""
+            overviewState="ready"
+            return
+        }
         overviewRefId=ref.id;overviewBody="";overviewUrl="";overviewMessage="";overviewFetchedAt="";overviewCached=false
         overviewState="loading"
         if(overviewProcess.running)return
@@ -524,6 +692,7 @@ Item {
             root.overviewFetchedAt=r.fetched_at||""
             root.overviewCached=!!r.cached
             root.overviewState="ready"
+            root.overviewCache[root.overviewRefId]={body:r.body,url:r.source_url,fetchedAt:r.fetched_at||""}
         }}
         onExited:(code,status)=>{
             root.overviewBusy=false
@@ -534,7 +703,8 @@ Item {
     }
     function selectTab(key) {
         if(detailTabs.indexOf(key)<0)return
-        if(!expanded || !selected){var hit=currentHit();if(!hit)return;detailTab=key;showDetail();return}
+        if(!inPaperTab && (!expanded || !selected)){var hit=currentHit();if(!hit)return;detailTab=key;showDetail();return}
+        if(!selected){detailTab=key;return}
         if(key==="ai" && !arxivIdOf(selected)){flash("AI summaries are available for arXiv papers");return}
         detailTab=key
         if(key==="ai")loadOverview(false)
@@ -545,6 +715,7 @@ Item {
         var i=keys.indexOf(detailTab)
         selectTab(keys[(i+delta+keys.length)%keys.length])
     }
+    onDetailTabChanged: if(inPaperTab && activePaper.detail_tab!==detailTab) updateTab(activeTab,{detail_tab:detailTab})
     onSelectedChanged: {
         var id=selected?selected.id:""
         if(id!==lastSelectedId){
@@ -557,7 +728,7 @@ Item {
     property bool pdfBusy: false
     property int pdfRequest: -1
     function getPdf() {
-        var hit=currentHit();if(!hit||pdfBusy)return
+        var hit=targetRef();if(!hit||pdfBusy)return
         var context=readingTarget(hit)
         pdfBusy=true
         pdfRequest=rpc("get_pdf",{ref_id:hit.id},function(r){
@@ -567,17 +738,17 @@ Item {
         if(pdfRequest<0)pdfBusy=false
     }
     function copyPdfPath() {
-        var hit=currentHit();if(!hit)return
+        var hit=targetRef();if(!hit)return
         rpc("get_pdf",{ref_id:hit.id,download:false},function(r){copy(r.path)})
     }
     function pullPdf(attachmentId) {
-        rpc("pull_pdf",{attachment_id:attachmentId},function(){flash("PDF restored");showDetail()})
+        rpc("pull_pdf",{attachment_id:attachmentId},function(){flash("PDF restored");reloadDetail()})
     }
     function removePdfLink(attachmentId) {
-        rpc("remove_pdf",{attachment_id:attachmentId},function(){flash("Attachment removed; file kept");showDetail()})
+        rpc("remove_pdf",{attachment_id:attachmentId},function(){flash("Attachment removed; file kept");reloadDetail()})
     }
     function lookupMetadata() {
-        var hit=currentHit();if(!hit || metadataBusy)return
+        var hit=targetRef();if(!hit || metadataBusy)return
         metadataLookup=null;metadataChoice=null;metadataInfo="Looking up online metadata…";metadataDialog.open()
         metadataBusy=true
         metadataRequest=rpc("lookup_metadata",{id:hit.id},function(r){metadataLookup=r;metadataInfo=(r.warnings||[]).join("\n");if(!r.candidates.length)metadataInfo+="\nNo matching metadata found.";if(r.candidates.length===1)selectMetadata(0)})
@@ -661,6 +832,7 @@ Item {
         rpc("list_projects", {}, function(r) { projects = r.projects; updateProjectName() })
         rpc("status", {}, function(r) { referenceCount = r.references })
         search(false)
+        if(inPaperTab) loadPaper(activeTab)
     }
     function flash(text) {
         notice=text
@@ -737,8 +909,8 @@ Item {
                 var keep=hits.findIndex(function(h){return h.id===(requested||priorId)})
                 results.currentIndex=keep>=0?keep:(hits.length?0:-1)
                 if(hits.length)results.positionViewAtIndex(results.currentIndex,ListView.Contain)
-                if(requested){pendingOpenRefId="";selected=null;expanded=keep>=0}
-                else if (expanded && keep<0) { selected=null; expanded=false }
+                if(requested){pendingOpenRefId="";setSearchSelected(null);expanded=keep>=0}
+                else if (expanded && keep<0) { setSearchSelected(null); expanded=false }
             }
             error = requested && keep<0 ? "The PDF reference could not be shown in this search." : ""
             responseMs = Date.now() - searchedAt
@@ -769,7 +941,7 @@ Item {
         var requestedId = hit.id
         var requestedProjectId = projectId
         rpc("get_reference", {id:hit.id,project_id:projectId||null,include_notes:true,include_attachments:true,include_other_projects:includeOtherNotes,note_chars:65536}, function(r) {
-            if (projectId===requestedProjectId && currentHit() && currentHit().id===requestedId) selected = r
+            if (projectId===requestedProjectId && currentHit() && currentHit().id===requestedId) setSearchSelected(r)
         })
     }
     function collapseDetail() {
@@ -778,7 +950,11 @@ Item {
     }
     function toggleOtherNotes() {
         includeOtherNotes=!includeOtherNotes
-        showDetail()
+        reloadDetail()
+    }
+    function reloadDetail() {
+        if(inPaperTab) loadPaper(activeTab)
+        else showDetail()
     }
     function loadMoreNotes() {
         if(!selected || selected.next_note_cursor===null || selected.next_note_cursor===undefined)return
@@ -803,9 +979,9 @@ Item {
         Quickshell.clipboardText = text
         flash("Copied")
     }
-    function copyKey() { var hit=currentHit(); if (hit) { copy(hit.citekey); dismiss() } }
+    function copyKey() { var hit=targetRef(); if (hit) { copy(hit.citekey); dismiss() } }
     function copyFormat(format) {
-        var hit=currentHit();if(!hit)return
+        var hit=targetRef();if(!hit)return
         if(format==="key")copy(hit.citekey)
         else if(format==="latex")copy("\\cite{"+hit.citekey+"}")
         else if(format==="pandoc")copy("[@"+hit.citekey+"]")
@@ -874,7 +1050,7 @@ Item {
         args.idempotency_key=editToken
         noteSaving=editKind==="note"
         var submittedToken=editToken
-        noteSaveRequest=rpc(method,args,function(r){if(editToken!==submittedToken)return;editorDialog.close();if(wasQuick)return;flash("Saved");refresh();if(expanded)showDetail();showImportReport(r)})
+        noteSaveRequest=rpc(method,args,function(r){if(editToken!==submittedToken)return;editorDialog.close();if(wasQuick)return;flash("Saved");refresh();if(!inPaperTab && expanded)showDetail();showImportReport(r)})
         if(noteSaveRequest<0)noteSaving=false
     }
     function showImportReport(r) {
@@ -940,14 +1116,14 @@ Item {
         root.rpc("repo_setup",{mode:"local",repo_path:repoPath.text,remote_url:repoRemote.text,branch:repoBranch.text||"main",fix_lfs:true},function(r){root.repoBusy=false;root.repoSettings=r;repoDialog.close();root.flash("Repository settings saved")})
     }
     function choosePdf() {
-        var hit=currentHit();if(!hit)return
+        var hit=targetRef();if(!hit)return
         attachmentRefId=hit.id;pickerKind="pdf";bibFileDialog.open()
     }
     function acceptFile(url) {
         if(pickerKind!=="pdf"){importBibFile(url);return}
-        rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");showDetail()})
+        rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");reloadDetail()})
     }
-    readonly property int actionCount: 24
+    readonly property int actionCount: 26
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
@@ -992,12 +1168,15 @@ Item {
         case 22:openCodex();break
         case 23:openCodex(true);break
         case 24:openSettings();break
+        case 25:openInTab(null,false);break
+        case 26:closeActiveTab();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
     // added reference itself, expanded — it's what the user just asked for.
     function focusOnReference(citekey) {
         if(!citekey)return
+        activateTab(-1)
         expanded=true
         detailTab="overview"
         attentionView=""
@@ -1057,7 +1236,7 @@ Item {
         items.push({separator:true})
         items.push({key:"__create",label:"Create project…",icon:"plus"})
         projectMenu.items=items
-        projectMenu.openAt(anchor||listPane.projectAnchor, anchor&&anchor!==listPane.projectAnchor?"side":"left")
+        projectMenu.openAt(anchor||tabStrip.projectAnchor, anchor&&anchor!==tabStrip.projectAnchor?"side":"left")
     }
     function openAttentionMenu(anchor) {
         attentionMenu.items=[
@@ -1088,23 +1267,24 @@ Item {
         overflowMenu.openAt(anchor,"right")
     }
     function detailThenEdit(kind) {
+        if(inPaperTab){if(selected)edit(kind,null);return}
         var hit=currentHit();if(!hit)return
         rpc("get_reference",{id:hit.id,project_id:projectId||null,include_notes:true,include_attachments:true},function(r){selected=r;expanded=true;edit(kind,null)})
     }
     function assign() {
-        var hit=currentHit()
+        var hit=targetRef()
         if(!hit || !projects.length)return
         closeMenus()
         assignTargetId=hit.id
         projectDialog.open()
     }
     function requestDelete() {
-        var hit=currentHit()
+        var hit=targetRef()
         if(!hit || deleteBusy)return
         var id=hit.id
         error=""
         rpc("delete_reference_preview",{id:id},function(r){
-            if(!currentHit() || currentHit().id!==id)return
+            if(!targetRef() || targetRef().id!==id)return
             deletePreview=r
             deleteDialog.open()
         })
@@ -1118,7 +1298,11 @@ Item {
             deleteBusy=false;deleteRequest=-1;deleteDialog.close()
             if(readingContext && readingContext.ref_id===target.id)readingContext=null
             if(overviewRefId===target.id)resetOverview()
-            selected=null;expanded=false
+            delete overviewCache[target.id]
+            var fromTab=inPaperTab && activePaper.id===target.id
+            var tabIndex=tabIds.indexOf(target.id)
+            if(tabIndex>=0)closeTab(tabIndex)
+            if(!fromTab){setSearchSelected(null);expanded=false}
             if(query.text.trim()===target.citekey)query.text=""
             flash("Deleted "+r.citekey+" · PDF files kept")
             refresh();query.forceActiveFocus()
@@ -1143,7 +1327,7 @@ Item {
         noteDeleteRequest=rpc("delete_note",{id:target.id,expected_revision:target.revision,confirm_ref_id:target.ref_id,idempotency_key:"ui-delete-note-"+Date.now()+"-"+Math.random().toString(36).slice(2)},function(){
             noteDeleteBusy=false;noteDeleteRequest=-1;noteDeleteDialog.close()
             flash("Note deleted")
-            refresh();showDetail()
+            refresh();if(!inPaperTab)showDetail()
         })
         if(noteDeleteRequest<0)noteDeleteBusy=false
     }
@@ -1162,11 +1346,14 @@ Item {
         function openAssign(): void { root.assign() }
         function openCodex(): void { root.openCodex() }
         function openSettings(): void { root.openSettings() }
+        function openTab(): void { root.openInTab(null, false) }
+        function activateTab(index: int): void { root.activateTab(index) }
+        function closeTab(index: int): void { root.closeTab(index) }
         function openChatGPT(): void { root.openCodex(true) }
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,settings_open:settingsDialog.opened,pdf_viewer:root.settings.pdf_viewer,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),active_tab:root.activeTab,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_viewer:root.settings.pdf_viewer,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
@@ -1230,8 +1417,9 @@ Item {
             id: card
             visible: !root.quickNoteMode
             anchors.centerIn: parent
-            width: Math.min(parent.width-48,root.expanded?1320:800)
-            height: Math.min(parent.height-64,root.expanded?840:620)
+            readonly property bool wide: root.expanded || root.inPaperTab
+            width: Math.min(parent.width-48,wide?1320:800)
+            height: Math.min(parent.height-64,wide?840:620)
             color: ui.app
             radius: ui.radius
             border.color: ui.border
@@ -1239,7 +1427,19 @@ Item {
             clip: true
             Behavior on width { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
             Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-            MouseArea { anchors.fill:parent;onClicked:query.forceActiveFocus() }
+            MouseArea { anchors.fill:parent;onClicked:root.inPaperTab?paperKeys.forceActiveFocus():query.forceActiveFocus() }
+            // Keyboard focus while a paper tab shows: typing starts a search in the library tab.
+            Item {
+                id: paperKeys
+                Keys.onPressed: event => {
+                    if(!root.inPaperTab || event.text==="" || (event.modifiers & (Qt.ControlModifier|Qt.AltModifier|Qt.MetaModifier)) || !/\S/.test(event.text))return
+                    root.activateTab(-1)
+                    query.text=event.text
+                    query.cursorPosition=query.text.length
+                    query.forceActiveFocus()
+                    event.accepted=true
+                }
+            }
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 1
@@ -1253,37 +1453,56 @@ Item {
                         theme: ui
                         app: root
                     }
-                    ListPane {
-                        id: listPane
-                        Layout.fillHeight: true
-                        Layout.fillWidth: !root.expanded
-                        Layout.preferredWidth: root.expanded ? Math.round(Math.max(ui.space(340), Math.min(ui.space(430), card.width * 0.32))) : -1
-                        theme: ui
-                        app: root
-                    }
-                    Rectangle { visible: root.expanded; Layout.fillHeight: true; implicitWidth: 1; color: ui.line }
                     ColumnLayout {
-                        visible: root.expanded
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 0
-                        ErrorBanner { Layout.fillWidth: true }
-                        DetailPane {
+                        TabStrip {
+                            id: tabStrip
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
                             theme: ui
                             app: root
                         }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 0
+                            ListPane {
+                                id: listPane
+                                visible: !root.inPaperTab
+                                Layout.fillHeight: true
+                                Layout.fillWidth: !root.expanded
+                                Layout.preferredWidth: root.expanded ? Math.round(Math.max(ui.space(340), Math.min(ui.space(430), card.width * 0.32))) : -1
+                                theme: ui
+                                app: root
+                            }
+                            Rectangle { visible: root.expanded && !root.inPaperTab; Layout.fillHeight: true; implicitWidth: 1; color: ui.line }
+                            ColumnLayout {
+                                visible: card.wide
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                spacing: 0
+                                ErrorBanner { Layout.fillWidth: true }
+                                DetailPane {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    theme: ui
+                                    app: root
+                                }
+                            }
+                        }
                     }
                 }
-                ErrorBanner { Layout.fillWidth: true; visible: !root.expanded && root.error !== "" }
+                ErrorBanner { Layout.fillWidth: true; visible: !card.wide && root.error !== "" }
                 StatusBar {
                     Layout.fillWidth: true
                     theme: ui
                     notice: root.notice
-                    hints: root.expanded
-                        ? [["↑↓", "navigate"], ["↵", "open"], [root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^1–5", "tabs"], ["^K", "actions"], ["q", "close"]]
-                        : [["↑↓", "navigate"], ["↵", "open"], ["Tab", "details"], ["^S", "sort"], ["^K", "actions"], ["q", "close"]]
+                    hints: root.inPaperTab
+                        ? [[root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^1–5", "sections"], ["^PgUp/Dn", "switch tab"], ["^W", "close tab"], ["type", "search"], ["q", "close"]]
+                        : root.expanded
+                        ? [["↑↓", "navigate"], ["↵", "open"], [root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^T", "new tab"], ["^1–5", "sections"], ["^K", "actions"], ["q", "close"]]
+                        : [["↑↓", "navigate"], ["↵", "open"], ["Tab", "details"], ["^T", "new tab"], ["^K", "actions"], ["q", "close"]]
                 }
             }
 
@@ -1312,7 +1531,20 @@ Item {
         }
         Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.getPdf()}
         Shortcut {sequence:"Ctrl+U";enabled:root.opened&&!editorDialog.opened;onActivated:root.openLink()}
-        Shortcut {sequence:"Ctrl+S";enabled:root.opened&&!root.modalOpen;onActivated:root.toggleBrowseSort()}
+        Shortcut {sequence:"Ctrl+S";enabled:root.opened&&!root.modalOpen&&!root.inPaperTab;onActivated:root.toggleBrowseSort()}
+        Shortcut {sequence:"Ctrl+T";enabled:root.opened&&!root.modalOpen&&!root.inPaperTab;onActivated:root.openInTab(null,false)}
+        Shortcut {sequence:"Ctrl+W";enabled:root.opened&&!root.modalOpen&&root.inPaperTab;onActivated:root.closeActiveTab()}
+        Shortcut {sequence:"Ctrl+F";enabled:root.opened&&!root.modalOpen;onActivated:{root.activateTab(-1);query.forceActiveFocus();query.selectAll()}}
+        Shortcut {sequences:["Ctrl+PgDown"];enabled:root.opened&&!root.modalOpen;onActivated:root.cycleTopTab(1)}
+        Shortcut {sequences:["Ctrl+PgUp"];enabled:root.opened&&!root.modalOpen;onActivated:root.cycleTopTab(-1)}
+        Repeater {
+            model: 10
+            Item {
+                required property int index
+                // Alt+0 is the library tab; Alt+1–9 the paper tabs in order.
+                Shortcut {sequence:"Alt+"+index;enabled:root.opened&&!root.modalOpen;onActivated:root.activateTab(index-1)}
+            }
+        }
         Shortcut {sequence:"Ctrl+K";enabled:root.opened&&!editorDialog.opened;onActivated:root.openCommands()}
         Shortcut {sequence:"Ctrl+P";enabled:root.opened&&!root.modalOpen;onActivated:root.openProjectMenu(null)}
         Shortcut {sequence:"Ctrl+1";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("overview")}
@@ -1320,10 +1552,10 @@ Item {
         Shortcut {sequence:"Ctrl+3";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("notes")}
         Shortcut {sequence:"Ctrl+4";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("files")}
         Shortcut {sequence:"Ctrl+5";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("bibtex")}
-        Shortcut {sequences:["Ctrl+Tab","Ctrl+PgDown"];enabled:root.opened&&root.expanded&&!root.modalOpen;onActivated:root.cycleTab(1)}
-        Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab","Ctrl+PgUp"];enabled:root.opened&&root.expanded&&!root.modalOpen;onActivated:root.cycleTab(-1)}
+        Shortcut {sequences:["Ctrl+Tab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(1)}
+        Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(-1)}
         Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen;onActivated:root.dismiss()}
-        Shortcut {sequence:"Q";enabled:root.opened&&query.text.trim()===""&&!root.modalOpen;onActivated:root.dismiss()}
+        Shortcut {sequence:"Q";enabled:root.opened&&(root.inPaperTab||query.text.trim()==="")&&!root.modalOpen;onActivated:root.dismiss()}
         BibDialog {
             id:settingsDialog;title:"Settings";iconName:"cog";anchors.centerIn:parent
             width:Math.min(640,window.width-60);height:Math.min(settingsScroll.contentHeight+ui.space(130),window.height-60);modal:true
@@ -1560,7 +1792,7 @@ Item {
             leftPadding:root.quickNoteMode?ui.space(16):ui.space(20)
             rightPadding:root.quickNoteMode?ui.space(16):ui.space(20)
             modal:true;closePolicy:Popup.CloseOnEscape
-            onClosed:{if(!root.noteSaving){root.discardClip(root.clipPath);root.clipPath=""}if(root.quickNoteMode){root.quickNoteMode=false;root.dismiss()}}
+            onClosed:{if(!root.noteSaving){root.discardClip(root.clipPath);root.clipPath=""}if(root.quickNoteMode){root.quickNoteMode=false;if(root.inPaperTab)root.loadPaper(root.activeTab);root.dismiss()}}
             ColumnLayout {
                 anchors.fill:parent;spacing:ui.space(8)
                 Text {visible:root.editKind==="note";text:root.noteTargetTitle;color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;font.weight:Font.DemiBold;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText}

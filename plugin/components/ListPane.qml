@@ -15,7 +15,6 @@ Rectangle {
     readonly property Item yearField: year.input
     readonly property Item typeField: type.input
     readonly property Item labelField: label.input
-    readonly property Item projectAnchor: projectChip
     property bool filtersOpen: false
     property bool wide: false
 
@@ -35,25 +34,6 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: root.theme.space(4)
                 Chip {
-                    id: projectChip
-                    theme: root.theme
-                    icon: "folder"
-                    text: root.app.projectName
-                    trailingIcon: "chevronDown"
-                    bordered: false
-                    clickable: true
-                    textColor: root.theme.bright
-                    tooltip: "Project  ·  Ctrl+P"
-                    onClicked: root.app.openProjectMenu(projectChip)
-                }
-                Text {
-                    text: root.app.referenceCount.toLocaleString(Qt.locale(), "f", 0) + " references"
-                    color: root.theme.dim
-                    font.family: root.theme.mono
-                    font.pixelSize: root.theme.body
-                    textFormat: Text.PlainText
-                }
-                Chip {
                     theme: root.theme
                     visible: root.app.attentionView !== ""
                     icon: "alert"
@@ -62,7 +42,6 @@ Rectangle {
                     trailingIcon: "close"
                     clickable: true
                     tooltip: "Show all references"
-                    Layout.leftMargin: root.theme.space(4)
                     onClicked: root.app.setAttentionView("")
                 }
                 Item { Layout.fillWidth: true }
@@ -96,7 +75,7 @@ Rectangle {
                 inputName: "searchField"
                 onTextChanged: root.app.queryEdited()
                 onShortcutOverride: event => {
-                    if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_U || event.key === Qt.Key_O))
+                    if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_U || event.key === Qt.Key_O || event.key === Qt.Key_Return || event.key === Qt.Key_Enter))
                         event.accepted = true
                     else if (event.key === Qt.Key_Q && event.modifiers === Qt.NoModifier && search.text.trim() === "")
                         event.accepted = true
@@ -108,6 +87,7 @@ Rectangle {
                     else if (ctrl && event.key === Qt.Key_O) { root.app.getPdf(); event.accepted = true }
                     else if (event.key === Qt.Key_Down || (ctrl && event.key === Qt.Key_N)) { root.app.navigate(1); event.accepted = true }
                     else if (event.key === Qt.Key_Up || (ctrl && event.key === Qt.Key_P)) { root.app.navigate(-1); event.accepted = true }
+                    else if (ctrl && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.app.openInTab(null, false); event.accepted = true }
                     else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                         if (root.app.hits.length === 0 && root.app.looksLikeIdentifier(search.text)) root.app.startQuickAdd(search.text.trim())
                         else root.app.openPdf()
@@ -175,7 +155,9 @@ Rectangle {
                 theme: root.theme
                 current: ListView.isCurrentItem
                 showAge: root.app.browseSort === "added_desc" && root.app.queryText === ""
+                inTab: root.app.tabIds.indexOf(modelData.id) >= 0
                 onActivated: index => root.app.selectHit(index)
+                onOpenInTab: (index, background) => root.app.openInTab(root.app.hits[index], background)
             }
             footer: Item {
                 width: list.width

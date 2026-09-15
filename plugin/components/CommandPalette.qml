@@ -17,6 +17,8 @@ Popup {
         {n: 8, group: "Add", icon: "link", label: "Add DOI"},
         {n: 11, group: "Open", icon: "external", label: "Open link", shortcut: "Ctrl+U", ref: true},
         {n: 12, group: "Open", icon: "pdf", label: "Open PDF", hint: "downloads if needed", shortcut: app.pdfShortcut, ref: true},
+        {n: 25, group: "Open", icon: "tabPlus", label: "Open in a new tab", shortcut: "Ctrl+T", ref: true},
+        {n: 26, group: "Open", icon: "close", label: "Close tab", shortcut: "Ctrl+W"},
         {n: 2, group: "Copy", icon: "copy", label: "Copy citation key", ref: true},
         {n: 3, group: "Copy", icon: "copy", label: "Copy LaTeX citation", hint: "\\cite{…}", ref: true},
         {n: 4, group: "Copy", icon: "copy", label: "Copy Pandoc / Quarto citation", hint: "[@…]", ref: true},

@@ -119,6 +119,7 @@ Rectangle {
                     tooltip: "AI overview"; shortcut: "Ctrl+2"
                     onClicked: root.app.selectTab("ai")
                 }
+                IconButton { theme: root.theme; visible: !root.app.inPaperTab; icon: "tabPlus"; iconSize: root.theme.title + 3; tooltip: "Open in a new tab"; shortcut: "Ctrl+T"; onClicked: root.app.openInTab(null, false) }
                 IconButton { theme: root.theme; icon: "terminal"; iconSize: root.theme.title + 3; tooltip: "Chat about this in " + root.app.cliName; busy: root.app.codexBusy; onClicked: root.app.openCodex(false) }
                 IconButton { theme: root.theme; icon: "chat"; iconSize: root.theme.title + 3; tooltip: "Chat about this in " + root.app.desktopName; enabled: !root.app.codexBusy; onClicked: root.app.openCodex(true) }
                 Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(6); Layout.rightMargin: root.theme.space(6) }
@@ -152,11 +153,21 @@ Rectangle {
                 }
                 IconButton {
                     theme: root.theme
+                    visible: !root.app.inPaperTab
                     icon: "close"
                     iconSize: root.theme.title + 1
                     iconColor: root.theme.dim
                     tooltip: "Hide details"
                     onClicked: root.app.collapseDetail()
+                }
+                IconButton {
+                    theme: root.theme
+                    visible: root.app.inPaperTab
+                    icon: "search"
+                    iconSize: root.theme.title + 1
+                    iconColor: root.theme.dim
+                    tooltip: "Find in library"
+                    onClicked: root.app.findInLibrary()
                 }
             }
         }
@@ -195,7 +206,7 @@ Rectangle {
         visible: !root.ref
         icon: "book"
         iconColor: root.theme.muted
-        title: root.app.hits.length ? "Loading…" : "Nothing selected"
-        hint: root.app.hits.length ? "" : "Search on the left, or press + to add a reference"
+        title: root.app.inPaperTab || root.app.hits.length ? "Loading…" : "Nothing selected"
+        hint: root.app.inPaperTab || root.app.hits.length ? "" : "Search on the left, or press + to add a reference"
     }
 }

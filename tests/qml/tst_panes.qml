@@ -48,6 +48,25 @@ Rectangle {
         property string actionDigits: ""
         property bool overflowOpen: overflowMenu.opened
         property var calls: []
+        readonly property int maxTabs: 10
+        property var paperTabs: []
+        property int activeTab: -1
+        readonly property bool inPaperTab: activeTab >= 0 && activeTab < paperTabs.length
+        readonly property var tabIds: paperTabs.map(function (t) { return t.id })
+        function activateTab(i) { note("activateTab:" + i); activeTab = i }
+        function closeTab(i) {
+            note("closeTab:" + i)
+            var tabs = paperTabs.slice(); tabs.splice(i, 1)
+            if (activeTab >= tabs.length) activeTab = tabs.length - 1
+            paperTabs = tabs
+        }
+        function openInTab(ref, background) {
+            note("openInTab:" + (ref ? ref.citekey : "current") + ":" + (background ? "background" : "front"))
+            if (!ref || tabIds.indexOf(ref.id) >= 0 || paperTabs.length >= maxTabs) return
+            paperTabs = paperTabs.concat([{id: ref.id, citekey: ref.citekey, title: ref.title, detail_tab: "overview"}])
+            if (!background) activeTab = paperTabs.length - 1
+        }
+        function findInLibrary() { note("findInLibrary") }
         property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
         property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
         property var settings: ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
@@ -131,9 +150,20 @@ Rectangle {
             Layout.fillHeight: true
             spacing: 0
             Rail { id: rail; Layout.fillHeight: true; theme: ui; app: app }
-            ListPane { id: list; Layout.fillHeight: true; Layout.preferredWidth: 420; theme: ui; app: app }
-            Rectangle { Layout.fillHeight: true; implicitWidth: 1; color: ui.line }
-            DetailPane { id: detail; Layout.fillWidth: true; Layout.fillHeight: true; theme: ui; app: app }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 0
+                TabStrip { id: strip; Layout.fillWidth: true; theme: ui; app: app }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 0
+                    ListPane { id: list; visible: !app.inPaperTab; Layout.fillHeight: true; Layout.preferredWidth: 420; theme: ui; app: app }
+                    Rectangle { visible: !app.inPaperTab; Layout.fillHeight: true; implicitWidth: 1; color: ui.line }
+                    DetailPane { id: detail; Layout.fillWidth: true; Layout.fillHeight: true; theme: ui; app: app }
+                }
+            }
         }
         StatusBar {
             id: status
@@ -182,6 +212,8 @@ Rectangle {
             app.detailTab = "overview"
             app.overviewState = "ready"
             app.attentionView = ""
+            app.paperTabs = []
+            app.activeTab = -1
             list.resultsView.currentIndex = 1
         }
 
@@ -265,6 +297,47 @@ Rectangle {
             shot("2f-settings")
             settingsSheet.visible = false
             app.settings = ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+        }
+        function test_9b_tabs_open_switch_close() {
+            var rows = list.resultsView
+            var row = rows.itemAtIndex(0)
+            mouseDoubleClickSequence(row)
+            compare(app.paperTabs.length, 1)
+            compare(app.activeTab, 0, "double-click opens and shows the tab")
+            app.activeTab = -1
+            mouseClick(rows.itemAtIndex(3), 20, 20, Qt.MiddleButton)
+            compare(app.paperTabs.length, 2)
+            compare(app.activeTab, -1, "middle-click opens in the background")
+            wait(50)
+            verify(rows.itemAtIndex(0).inTab && rows.itemAtIndex(3).inTab && !rows.itemAtIndex(1).inTab, "rows open in a tab are marked")
+            var second = find(strip, "paperTab:" + Fixture.hits[3].citekey)
+            verify(second, "tab rendered")
+            mouseClick(second, 40, second.height / 2)
+            compare(app.activeTab, 1)
+            app.selected = Fixture.ref
+            shot("9b-paper-tab")
+            mouseClick(find(strip, "libraryTab"), 30, 10)
+            compare(app.activeTab, -1)
+            mouseClick(find(strip, "paperTab:" + Fixture.hits[0].citekey), 40, 10, Qt.MiddleButton)
+            compare(app.paperTabs.length, 1, "middle-click closes a tab")
+            var close = find(find(strip, "paperTab:" + Fixture.hits[3].citekey), "closeTab")
+            mouseClick(close)
+            compare(app.paperTabs.length, 0, "close button closes a tab")
+        }
+        function test_9c_tabs_stack_when_full() {
+            var tabs = []
+            for (var i = 0; i < 10; i++) tabs.push({id: "t" + i, citekey: "paper_" + i + "_2026", title: "A fairly long paper title number " + i + " about stacking tabs", detail_tab: i === 4 ? "ai" : "overview"})
+            app.paperTabs = tabs
+            app.activeTab = 4
+            wait(250)
+            var deck = find(strip, "paperTabs")
+            verify(strip.stacked, "ten tabs overlap at this width")
+            var first = find(strip, "paperTab:paper_0_2026"), last = find(strip, "paperTab:paper_9_2026"), active = find(strip, "paperTab:paper_4_2026")
+            verify(last.x + last.width <= deck.width + 1, "the last tab stays inside the strip")
+            verify(active.z > first.z && active.z > last.z, "the active tab is on top")
+            shot("9c-tabs-stacked")
+            app.openInTab({id: "t10", citekey: "one_too_many", title: "Eleventh"}, false)
+            compare(app.paperTabs.length, 10, "no eleventh tab")
         }
         function test_3_notes() {
             app.detailTab = "notes"

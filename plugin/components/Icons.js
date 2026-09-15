@@ -52,7 +52,10 @@ var GLYPHS = {
   folderUp: 0xF19F0,      // folder-arrow-up
   cog: 0xF08BB,           // cog-outline
   radioOn: 0xF043E,       // radiobox-marked
-  radioOff: 0xF043D       // radiobox-blank
+  radioOff: 0xF043D,      // radiobox-blank
+  tab: 0xF04E9,           // tab
+  tabPlus: 0xF075C,       // tab-plus
+  document: 0xF09EE       // file-document-outline
 }
 
 function has(name) {

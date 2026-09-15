@@ -12,8 +12,11 @@ Item {
     required property int index
     property bool current: false
     property bool showAge: true
+    property bool inTab: false
 
     signal activated(int index)
+    // Middle-click opens the paper in a background tab; double-click opens and shows it.
+    signal openInTab(int index, bool background)
 
     readonly property var hit: modelData || ({})
 
@@ -62,6 +65,7 @@ Item {
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
             }
+            Badge { theme: root.theme; visible: root.inTab; icon: "tab"; text: "tab"; tint: root.theme.accentText }
             Badge { theme: root.theme; visible: !!root.hit.has_pdf; icon: "pdf"; text: "PDF" }
             Badge { theme: root.theme; visible: !!root.hit.has_overview; icon: "sparkles"; text: "AI" }
             Badge { theme: root.theme; visible: (root.hit.note_count || 0) > 0; icon: "note"; text: String(root.hit.note_count || 0) }
@@ -100,7 +104,12 @@ Item {
         id: mouse
         anchors.fill: parent
         hoverEnabled: true
-        onClicked: root.activated(root.index)
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        onClicked: mouse => {
+            if (mouse.button === Qt.MiddleButton) root.openInTab(root.index, true)
+            else root.activated(root.index)
+        }
+        onDoubleClicked: mouse => { if (mouse.button === Qt.LeftButton) root.openInTab(root.index, false) }
     }
 
     component Badge: RowLayout {

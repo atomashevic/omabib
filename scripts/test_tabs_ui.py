@@ -151,6 +151,37 @@ with tempfile.TemporaryDirectory(prefix='omabib-tabs-ui-') as dirname:
         wait(lambda: state()['notice'] != '')
         assert state()['detail_tab'] == 'notes', state()
         print('PASS: the AI summary stays unavailable for a paper without an arXiv ID', flush=True)
+
+        # Paper tabs: open, switch, survive closing the popup, close manually.
+        tabs_file = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))) / 'omabib/tabs.json'
+        ctrl('t')
+        wait(lambda: state()['tabs'] == ['tabs_plain_fixture'] and state()['active_tab'] == 0)
+        keys('-M', 'alt', '-k', '0', '-m', 'alt')
+        wait(lambda: state()['active_tab'] == -1 and state()['query_focused'])
+        command('omarchy-shell', 'omabib', 'setQuery', 'Tabs arXiv fixture')
+        wait(lambda: state()['results'] == ['tabs_arxiv_fixture'])
+        keys('-M', 'ctrl', '-k', 'Return', '-m', 'ctrl')
+        wait(lambda: state()['tabs'] == ['tabs_plain_fixture', 'tabs_arxiv_fixture'] and state()['active_tab'] == 1)
+        wait(lambda: state()['selected'] == ids['tabs_arxiv_fixture'])
+        capture('5-paper-tab')
+        ctrl('Prior')
+        wait(lambda: state()['active_tab'] == 0 and state()['selected'] == ids['tabs_plain_fixture'])
+        print('PASS: Ctrl+T and Ctrl+Enter open paper tabs; Alt+0 and Ctrl+PgUp switch tabs', flush=True)
+
+        command('omarchy-shell', 'shell', 'hide', 'omabib')
+        wait(lambda: not state()['opened'])
+        saved = json.loads(tabs_file.read_text())['libraries'][str(sock)]
+        assert [t['citekey'] for t in saved['tabs']] == ['tabs_plain_fixture', 'tabs_arxiv_fixture'] and saved['active'] == 0, saved
+        command('omarchy-shell', 'shell', 'summon', 'omabib', '{}')
+        wait(lambda: state()['opened'] and state()['active_tab'] == 0 and state()['selected'] == ids['tabs_plain_fixture'])
+        print('PASS: tabs and the active tab survive closing the popup', flush=True)
+
+        ctrl('w')
+        wait(lambda: state()['tabs'] == ['tabs_arxiv_fixture'] and state()['active_tab'] == 0)
+        command('omarchy-shell', 'omabib', 'closeTab', '0')
+        wait(lambda: state()['tabs'] == [] and state()['active_tab'] == -1)
+        assert str(sock) not in json.loads(tabs_file.read_text())['libraries']
+        print('PASS: Ctrl+W and closeTab close tabs and forget the library entry', flush=True)
     finally:
         try:
             command('omarchy-shell', 'shell', 'hide', 'omabib')
