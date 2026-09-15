@@ -149,3 +149,15 @@ The installed popup launched and focused a new Ghostty window. After the normal 
 ## ChatGPT Desktop entry handoff
 
 The installed ChatGPT button opens Desktop's Codex mode with a prefilled, unsent Omabib prompt. Its stable Omabib project has a local Omabib skill, an MCP configuration for the originating service socket, and a private snapshot per entry. `scripts/test_codex.py` verifies the generated mode, context, skill, MCP socket, model and effort. In the live DYNAMITE handoff, the draft displayed **GPT-5.6 Sol Medium**. Desktop's Work mode retained its previously selected Astra model despite the workspace config; only Codex mode is supported for the Omabib Desktop button.
+
+## UI redesign: rail, tabs, AI summary renderer (2026-09-15)
+
+The popup was rebuilt from one 1,272-line `App.qml` into `App.qml` (state, RPC, IPC, dialogs) plus presentational components in `plugin/components/`. `scripts/install.sh` now replaces that directory as a whole.
+
+- **Rust:** `cargo test --locked` passes (45 tests, including the `view` filter, `has_overview`, `get_reference` projects/`created_at`, and the relaxed alphaXiv overview check). `cargo clippy --all-targets -- -D warnings` is clean.
+- **Renderer:** `node scripts/test_overview_text.js` passes (10 tests) on both real alphaXiv shapes: `# Research Report:` with `##` sections, and a prose opening with `###` sections and nested bullets (2609.05993). Both yield six sections.
+- **Offscreen QML:** `tests/qml/tst_foundation.qml` and `tests/qml/tst_panes.qml` pass under `qmltestrunner` (12 pane tests: every tab, loading/unavailable states, the overflow menu, palette filtering and numbered actions, empty states). Screenshots were compared against the approved mockup.
+- **Static:** `omarchy plugin validate plugin` passes. `qmllint` on `App.qml` reports only unqualified-access style warnings and Quickshell type-registration limits.
+- **Installed:** after `./scripts/install.sh`, the shell kept serving the previously compiled `App.qml` through `rescanPlugins` and a plugin disable/enable; `omarchy restart shell` loaded the new version with no QML errors in the shell log. The popup opened on the real library in compact and three-pane layouts, and the AI summary loaded a 16,030-character cached overview through `selectTab ai`.
+- **alphaXiv fix:** `get_alphaxiv_overview` for 2609.05993 had failed with "AlphaXiv did not return an AI overview" because the report opens with prose rather than a title. After the fix it returns `available: true` and caches the 19,209-character report; search now flags the paper `has_overview`.
+- **Not run:** the wtype-driven live tests (`scripts/test_ui.py`, `scripts/test_tabs_ui.py` and the other `*_ui.py` scripts) were not run this round, because the desktop was in active use and they take over the keyboard.
