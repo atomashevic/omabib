@@ -4,7 +4,7 @@
   "name": "Omabib",
   "version": "0.1.0",
   "author": "Aleksandar",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "description": "Instant bibliography search and project-aware research notes",
   "kinds": [
     "panel",

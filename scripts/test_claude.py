@@ -55,23 +55,20 @@ with tempfile.TemporaryDirectory(prefix='omabib-claude-test-') as directory:
         assert '&' not in url.split('?q=', 1)[1] and unquote(url.split('?q=', 1)[1]) == prompt
         print('PASS: Claude Desktop link prompts for the entry through Omabib tools', flush=True)
 
-        # Settings: defaults, validation, and PDF viewers from desktop entries.
-        assert settings['load']() == dict(pdf_viewer='', ai_cli='codex', ai_desktop='chatgpt')
-        apps = root / 'data/applications'; apps.mkdir(parents=True)
-        (apps / 'viewer.desktop').write_text('[Desktop Entry]\nType=Application\nName=Test Viewer\nExec=sh %f\nMimeType=text/plain;application/pdf;\n\n[Desktop Action Other]\nName=Ignored\n')
-        (apps / 'notpdf.desktop').write_text('[Desktop Entry]\nType=Application\nName=Not a viewer\nExec=sh %f\nMimeType=text/plain;\n')
-        (apps / 'missing.desktop').write_text('[Desktop Entry]\nType=Application\nName=Missing\nExec=no-such-program-omabib %f\nMimeType=application/pdf;\n')
+        # Settings: defaults and validation. An old pdf_viewer key is ignored.
+        assert settings['load']() == dict(ai_cli='codex', ai_desktop='chatgpt')
+        (root / 'config/omabib').mkdir(parents=True, exist_ok=True)
+        (root / 'config/omabib/settings.json').write_text(json.dumps(dict(pdf_viewer='org.pwmt.zathura.desktop')))
         shown = json.loads(subprocess.check_output([sys.executable, str(scripts / 'omabib-settings')], text=True))
-        assert [v['id'] for v in shown['pdf_viewers']] == ['viewer.desktop'], shown['pdf_viewers']
-        assert shown['pdf_viewers'][0]['name'] == 'Test Viewer'
-        for key, value in [('pdf_viewer', 'viewer.desktop'), ('ai_cli', 'claude'), ('ai_desktop', 'claude')]:
+        assert 'pdf_viewers' not in shown and shown['settings'] == dict(ai_cli='codex', ai_desktop='chatgpt'), shown
+        for key, value in [('ai_cli', 'claude'), ('ai_desktop', 'claude')]:
             out = json.loads(subprocess.check_output([sys.executable, str(scripts / 'omabib-settings'), 'set', key, value], text=True))
             assert out['settings'][key] == value, out
-        for key, value in [('pdf_viewer', 'missing.desktop'), ('ai_cli', 'gemini'), ('colour', 'red')]:
+        for key, value in [('pdf_viewer', 'viewer.desktop'), ('ai_cli', 'gemini'), ('colour', 'red')]:
             result = subprocess.run([sys.executable, str(scripts / 'omabib-settings'), 'set', key, value], capture_output=True, text=True)
             assert result.returncode == 1 and 'error' in json.loads(result.stdout), result.stdout
-        assert json.loads((root / 'config/omabib/settings.json').read_text()) == dict(pdf_viewer='viewer.desktop', ai_cli='claude', ai_desktop='claude')
-        print('PASS: settings validate choices and list installed PDF viewers', flush=True)
+        assert json.loads((root / 'config/omabib/settings.json').read_text()) == dict(ai_cli='claude', ai_desktop='claude')
+        print('PASS: settings validate chat choices and drop the old PDF viewer key', flush=True)
 
         # Claude Desktop registration keeps the user's config and backs it up once.
         desktop_config = root / 'config/Claude/claude_desktop_config.json'

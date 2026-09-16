@@ -18,6 +18,8 @@ pub struct Library {
     readers: Mutex<Vec<Connection>>,
     pub spell_ready: std::sync::atomic::AtomicBool,
     pub spell: RwLock<SymSpell<UnicodeStringStrategy>>,
+    /// MuPDF rendering for reader tabs and clip notes.
+    pub pdf: crate::pdf::Pdf,
 }
 pub struct ReadLease<'a> {
     connection: Option<Connection>,
@@ -280,6 +282,7 @@ impl Library {
                     .build()
                     .unwrap(),
             ),
+            pdf: crate::pdf::Pdf::new(crate::pdf::cache_dir()),
         };
         if eager {
             lib.load_vocabulary()?;
@@ -342,6 +345,11 @@ impl Library {
             "pull_pdf" => crate::attachments::pull(self, a),
             "get_note_image" => crate::visual::get(&read_connection(&self.path)?, a),
             "get_alphaxiv_overview" => crate::alphaxiv::get(self, a),
+            "render_math" => crate::math::render(a),
+            "pdf_open" => crate::pdf::open(self, a),
+            "pdf_render" => crate::pdf::render(self, a),
+            "pdf_text" => crate::pdf::text(self, a),
+            "pdf_search" => crate::pdf::search(self, a),
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(a),
             "lookup_abstract" => lookup_abstract(self, a),
@@ -481,7 +489,7 @@ impl Library {
             }
             "add_visual_note" => {
                 let n = write_note(&tx, method, a)?;
-                crate::visual::insert(&tx, a, text(&n, "id"))?;
+                crate::visual::insert(&tx, a, text(&n, "id"), &self.pdf)?;
                 note(&tx, text(&n, "id"))?
             }
             "add_note" | "update_note" => write_note(&tx, method, a)?,

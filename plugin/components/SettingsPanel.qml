@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Preferences: which app opens PDFs and which apps the chat buttons start.
+// Preferences: which apps the chat buttons start. PDFs open in reader tabs.
 // App.qml owns reading and writing them through omabib-settings.
 ColumnLayout {
     id: root
@@ -11,11 +11,6 @@ ColumnLayout {
 
     readonly property var info: app.settingsInfo || ({})
     readonly property var settings: app.settings || ({})
-    readonly property var viewers: info.pdf_viewers || []
-    readonly property string systemViewer: {
-        for (var i = 0; i < viewers.length; i++) if (viewers[i].system_default) return viewers[i].name
-        return ""
-    }
 
     spacing: theme.space(8)
 
@@ -66,28 +61,7 @@ ColumnLayout {
         font.pixelSize: root.theme.body
     }
 
-    SectionLabel { theme: root.theme; text: "PDF viewer" }
-    Choice {
-        objectName: "pdfViewer:"
-        label: "System default"
-        detail: root.systemViewer
-        checked: !root.settings.pdf_viewer
-        onChosen: root.app.setSetting("pdf_viewer", "")
-    }
-    Repeater {
-        model: root.viewers
-        Choice {
-            required property var modelData
-            objectName: "pdfViewer:" + modelData.id
-            label: modelData.name
-            detail: modelData.program + (modelData.system_default ? " · system default" : "")
-            checked: root.settings.pdf_viewer === modelData.id
-            onChosen: root.app.setSetting("pdf_viewer", modelData.id)
-        }
-    }
-    Hint { text: "Opens PDFs from Open PDF, Enter and the Files tab. Page notes (Super+N) and opening Omabib from a PDF (Super+B) work in Zathura." }
-
-    SectionLabel { theme: root.theme; text: "Terminal chat"; Layout.topMargin: root.theme.space(10) }
+    SectionLabel { theme: root.theme; text: "Terminal chat" }
     Repeater {
         model: root.info.clis || []
         Choice {

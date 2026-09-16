@@ -51,6 +51,14 @@ QtObject {
     readonly property int display: Style.font.display
 
     function space(px) { return Style.space(px) }
+    // Colors and sizes for Markdown.toHtml, with code blocks on `codeBackground`.
+    function markdownStyle(codeBackground) {
+        return {
+            reading: readingFamily, mono: mono, size: title, heading: heading, small: small,
+            text: css(text), bright: css(bright), muted: css(muted), dim: css(dim), line: css(line),
+            codeBg: css(codeBackground), link: css(accentText), urgent: css(urgent)
+        }
+    }
     // An opaque #rrggbb for rich-text CSS, blending a translucent color over the card.
     function css(c) {
         var a = c.a

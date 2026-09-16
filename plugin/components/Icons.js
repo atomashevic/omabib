@@ -55,7 +55,22 @@ var GLYPHS = {
   radioOff: 0xF043D,      // radiobox-blank
   tab: 0xF04E9,           // tab
   tabPlus: 0xF075C,       // tab-plus
-  document: 0xF09EE       // file-document-outline
+  document: 0xF09EE,      // file-document-outline
+  bold: 0xF0264,          // format-bold
+  italic: 0xF0277,        // format-italic
+  code: 0xF0174,          // code-tags
+  math: 0xF04A0,          // sigma
+  list: 0xF0279,          // format-list-bulleted
+  heading: 0xF0274,       // format-header-pound
+  quote: 0xF0757,         // format-quote-open
+  crop: 0xF019E,          // crop — the clip rectangle tool
+  zoomIn: 0xF06ED,        // magnify-plus-outline
+  zoomOut: 0xF06EC,       // magnify-minus-outline
+  fitWidth: 0xF084E,      // arrow-expand-horizontal
+  fitPage: 0xF0EF6,       // fit-to-page-outline
+  sidebar: 0xF10AB,       // dock-right — the reader's notes pane
+  outline: 0xF0836,       // table-of-contents
+  chevronUp: 0xF0143      // chevron-up
 }
 
 function has(name) {

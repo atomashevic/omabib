@@ -2,6 +2,13 @@
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir="${CARGO_TARGET_DIR:-$source_dir/target}"
+# MuPDF is compiled from source by the mupdf crate; it needs clang (for bindgen) and make.
+for tool in clang make; do
+  if ! command -v "$tool" >/dev/null; then
+    echo "Building Omabib's PDF reader needs $tool (pacman -S clang make)." >&2
+    exit 1
+  fi
+done
 cargo build --release --locked --manifest-path "$source_dir/Cargo.toml"
 plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/omabib"
 if [[ -e "$plugin_dir" && ! -f "$plugin_dir/.omabib-managed" ]]; then
@@ -21,8 +28,13 @@ mv "$plugin_dir/components.new" "$plugin_dir/components"
 touch "$plugin_dir/.omabib-managed"
 install -m755 "$source_dir/scripts/omabib-history" "$HOME/.local/bin/omabib-history"
 install -m755 "$source_dir/scripts/omabib-close-first" "$HOME/.local/bin/omabib-close-first"
-install -m755 "$source_dir/scripts/omabib-quick-note" "$HOME/.local/bin/omabib-quick-note"
-install -m755 "$source_dir/scripts/omabib-capture-note" "$HOME/.local/bin/omabib-capture-note"
+# Zathura page notes moved into Omabib's reader tabs. Remove the old helpers
+# only when they are Omabib's own.
+for helper in omabib-quick-note omabib-capture-note; do
+  if [[ -f "$HOME/.local/bin/$helper" ]] && grep -q "Zathura" "$HOME/.local/bin/$helper"; then
+    rm -f "$HOME/.local/bin/$helper"
+  fi
+done
 install -m755 "$source_dir/scripts/omabib-chatgpt" "$HOME/.local/bin/omabib-chatgpt"
 install -m755 "$source_dir/scripts/omabib-codex" "$HOME/.local/bin/omabib-codex"
 install -m755 "$source_dir/scripts/omabib-overview" "$HOME/.local/bin/omabib-overview"

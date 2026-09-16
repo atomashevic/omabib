@@ -9,9 +9,17 @@ const assert = require('assert');
 
 function load(name) {
   const file = path.join(__dirname, '..', 'plugin', 'components', name);
-  const source = fs.readFileSync(file, 'utf8').replace(/^\.pragma library\s*$/m, '');
   const context = {};
   vm.createContext(context);
+  // `.import "X.js" as Y` becomes a global Y holding that file's functions.
+  let source = fs.readFileSync(file, 'utf8').replace(/^\.pragma library\s*$/m, '');
+  source = source.replace(/^\.import "([^"]+\.js)" as (\w+)\s*$/mg, (_, dep, alias) => {
+    const inner = {};
+    vm.createContext(inner);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'plugin', 'components', dep), 'utf8').replace(/^\.pragma library\s*$/m, ''), inner);
+    context[alias] = inner;
+    return '';
+  });
   vm.runInContext(source, context, { filename: file });
   // Values created inside the vm context are not deepStrictEqual to this
   // realm's; round-trip them through JSON so assertions compare structure.

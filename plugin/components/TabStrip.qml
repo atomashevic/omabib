@@ -101,7 +101,7 @@ Rectangle {
                     required property int index
                     readonly property bool active: root.app.activeTab === index
                     readonly property bool hot: tabMouse.containsMouse || close.hot
-                    objectName: "paperTab:" + modelData.citekey
+                    objectName: (modelData.kind === "pdf" ? "pdfTab:" : "paperTab:") + modelData.citekey
                     x: index * root.step
                     width: root.tabWidth
                     height: deck.height
@@ -136,7 +136,7 @@ Rectangle {
                         spacing: root.theme.space(6)
                         Icon {
                             theme: root.theme
-                            name: tab.modelData.detail_tab === "ai" ? "sparkles" : "document"
+                            name: tab.modelData.kind === "pdf" ? "pdf" : tab.modelData.detail_tab === "ai" ? "sparkles" : "document"
                             size: root.theme.body + 1
                             color: tab.active ? root.theme.accentText : root.theme.dim
                         }

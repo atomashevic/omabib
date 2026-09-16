@@ -34,6 +34,34 @@ Rectangle {
         property bool allNotes: false
         property bool includeOtherNotes: false
         property var noteImages: ({})
+        property int connectionEpoch: 0
+        property var lastClip: null
+        property var composer: null
+        property bool composerSaving: false
+        property string composerError: ""
+        property var saved: null
+        function saveComposer(body, projectId, labels, evidence) { saved = {body: body, projectId: projectId, labels: labels, evidence: evidence}; note("saveComposer") }
+        function cancelComposer() { composer = null; note("cancelComposer") }
+        property var activePaper: activeTab >= 0 && activeTab < paperTabs.length ? paperTabs[activeTab] : null
+        function arxivIdOf(ref) { return ref && ref.fields && /arxiv/i.test(ref.fields.doi || "") ? "2609.01234" : "" }
+        function updateTab(index, changes) { var tabs = paperTabs.slice(); tabs[index] = Object.assign({}, tabs[index], changes); paperTabs = tabs }
+        function editClip(clip) { lastClip = clip; note("editClip:" + clip.page) }
+        // The reader's service calls, answered from fixtures.
+        function rpc(method, params, callback, onError) {
+            note(method + ":" + (params.page || params.query || params.ref_id || ""))
+            var page = function (i) { return {x0: 0, y0: 0, w: 612, h: 792} }
+            var answer = null
+            if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
+            else if (method === "pdf_render") answer = {path: String(Qt.resolvedUrl("math/display.svg")).replace(/^file:\/\//, ""), width: 612, height: 792, scale: params.scale, links: params.page === 1 ? [{rect: [72, 300, 300, 330], page: 3, uri: null}] : []}
+            else if (method === "pdf_text") answer = {page: params.page, words: [["Sparse", 72, 66, 148, 99, 0, 0], ["attention", 154, 66, 246, 99, 0, 0], ["Table", 72, 129, 110, 145, 1, 0], ["headline", 176, 129, 221, 145, 1, 0]]}
+            else if (method === "pdf_search") answer = {query: params.query, hits: [{page: 2, rects: [[176, 129, 221, 145]]}], total: 1, truncated: false}
+            if (!answer) { if (onError) onError("unsupported"); return 1 }
+            Qt.callLater(callback, answer)
+            return 1
+        }
+        property var mathCache: ({})
+        property var mathRequested: []
+        function ensureMath(items) { mathRequested = mathRequested.concat(Array.from(items || [], function (m) { return m.key })) }
         property string homeDir: "/home/reader"
         property bool filtersActive: false
         property string queryText: ""
@@ -69,15 +97,10 @@ Rectangle {
         function findInLibrary() { note("findInLibrary") }
         property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
         property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
-        property var settings: ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+        property var settings: ({ai_cli: "codex", ai_desktop: "chatgpt"})
         property bool settingsBusy: false
         property var settingsInfo: ({
             settings: settings, path: "/home/reader/.config/omabib/settings.json", claude_desktop_mcp: false,
-            pdf_viewers: [
-                {id: "org.pwmt.zathura-pdf-mupdf.desktop", name: "Zathura", program: "zathura", system_default: true},
-                {id: "org.gnome.Evince.desktop", name: "Document Viewer", program: "evince", system_default: false},
-                {id: "com.github.xournalpp.xournalpp.desktop", name: "Xournal++", program: "xournalpp-wrapper", system_default: false}
-            ],
             clis: [{id: "codex", name: "Codex CLI", available: true}, {id: "claude", name: "Claude Code", available: true}],
             desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: false}]
         })
@@ -101,7 +124,7 @@ Rectangle {
         function openExternal(url) { note("openExternal:" + url) }
         function openAlphaXiv() { note("openAlphaXiv") }
         function openCodex(desktop) { note(desktop ? "chatgpt" : "codex") }
-        function edit(kind) { note("edit:" + kind) }
+        function edit(kind, n) { note("edit:" + kind + (n && n.id ? ":" + n.id : "")) }
         function assign() { note("assign") }
         function copy(text) { note("copy:" + text) }
         function copyFormat(format) { note("copyFormat:" + format) }
@@ -181,6 +204,22 @@ Rectangle {
         color: ui.card
         border.width: 1; border.color: ui.border
         SettingsPanel { id: settingsPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
+    }
+    Rectangle {
+        id: editorSheet
+        visible: false
+        anchors.centerIn: parent
+        width: 720; height: 520
+        color: ui.card
+        border.width: 1; border.color: ui.border
+        NoteEditor { id: noteEditor; anchors.fill: parent; anchors.margins: 20; theme: ui; app: app; placeholderText: "Write a note…" }
+    }
+    Rectangle {
+        id: readerSheet
+        visible: false
+        anchors.fill: parent
+        color: ui.app
+        ReaderPane { id: reader; anchors.fill: parent; theme: ui; app: app }
     }
     MenuPopup { id: overflowMenu; theme: ui; menuWidth: 250 }
     CommandPalette { id: palette; theme: ui; app: app }
@@ -279,10 +318,7 @@ Rectangle {
         function test_2f_settings_panel() {
             app.openSettings()
             wait(100)
-            var zathura = find(settingsPanel, "pdfViewer:org.pwmt.zathura-pdf-mupdf.desktop")
-            verify(zathura, "installed viewers listed")
-            mouseClick(zathura)
-            compare(app.settings.pdf_viewer, "org.pwmt.zathura-pdf-mupdf.desktop")
+            verify(!find(settingsPanel, "pdfViewer:"), "PDFs open in reader tabs; there is no viewer setting")
             var claude = find(settingsPanel, "aiCli:claude")
             mouseClick(claude)
             compare(app.settings.ai_cli, "claude")
@@ -296,7 +332,7 @@ Rectangle {
             compare(app.settings.ai_desktop, "claude")
             shot("2f-settings")
             settingsSheet.visible = false
-            app.settings = ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+            app.settings = ({ai_cli: "codex", ai_desktop: "chatgpt"})
         }
         function test_9b_tabs_open_switch_close() {
             var rows = list.resultsView
@@ -377,6 +413,229 @@ Rectangle {
             shot("7b-palette-filtered")
             keyClick(Qt.Key_Return)
             verify(app.calls.indexOf("runAction:19") >= 0, "Return runs the filtered action: " + app.calls)
+        }
+        function mathFixture() {
+            function path(name) { return decodeURIComponent(String(Qt.resolvedUrl("math/" + name)).replace(/^file:\/\//, "")) }
+            var cache = {}
+            cache["I:E = mc^2"] = {path: path("inline.svg"), width: 59, height: 16}
+            cache["D:\\int_0^1 x^2 \\, dx = \\frac{1}{3}"] = {path: path("display.svg"), width: 90, height: 40}
+            cache["I:\\oops"] = {error: "unknown command: \\oops"}
+            return cache
+        }
+        function test_3b_markdown_note_card() {
+            var r = JSON.parse(JSON.stringify(Fixture.ref))
+            r.notes = [{id: "n3", body: "## Result\n\nEnergy $E = mc^2$ holds, but $\\oops$ fails and **bold** stays.\n\n$$\\int_0^1 x^2 \\, dx = \\frac{1}{3}$$\n\n```python\nprint('ok') if a < b else None\n```\n\n- one\n- two", project_id: null, project_name: null, labels: ["math"], evidence: "", provenance: "human", revision: 1, created_at: "2026-09-15T07:00:00Z", updated_at: "2026-09-15T07:00:00Z", image: null}]
+            app.mathRequested = []
+            app.mathCache = mathFixture()
+            app.selected = r
+            app.detailTab = "notes"
+            wait(100)
+            var body = find(detail, "noteBody")
+            verify(body, "note body renders")
+            verify(body.text.indexOf("inline.svg") >= 0 && body.text.indexOf("display.svg") >= 0, body.text)
+            verify(body.text.indexOf("&lt; b") >= 0, "code is escaped")
+            var plain = body.getText(0, body.length)
+            verify(plain.indexOf("Result") === 0 && plain.indexOf("##") < 0, "Markdown syntax is hidden: " + plain)
+            verify(plain.indexOf("$\\oops$") >= 0, "a failed formula shows its TeX: " + plain)
+            verify(app.mathRequested.indexOf("I:E = mc^2") >= 0, "cards request their math: " + app.mathRequested)
+            shot("3b-markdown-note")
+            app.mathCache = ({})
+        }
+        function test_10_note_editor() {
+            editorSheet.visible = true
+            app.mathRequested = []
+            app.mathCache = mathFixture()
+            noteEditor.text = "# Title\n\nFirst paragraph with $E = mc^2$.\n\n- a\n- b"
+            var area = find(noteEditor, "noteEditorArea")
+            verify(area)
+            compare(area.text, "- a\n- b", "the last block opens for editing")
+            compare(noteEditor.beforeBlocks.length, 2)
+            noteEditor.forceActiveFocus()
+            wait(50)
+            verify(area.activeFocus)
+            area.cursorPosition = area.length
+            keyClick(Qt.Key_Return)
+            compare(area.text, "- a\n- b\n- ", "Enter continues the list")
+            keyClick(Qt.Key_C)
+            keyClick(Qt.Key_Return)
+            keyClick(Qt.Key_Return)
+            compare(area.text, "", "Enter on an empty item starts a new block")
+            compare(noteEditor.text, "# Title\n\nFirst paragraph with $E = mc^2$.\n\n- a\n- b\n- c\n\n")
+            keyClick(Qt.Key_N); keyClick(Qt.Key_O)
+            compare(noteEditor.text, "# Title\n\nFirst paragraph with $E = mc^2$.\n\n- a\n- b\n- c\n\nno")
+            keyClick(Qt.Key_Up)
+            compare(area.text, "- a\n- b\n- c", "Up on the first line edits the previous block")
+            keyClick(Qt.Key_Up); keyClick(Qt.Key_Up); keyClick(Qt.Key_Up)
+            compare(area.text, "First paragraph with $E = mc^2$.")
+            verify(app.mathRequested.indexOf("I:E = mc^2") >= 0, "rendered blocks request math: " + app.mathRequested)
+            keyClick(Qt.Key_Down)
+            compare(area.text, "- a\n- b\n- c", "Down on the last line edits the next block")
+            shot("10-note-editor")
+
+            // A click on a rendered block edits it.
+            var heading = find(noteEditor, "noteEditorBlock")
+            verify(heading)
+            mouseClick(heading, 20, heading.height / 2)
+            tryCompare(area, "text", "# Title")
+            // Backspace at the start of a block joins it to the previous one.
+            keyClick(Qt.Key_Down)
+            compare(area.text, "First paragraph with $E = mc^2$.")
+            area.cursorPosition = 0
+            keyClick(Qt.Key_Backspace)
+            compare(area.text, "# Title\nFirst paragraph with $E = mc^2$.")
+            compare(noteEditor.text.indexOf("# Title\nFirst paragraph"), 0)
+
+            // Enter stays inside an open fence and leaves a closed one.
+            noteEditor.text = ""
+            keyClick(Qt.Key_QuoteLeft); keyClick(Qt.Key_QuoteLeft); keyClick(Qt.Key_QuoteLeft)
+            keyClick(Qt.Key_Return); keyClick(Qt.Key_Return)
+            compare(area.text, "```\n\n", "Enter in an open fence is a newline")
+            keyClick(Qt.Key_X); keyClick(Qt.Key_Return)
+            keyClick(Qt.Key_QuoteLeft); keyClick(Qt.Key_QuoteLeft); keyClick(Qt.Key_QuoteLeft)
+            keyClick(Qt.Key_Return); keyClick(Qt.Key_Return)
+            compare(noteEditor.text, "```\n\nx\n```\n\n")
+            compare(area.text, "", "a second Enter after the closing fence starts a block")
+
+            // The toolbar wraps the selection.
+            noteEditor.text = "plain"
+            area.select(0, 5)
+            noteEditor.wrap("**", "**", "bold")
+            compare(noteEditor.text, "**plain**")
+            noteEditor.text = ""
+            compare(area.text, "")
+            noteEditor.codeOrMath("$$", "$", "x")
+            compare(noteEditor.text, "$$\nx\n$$", "math on an empty line is a block")
+            verify(noteEditor.sourceBlock)
+            wait(400)
+            verify(find(noteEditor, "noteEditorMathPreview").visible, "the active formula previews")
+            shot("10b-note-editor-math")
+            noteEditor.text = ""
+            editorSheet.visible = false
+            app.mathCache = ({})
+        }
+        function test_11_pdf_reader() {
+            var r = JSON.parse(JSON.stringify(Fixture.ref))
+            r.notes = [
+                {id: "clip1", body: "Headline clip", project_id: null, labels: [], provenance: "human", revision: 1, image: {source_pdf: "/lib/paper.pdf", page: 1, rectangle: {x: 72, y: 60, width: 180, height: 45, unit: "pt"}}},
+                {id: "legacy", body: "Old screenshot clip", project_id: null, labels: [], provenance: "human", revision: 1, image: {source_pdf: "/lib/paper.pdf", page: 1, rectangle: {x: 10, y: 10, width: 400, height: 300}}},
+                {id: "other", body: "Another PDF", project_id: null, labels: [], provenance: "human", revision: 1, image: {source_pdf: "/lib/supplement.pdf", page: 1, rectangle: {x: 72, y: 60, width: 180, height: 45, unit: "pt"}}}
+            ]
+            try {
+            app.selected = r
+            app.detailTab = "notes"
+            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, kind: "pdf", detail_tab: "notes", page: 2, zoom_mode: "width", zoom: 1}]
+            app.activeTab = 0
+            readerSheet.visible = true
+            reader.tab = app.activePaper
+            tryCompare(reader, "status", "ready")
+            compare(reader.doc.page_count, 3)
+            tryCompare(reader, "currentPage", 2)
+            tryVerify(function () { return app.calls.indexOf("pdf_render:2") >= 0 }, 2000, "the restored page renders: " + app.calls)
+            compare(reader.clips.length, 1, "only pt clips from this PDF are drawn")
+
+            // Keyboard navigation.
+            reader.forceActiveFocus()
+            keyClick("G")
+            compare(reader.currentPage, 3)
+            keyClick("g"); keyClick("g")
+            compare(reader.currentPage, 1)
+            keyClick("2"); keyClick("G")
+            compare(reader.currentPage, 2)
+            keyClick("g"); keyClick("g")
+            var y = find(reader, "readerPages").contentY
+            keyClick("j")
+            verify(find(reader, "readerPages").contentY > y, "j scrolls down")
+
+            // Page pixels to PDF points depend on zoom only.
+            reader.setZoom(1.5)
+            compare(reader.zoom, 1.5)
+            var pt = reader.toPoints(1, 150, 300, 300, 75)
+            compare(pt.x, 100); compare(pt.y, 200); compare(pt.width, 200); compare(pt.height, 50)
+            var back = reader.fromPoints(1, [100, 200, 300, 250])
+            compare(back.x, 150); compare(back.width, 300)
+            reader.setZoomMode("width")
+            wait(250)
+
+            // Text selection copies words, joining lines with newlines.
+            tryVerify(function () { return !!reader.words[1] })
+            reader.selection = {page: 1, from: 0, to: 3}
+            compare(reader.selectionText(), "Sparse attention\nTable headline")
+            verify(reader.wantsEscape)
+            keyClick(Qt.Key_C, Qt.ControlModifier)
+            verify(app.calls.indexOf("copy:Sparse attention\nTable headline") >= 0, app.calls)
+            keyClick(Qt.Key_Escape)
+            compare(reader.selection, null)
+
+            // Search jumps to the first hit.
+            reader.goToPage(1)
+            reader.runSearch("headline")
+            tryVerify(function () { return reader.search && reader.search.flat.length === 1 })
+            compare(reader.currentPage, 2)
+            keyClick(Qt.Key_Escape)
+            compare(reader.search, null)
+
+            // An internal link jumps to its page.
+            reader.goToPage(1)
+            wait(100)
+            var page1 = find(reader, "readerPage1")
+            var mouse1 = find(page1, "readerPageMouse")
+            mouseClick(mouse1, 100 * reader.zoom, 315 * reader.zoom)
+            compare(reader.currentPage, 3, "link to page 3")
+
+            // The clip tool: drag a rectangle, get a clip in points with a preview.
+            reader.goToPage(1)
+            wait(100)
+            reader.forceActiveFocus()
+            keyClick("r")
+            compare(reader.tool, "rect")
+            shot("11-reader-clip-tool")
+            var z = reader.zoom
+            mouseDrag(mouse1, 60 * z, 120 * z, 240 * z, 60 * z)
+            tryVerify(function () { return app.lastClip !== null })
+            compare(reader.tool, "select")
+            compare(app.lastClip.page, 1)
+            compare(app.lastClip.source_pdf, "/lib/paper.pdf")
+            verify(Math.abs(app.lastClip.rect_pt.x - 60) < 1 && Math.abs(app.lastClip.rect_pt.width - 240) < 2, JSON.stringify(app.lastClip.rect_pt))
+            verify(!!app.lastClip.preview, "the preview crops the rendered page")
+            // A plain click with the tool is a page note; `a` does the same.
+            app.lastClip = null
+            keyClick("a")
+            compare(app.lastClip.page, 1)
+            verify(!app.lastClip.rect_pt)
+
+            // Clicking a saved clip edits its note.
+            mouseClick(mouse1, 100 * z, 80 * z)
+            verify(app.calls.indexOf("edit:note:clip1") >= 0, app.calls)
+
+            // Notes are written in the side pane, with the pending clip outlined on its page.
+            app.composer = {note: null, clip: {source_pdf: "/lib/paper.pdf", page: 1, rect_pt: {x: 72, y: 280, width: 300, height: 90},
+                preview: {path: String(Qt.resolvedUrl("math/display.svg")).replace(/^file:\/\//, ""), rect: Qt.rect(0, 0, 90, 40)}},
+                token: "t1", projectId: "p-grl", labels: "", evidence: "PDF p. 1"}
+            var composer = find(reader, "noteComposer")
+            tryVerify(function () { return composer.visible })
+            verify(reader.wantsEscape)
+            var editorArea = find(composer, "noteEditorArea")
+            tryVerify(function () { return editorArea.activeFocus }, 1000, "the composer takes focus")
+            keyClick("O"); keyClick("k")
+            shot("11c-reader-composer")
+            keyClick(Qt.Key_Return, Qt.ControlModifier)
+            compare(app.saved.body, "Ok")
+            compare(app.saved.projectId, "p-grl", "scope starts at the current project")
+            compare(app.saved.evidence, "PDF p. 1")
+            keyClick(Qt.Key_Escape)
+            compare(app.composer, null)
+            verify(!composer.visible)
+
+            reader.showOutline = true
+            wait(150)
+            shot("11b-reader")
+            } finally {
+                reader.showOutline = false
+                readerSheet.visible = false
+                reader.tab = null
+                app.paperTabs = []
+                app.activeTab = -1
+            }
         }
         function test_8_no_abstract_and_empty() {
             var r = JSON.parse(JSON.stringify(Fixture.ref))

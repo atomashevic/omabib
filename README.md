@@ -4,15 +4,14 @@ A native Omarchy bibliography picker with a Rust service, SQLite search, and pro
 
 ## Supported setup
 
-Omabib currently supports **Omarchy with its Quickshell plugin system**, **Zathura** for PDFs, and **Codex CLI or ChatGPT Desktop in Codex mode** for reference-aware chats. Other desktop shells, PDF viewers, and ChatGPT modes have not been tested. The ChatGPT button opens a draft in Desktop's Codex mode with **GPT-5.6 Sol Medium** selected. Press Send to start that chat.
+Omabib currently supports **Omarchy with its Quickshell plugin system** and **Codex CLI or ChatGPT Desktop in Codex mode** (or Claude Code and Claude Desktop) for reference-aware chats. PDFs open in Omabib's own reader tabs, rendered with MuPDF, so no external PDF viewer is needed. Other desktop shells and ChatGPT modes have not been tested. The ChatGPT button opens a draft in Desktop's Codex mode with **GPT-5.6 Sol Medium** selected. Press Send to start that chat.
 
-Install Rust/Cargo, a C compiler, Git, Zathura with a PDF backend, and Codex CLI. ChatGPT Desktop is optional. On Omarchy, install Zathura with your package manager, then build and install the plugin and service:
+Install Rust/Cargo, clang and make (MuPDF is compiled from source during the build), Git, and Codex CLI. ChatGPT Desktop is optional. Then build and install the plugin and service:
 
 ```bash
 git clone https://github.com/atomashevic/omabib.git
 cd omabib
 ./scripts/install.sh
-xdg-mime default org.pwmt.zathura.desktop application/pdf
 omarchy plugin validate "$HOME/.config/omarchy/plugins/omabib"
 omabib status
 ```
@@ -21,47 +20,44 @@ The installer copies the Rust CLI, user service, Quickshell plugin, launch helpe
 
 ```lua
 o.bind("SUPER + B", "Omabib bibliography", "omabib open")
-o.rebind("SUPER + W", "Close Omabib or window", "omabib-close-first")
 o.bind("SUPER + ALT + B", "Omabib: add reference", "omabib add")
-o.bind("SUPER + N", "Omabib: PDF note", "omabib-quick-note")
 ```
+
+Omabib is an ordinary Hyprland window titled "Omabib": Super+B shows and focuses it, focuses it when it is behind another window, and hides it when it already has focus. Super+W closes it like any other window. Earlier versions bound Super+W to `omabib-close-first` and Super+N to `omabib-quick-note`; the first is now a plain window close kept for compatibility, and the second no longer exists, so remove that binding.
 
 Run `hyprctl reload` and `hyprctl configerrors`, then open Omabib with Super+B. If your shell keeps an older cached plugin, run `omarchy restart shell` when no Omabib editor is open. To enable Codex MCP separately, use the private companion repository [omabib-mcp](https://github.com/atomashevic/omabib-mcp), or run `codex mcp add omabib --env "OMABIB_SOCKET=$XDG_RUNTIME_DIR/omabib/socket" -- "$HOME/.local/bin/omabib" mcp`.
 
 ## Typical uses
 
 - Sort by newest addition to scan fresh Scholar alerts, then narrow the search to a project.
-- Open a paper in Zathura, press Super+N, capture a page-aware text note or image clip, and keep its project context.
-- Open the paper from Zathura with Super+B, or use the detail pane to inspect its abstract, notes, PDF, and AlphaXiv overview.
+- Open a paper's PDF in a reader tab, read it beside its notes and AI overview, and clip a figure, table or equation into a note with **r**.
+- Use the detail pane to inspect a reference's abstract, notes, files, and AlphaXiv overview.
 - Press the terminal button for a CLI chat (Codex or Claude Code) or the chat button for a desktop chat (ChatGPT or Claude Desktop). Both receive a private reference snapshot with all project-labelled notes, image clips, and PDF paths, plus Omabib MCP access to the same library.
 - Ask an agent to compare project assessments, read a saved image clip, or retrieve the PDF. Library writes still require an explicit request.
 
 ## Use it
 
-When Zathura is focused, **Super+B** opens the Omabib item attached to its exact PDF and shows the reference details in All references. An unlinked or ambiguous PDF opens ordinary search and shows a notification.
+Open **Super+B** on the configured desktop, or run `omabib open`. An empty search field shows the newest additions first; **Ctrl+S** switches between date-added and citation-key order. Type a title, author, abstract term, citation key, or note fragment. Enter opens the PDF in a reader tab, or the reference link if there's no PDF. Ctrl+O opens the PDF specifically (downloading an open-access copy first if none is attached); Ctrl+U opens the reference's link/DOI specifically, skipping any attached PDF. Set `OMABIB_PDF_SHORTCUT` in the shell launch environment to change the PDF shortcut from Ctrl+O. Tab opens details. Ctrl+K opens actions. Esc hides the window; Q also hides it while the search field is empty, so searches can still contain q. Opening a link focuses the browser.
 
-Open **Super+B** on the configured desktop, or run `omabib open`. An empty search field shows the newest additions first; **Ctrl+S** switches between date-added and citation-key order. Type a title, author, abstract term, citation key, or note fragment. Enter opens the PDF, or the reference link if there's no PDF. Ctrl+O opens the PDF specifically (downloading an open-access copy first if none is attached); Ctrl+U opens the reference's link/DOI specifically, skipping any attached PDF. Set `OMABIB_PDF_SHORTCUT` in the shell launch environment to change the PDF shortcut from Ctrl+O. Tab opens details. Ctrl+K opens actions. Esc closes the main popup; Q also closes it while the search field is empty, so searches can still contain q. Opening a link focuses the browser, and opening a PDF focuses the configured PDF viewer.
-
-The popup has three panes. The **rail** on the left switches between all references (A–Z), recently added, projects and **Needs attention** (references missing an abstract or a PDF); below them are Add, Sync (its dot marks pending changes or a sync issue), the history repository and Actions. The **list** shows each result's title, authors and year with badges for PDF, AI overview, notes and a missing abstract; the filter button opens author, year, type and label filters. The **detail pane** has an icon toolbar (Open PDF, Open link, New note, AI summary, Codex, ChatGPT, then **⋯** for Fill metadata, Edit BibTeX, Assign to project, Attach PDF, copy formats and Delete) and five sections: **Overview** (abstract and metadata), **AI summary** (arXiv papers only), **Notes**, **Files** and **BibTeX**. Ctrl+1–5 select a section and Ctrl+Tab cycles through them. Titles, abstracts, notes and the AI summary use a proportional reading font, Noto Sans by default; set `OMABIB_READING_FONT` in the shell launch environment to change it. The abstract and the AI summary are selectable: drag to select across paragraphs and press Ctrl+C, or use their **Copy** buttons (the AI summary's copies the Markdown).
+The window has three panes. The **rail** on the left switches between all references (A–Z), recently added, projects and **Needs attention** (references missing an abstract or a PDF); below them are Add, Sync (its dot marks pending changes or a sync issue), the history repository and Actions. The **list** shows each result's title, authors and year with badges for PDF, AI overview, notes and a missing abstract; the filter button opens author, year, type and label filters. The **detail pane** has an icon toolbar (Open PDF, Open link, New note, AI summary, Codex, ChatGPT, then **⋯** for Fill metadata, Edit BibTeX, Assign to project, Attach PDF, copy formats, Open PDF in another app and Delete) and five sections: **Overview** (abstract and metadata), **AI summary** (arXiv papers only), **Notes**, **Files** and **BibTeX**. Ctrl+1–5 select a section and Ctrl+Tab cycles through them. Titles, abstracts, notes and the AI summary use a proportional reading font, Noto Sans by default; set `OMABIB_READING_FONT` in the shell launch environment to change it. The abstract and the AI summary are selectable: drag to select across paragraphs and press Ctrl+C, or use their **Copy** buttons (the AI summary's copies the Markdown).
 
 ## Settings
 
 The cog at the bottom of the rail (or Ctrl+K action **24**) opens Settings. Changes apply immediately and are saved in `$XDG_CONFIG_HOME/omabib/settings.json`; `omabib-settings` prints or changes them from a terminal (`omabib-settings set ai_cli claude`).
 
-- **PDF viewer** lists the installed applications whose desktop entry opens PDFs. **System default** uses `xdg-open`. Another choice is started with `gtk-launch` from Omabib and from `omabib pdf open`. Page notes (Super+N) and opening Omabib from a PDF (Super+B) need Zathura.
 - **Terminal chat** chooses **Codex CLI** or **Claude Code** for the toolbar's terminal button and action **22**.
 - **Desktop chat** chooses **ChatGPT Desktop** or **Claude Desktop** for the toolbar's chat button and action **23**. Claude Desktop reads the library through Omabib's MCP server, which it loads from its own config: **Add Omabib to Claude Desktop** merges an `omabib` entry into `~/.config/Claude/claude_desktop_config.json`, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`. Restart Claude Desktop afterwards.
 
 ## Tabs
 
-The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it, each showing that paper's detail at full width. The toolbar, palette and shortcuts act on the paper in the active tab.
+The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it, each showing that paper's detail at full width, and PDFs open in **reader tabs** (see [Reading PDFs](#reading-pdfs)). The toolbar, palette and shortcuts act on the paper in the active tab.
 
 - **Open:** double-click a result, press **Ctrl+T** or **Ctrl+Enter** in search, or use the toolbar's new-tab button (Ctrl+K action **25**). Middle-click a result to open it in the background. A paper that is already open switches to its tab. Results that are open in a tab carry a *tab* badge.
 - **Switch:** click a tab, **Ctrl+PgUp/PgDn** to cycle, **Alt+0** for the library tab and **Alt+1–9** for paper tabs. **Ctrl+F**, or typing while a paper tab is showing, returns to search. The search icon in a paper's toolbar finds it in the library tab.
-- **Close:** tabs stay open until you close them, including after closing the popup or restarting the shell. Close one with its ×, a middle-click, **Ctrl+W** or action **26**. Deleting a reference closes its tab.
-- **Limits:** at most 10 paper tabs; opening an eleventh is refused until one is closed. Tabs shrink as they fill the strip, and when they no longer fit they overlap, with the active tab on top.
+- **Close:** tabs stay open until you close them, including after hiding the window or restarting the shell. Close one with its ×, a middle-click, **Ctrl+W** or action **26**. Deleting a reference closes its tabs.
+- **Limits:** at most 12 paper and reader tabs together; opening another is refused until one is closed. Tabs shrink as they fill the strip, and when they no longer fit they overlap, with the active tab on top.
 
-Each paper tab remembers its section (Overview, AI summary, Notes, Files, BibTeX). Tabs are kept per library socket in `$XDG_STATE_HOME/omabib/tabs.json` (normally `~/.local/state/omabib/tabs.json`), storing only reference IDs, citation keys, titles and the section.
+Each paper tab remembers its section (Overview, AI summary, Notes, Files, BibTeX). Tabs are kept per library socket in `$XDG_STATE_HOME/omabib/tabs.json` (normally `~/.local/state/omabib/tabs.json`), storing only reference IDs, citation keys, titles, the section, and for reader tabs the page and zoom.
 
 **Ctrl+K** opens the command palette. Type letters to filter it, or a number to run a numbered command as before; **1 · Add new item** is the DOI/arXiv/URL/BibTeX add box (see [Adding references](#adding-references)). For a first digit that could still start a two-digit action (1 or 2), press Enter immediately or wait 700 ms for a possible second digit.
 
@@ -89,6 +85,8 @@ For an arXiv paper, the **AI summary** tab checks alphaXiv for a published overv
 
 **Delete…** in the detail pane's **⋯** menu (or action **21** in Ctrl+K) previews the exact citation key and counts of notes, attachment links, project links, and cached summaries before confirmation. Deletion removes the reference and those library records atomically. PDF files stay on disk, and the history repository is not changed by this action. The MCP tools `delete_reference_preview` and `delete_reference` expose the same reviewed operation; deletion requires the current revision and note/attachment counts from the preview, the exact citation key, and an idempotency key.
 
+Notes are Markdown. The note editor previews inline: every block renders except the one being edited, which shows its source; click a block, or move past its first or last line with ↑/↓, to edit it. Enter continues a list, and a second Enter (or Enter on an empty list item) starts a new block. Backspace at the start of a block joins it to the one above. The toolbar inserts headings, emphasis, quotes, lists, code and math; on an empty line code and math become fenced blocks. Inline `$…$` or `\(…\)` and display `$$…$$` or `\[…\]` math is rendered by the service (`render_math`) and previewed under the block while you edit it; `$5 and $10` stays text, and `\$` is a literal dollar. Fenced code blocks show their language. Note cards and the AI summary use the same renderer. Notes are stored as plain Markdown, so search, MCP and history exports see the source.
+
 Each note card in the Notes tab has edit and delete icons. Its confirmation shows the project and a note excerpt. Deleting one note removes its saved image clip and revisions but keeps the reference and its other notes. The MCP tools `delete_note_preview` and `delete_note` provide the same operation with a current note revision, matching reference ID, and idempotency key.
 
 With **Codex CLI** selected, the terminal button in the detail toolbar (or Ctrl+K action **22**) opens a separate Codex CLI terminal for that entry. It passes a private context file containing metadata, BibTeX, all project-labelled notes, PDF/attachment paths, and exported image clips. Images are available for inspection on demand; MCP can retrieve current data and saved clips from the same library. The active project is the default scope for notes you ask Codex to save. Codex starts by acknowledging the entry, then waits for your question.
@@ -109,7 +107,7 @@ omabib add --pdf /absolute/path/to/paper.pdf            # identified from the PD
 omabib add --dry-run 10.1145/x 10.1145/y                # preview several at once, writes nothing
 ```
 
-Without a PDF or identifier, `omabib add` opens the desktop popup's add box. `add --no-pdf` skips the automatic download. The JSON operation is `add_reference` (also an MCP tool); `preview_entry` previews without writing, and is what the popup calls before Import. `identify_pdf` reads a PDF's first two pages for a DOI/arXiv ID, or falls back to a Crossref title search using its Title metadata.
+Without a PDF or identifier, `omabib add` opens the add box in the Omabib window. `add --no-pdf` skips the automatic download. The JSON operation is `add_reference` (also an MCP tool); `preview_entry` previews without writing, and is what the popup calls before Import. `identify_pdf` reads a PDF's first two pages for a DOI/arXiv ID, or falls back to a Crossref title search using its Title metadata.
 
 ## Build and install
 
@@ -121,7 +119,7 @@ cargo build --release --locked
 codex mcp add omabib -- "$HOME/.local/bin/omabib" mcp
 ```
 
-The installer manages the Omabib binary, plugin, service, skill, and the `omabib-close-first` and `omabib-quick-note` helpers. It does not replace existing Hyprland shortcuts. The local installation has Super+B to open and Super+W to close Omabib first, then the focused window when Omabib is hidden. On another machine, inspect available bindings before adding either shortcut. Set `application/pdf` to Zathura, the PDF viewer supported by the page-aware note workflow.
+The installer manages the Omabib binary, plugin, service, skill, and launch helpers. It does not replace existing Hyprland shortcuts, and it removes the old Zathura note helpers (`omabib-quick-note`, `omabib-capture-note`) from `~/.local/bin`. On another machine, inspect available bindings before adding Super+B.
 
 After an update, the plugin normally reloads through `omarchy-shell shell rescanPlugins`. If Quickshell retains cached component code, `omarchy restart shell` loads the new version. Do not restart while the desktop is locked.
 
@@ -219,7 +217,7 @@ python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary tar
 
 `scripts/test_metadata.py target/release/omabib` makes live requests to Crossref/DataCite/OpenAlex/Semantic Scholar/Europe PMC/arXiv against a temporary, isolated library; run it only when checking those gateways specifically, since a busy run can hit Crossref's rate limit. The benchmark refuses to overwrite a database and uses synthetic metadata. `scripts/test_ui.py` is an opt-in live keyboard test requiring an isolated socket; it interacts with the desktop and should run while no one else is typing. `scripts/test_tabs_ui.py` is the same kind of test for the detail tabs, the cached AI summary, the project menu and the command palette. `scripts/test_claude.py target/release/omabib` checks the Claude Code and Claude Desktop handoffs and the settings helper against an isolated library and a temporary config directory.
 
-The UI components render offscreen without a desktop: `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml` loads them against stub `qs.Commons`/`qs.Ui` modules and a stand-in for `App.qml`, and saves screenshots of every tab to `/tmp/omabib-qml-shots`. `node scripts/test_overview_text.js [overview.md]` tests the AI summary's Markdown renderer, optionally on a real overview file.
+The UI components render offscreen without a desktop: `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml` loads them against stub `qs.Commons`/`qs.Ui` modules and a stand-in for `App.qml`, and saves screenshots of every tab to `/tmp/omabib-qml-shots`. `node scripts/test_overview_text.js [overview.md]` tests the AI summary's Markdown renderer, optionally on a real overview file, and `node scripts/test_markdown.js` tests the note features (source line ranges, math, code blocks).
 
 V1 excludes automatic multi-computer metadata merging, embeddings, and remote ChatGPT connectivity. `identify_pdf` reads a PDF's first two pages to recognize an identifier or search by title, but that text is never stored or indexed for search — full-text PDF indexing and annotation remain out of scope.
 
@@ -243,7 +241,7 @@ omabib repo show
 
 ## Sync and status
 
-Use the header status chip in the search popup (or action **19**) to sync: export, commit and push the current library. It reads "Set up sync", "✓ Synced 2h ago", "● Changes pending", "↓ N behind" or "⚠ Sync issue" depending on `repo_status`. Action **20** opens repository settings.
+Use the header status chip in the library tab (or action **19**) to sync: export, commit and push the current library. It reads "Set up sync", "✓ Synced 2h ago", "● Changes pending", "↓ N behind" or "⚠ Sync issue" depending on `repo_status`. Action **20** opens repository settings.
 
 Sync preserves local edits and refuses divergent pushes; it never force-pushes or merges remote metadata into SQLite. A push that fails *after* a successful local commit is reported as such (`ok:false, committed:true`) rather than losing the commit — fix what's described and sync again. The operation runs off the search thread. `omabib-history` uses this same repository configuration.
 
@@ -256,28 +254,44 @@ omabib repo status [--fetch] [--json]
 
 `repo_status` (also the JSON operation) reports the current HEAD, how far ahead/behind the remote, local edits, pending changes since the last successful sync, and the last attempt's result or a classified error (`diverged`, `auth`, `network`, `lfs`, `dirty`, `branch`, `origin-changed`, `busy`, `unknown`) with a hint — `diverged`, for instance, points at `git pull --rebase`, since Omabib itself never merges.
 
-## Quick PDF notes
+## Reading PDFs
 
-Focus a PDF in Zathura and press **Super+N**. Drag a rectangle for an image, or click without dragging for a text note. Escape cancels selection. The compact quick note editor shows the reference title and current PDF page, prefills the evidence location, and keeps the project used when opening the PDF (or Global). **Ctrl+Enter** saves; **Esc** cancels and returns to the PDF. No note is written until Save.
+**Open PDF** (Enter on a result with a PDF, Ctrl+O, the toolbar's PDF button, action **12**, or `omabib pdf open CITATION_KEY`) opens the paper in a **reader tab**. The Omabib service renders pages with MuPDF and caches them under `$XDG_CACHE_HOME/omabib/pages` (at most 500 MB, oldest documents dropped first); the PDF file itself is never modified. The tab keeps its page and zoom across restarts. The reference's **Notes**, **Abstract** and **AI summary** sit in a pane to the right.
 
-The shortcut checks the foreground Zathura PID, window title, and exact document path against the remembered reference's PDF attachments. If that context is missing or does not match, it resolves the PDF through Omabib's exact attachment-path index. Missing or ambiguous matches stop without creating a note. Page numbers are physical PDF pages, counted from 1. This also restores reading context after a shell restart. `omabib-quick-note --print` validates the current context without opening or saving a note. The helper requires Python with PyGObject, and Zathura's D-Bus interface.
+| Keys | |
+|---|---|
+| j / k, arrows | scroll |
+| Space / Shift+Space, PgDn / PgUp | next / previous screen |
+| gg / G, *N*G | first / last page, page *N* |
+| + / − / 0 (or w) / z, Ctrl+wheel | zoom in / out / fit width / fit page |
+| / then n / N | search, next / previous match |
+| drag, double-click, Ctrl+C | select words, copy |
+| r | clip tool: drag a rectangle to clip it into a note |
+| a | note on the current page |
+| o / ] | contents / notes pane |
+| Esc | cancel the clip tool, selection or search |
+| Ctrl+W | close the tab |
+
+Internal links jump to their page and web links open in the browser. **Open PDF in another app** in the **⋯** menu hands the file to `xdg-open` when you need a different viewer.
 
 ## Visual notes
 
-Press **Super+N** while reading the reference's PDF and select a region inside Zathura. A compact popup opens with a lossless PNG preview. A click without dragging opens a text-only note instead. Add optional commentary and press **Ctrl+Enter** to save, or **Esc** to discard. Recapture (Ctrl+Shift+C) and Remove are available before saving. Capture is rejected if the original document/page changes or the rectangle extends outside its window.
+In a reader tab press **r** (or the crop button) and drag over a figure, table or equation. The note opens in the side pane beside the page, with a preview, the region outlined on the page, the evidence set to the page, and the current project as scope; add commentary and press **Ctrl+Enter**, or **Esc** to discard. **New note** and the pencil on a note card open there too while a reader tab is active. A click without dragging, or **a**, writes a text note for the page instead. Saved clips are outlined on the page; hover shows the note and a click edits it.
 
-Clips are stored atomically with their notes in SQLite, included in database backups, and exported as `notes/images/*.png` by history snapshots. Ordinary note/search responses carry compact image metadata. The MCP tool **get_note_image** returns the original PNG as an image content block for reading numbers, math, text, or code. Image-only notes are supported; the captured PDF page and source path remain attached. No OCR is required at capture time. The first release supports one PNG per visual note, up to 8 MiB and 32 million pixels. Capture requires `slurp` and `grim`.
+The service renders each clip from the PDF itself at 216 dpi, so it stays sharp at any zoom. `add_visual_note` accepts `rect_pt` (x, y, width, height in PDF points from the page's top-left corner) with `source_pdf` and `page`; clips are stored with `"unit":"pt"`. Clips saved by earlier versions from screen captures keep their screen-pixel rectangles and are not outlined on pages.
+
+Clips are stored atomically with their notes in SQLite, included in database backups, and exported as `notes/images/*.png` by history snapshots. Ordinary note/search responses carry compact image metadata. The MCP tool **get_note_image** returns the original PNG as an image content block for reading numbers, math, text, or code. Image-only notes are supported; the source PDF path and page remain attached. One PNG per visual note, up to 8 MiB and 32 million pixels.
 
 ## PDFs
 
-Open an entry with Tab and choose **Attach PDF…** in the Files tab, or use action **10**, to link an existing local file. Use **Open PDF** (Ctrl+O, action **12**) to have Omabib find one itself — an existing attachment, one restored from the history archive, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it; **Open link** (Ctrl+U, action **11**) opens the reference's own URL/DOI instead, even if a PDF is attached; **Copy PDF path** (action **13**) copies the PDF's path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file and its Git/LFS history.
+Open an entry with Tab and choose **Attach PDF…** in the Files tab, or use action **10**, to link an existing local file. Use **Open PDF** (Ctrl+O, action **12**) to have Omabib find one itself — an existing attachment, one restored from the history archive, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it in a reader tab; **Open link** (Ctrl+U, action **11**) opens the reference's own URL/DOI instead, even if a PDF is attached; **Copy PDF path** (action **13**) copies the PDF's path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file and its Git/LFS history.
 
 Downloaded and restored PDFs are stored as `pdfs/<citekey>.pdf` (e.g. `pdfs/watts_collective_1998.pdf`), with a short hash suffix only on a genuine name collision — not a content hash, so they're findable by browsing. The history repository keeps its own separate content-addressed naming.
 
 ```bash
 omabib pdf add CITATION_KEY /absolute/path/paper.pdf
 omabib pdf get CITATION_KEY [--no-download]     # print a readable local path
-omabib pdf open CITATION_KEY                     # ...and open it
+omabib pdf open CITATION_KEY                     # ...and open it in a reader tab
 omabib pdf pull --attachment ATTACHMENT_UUID
 omabib pdf pull --reference CITATION_KEY --url https://example.org/paper.pdf
 omabib pdf remove ATTACHMENT_UUID
@@ -290,7 +304,7 @@ The MCP tools `add_pdf`, `pull_pdf`, `remove_pdf`, and `get_pdf` expose these op
 
 ## Online metadata and opening references
 
-Enter opens an existing attached PDF, then the bibliographic URL/PDF link, then the DOI landing page. Missing local PDFs fall back to the available web link. Copying a citation key is action **2** in Ctrl+K.
+Enter opens an existing attached PDF in a reader tab, then the bibliographic URL/PDF link, then the DOI landing page. Missing local PDFs fall back to the available web link. Copying a citation key is action **2** in Ctrl+K.
 
 Select a reference, open its details with Tab, and choose **Fill metadata**, or use action **14**. Crossref looks up DOIs or returns five title/author/year candidates. DataCite handles repository DOIs, including arXiv URLs/eprints. A missing abstract is then looked for via OpenAlex, Semantic Scholar and Europe PMC, in that order, stopping at the first substantial one. No API key is required for any of these. Gateway coverage varies; unavailable fields remain missing.
 
@@ -300,4 +314,6 @@ Review the matching record and choose **Fill missing fields** (Ctrl+Enter). Exis
 
 Gateway documentation: [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/), [DataCite REST API](https://support.datacite.org/docs/rest-api), [OpenAlex API](https://docs.openalex.org/), [Semantic Scholar Graph API](https://api.semanticscholar.org/api-docs/graph), [Europe PMC](https://europepmc.org/RestfulWebService).
 
-If the remembered reference is unavailable or belongs to another PDF, Super+N resolves Zathura’s exact canonical PDF path through an indexed attachment lookup. It reconnects the popup to the matching library. Recovery starts at Global scope so an unrelated project is never carried over. Missing or ambiguous matches stop with a notification; matching basenames alone are insufficient.
+## License
+
+Omabib is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE), Copyright (c) 2026 Omabib contributors. It links [MuPDF](https://mupdf.com/) (AGPL-3.0) for PDF rendering. The embedded [mitex](https://github.com/mitex-rs/mitex) Typst scope in `src/mitex/` and the [Typst](https://github.com/typst/typst) libraries used for math rendering are Apache-2.0.

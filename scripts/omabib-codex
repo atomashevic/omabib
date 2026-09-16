@@ -5,13 +5,22 @@ import base64
 import json
 import os
 from pathlib import Path
-import runpy
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 
-library_call = runpy.run_path(str(Path(__file__).with_name('omabib-quick-note')))['library_call']
+
+def library_call(socket_path, method, params):
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(3)
+        connection.connect(socket_path)
+        connection.sendall((json.dumps(dict(v=1, id=1, method=method, params=params)) + '\n').encode())
+        response = json.loads(connection.makefile().readline())
+    if 'error' in response:
+        raise ValueError(response['error']['message'])
+    return response['result']
 
 
 def prepare(socket_path, ref_id, project_id, parent=None):

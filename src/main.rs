@@ -87,7 +87,7 @@ enum Command {
     Lookup { reference: String },
     /// Show library counts and version.
     Status,
-    /// Open the native Omarchy search palette.
+    /// Show, focus or hide the Omabib window.
     Open,
     /// Create a consistent SQLite backup at a new path.
     Backup { path: PathBuf },
@@ -167,27 +167,51 @@ enum PdfCommand {
         #[arg(long)]
         no_download: bool,
     },
-    /// Open a reference's PDF in the default viewer (downloading it first
+    /// Open a reference's PDF in an Omabib reader tab (downloading it first
     /// if needed).
     Open { reference: String },
 }
-/// The PDF viewer chosen in Omabib Settings ($XDG_CONFIG_HOME/omabib/settings.json),
-/// when one is set and gtk-launch is available to start its desktop entry.
-fn preferred_pdf_viewer() -> Option<String> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    let settings: Value =
-        serde_json::from_slice(&std::fs::read(config.join("omabib/settings.json")).ok()?).ok()?;
-    let viewer = settings["pdf_viewer"].as_str()?.trim();
-    let usable = !viewer.is_empty()
-        && viewer.ends_with(".desktop")
-        && !viewer.contains('/')
-        && std::env::var_os("PATH").is_some_and(|paths| {
-            std::env::split_paths(&paths).any(|dir| dir.join("gtk-launch").is_file())
-        });
-    usable.then(|| viewer.to_owned())
+fn command_output(program: &str, args: &[&str]) -> Option<Vec<u8>> {
+    std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| o.stdout)
+}
+/// The Omabib window's Hyprland address, and whether it has focus.
+fn omabib_window() -> Option<(String, bool)> {
+    let clients: Value = serde_json::from_slice(&command_output("hyprctl", &["clients", "-j"])?).ok()?;
+    let address = clients
+        .as_array()?
+        .iter()
+        .find(|c| c["title"] == "Omabib" && c["mapped"] != false)?["address"]
+        .as_str()?
+        .to_owned();
+    let active: Value = command_output("hyprctl", &["activewindow", "-j"])
+        .and_then(|o| serde_json::from_slice(&o).ok())
+        .unwrap_or(Value::Null);
+    let focused = active["address"] == address.as_str();
+    Some((address, focused))
+}
+/// Focus the Omabib window, waiting briefly for a just-shown window to map.
+fn focus_omabib() {
+    for _ in 0..40 {
+        if let Some((address, focused)) = omabib_window() {
+            if !focused {
+                let _ = std::process::Command::new("hyprctl")
+                    .args(["dispatch", &format!("hl.dsp.focus({{ window = \"address:{address}\" }})")])
+                    .status();
+            }
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+fn shell(args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new("omarchy-shell").args(args).status()?;
+    anyhow::ensure!(status.success(), "Unable to reach the Omarchy shell");
+    Ok(())
 }
 fn main() {
     if let Err(e) = run() {
@@ -564,55 +588,28 @@ fn run() -> Result<()> {
                 &json!({"ref_id":reference,"download":!no_download}),
             )?,
             PdfCommand::Open { reference } => {
-                let r = omabib::transport::request("get_pdf", &json!({"ref_id":reference}))?;
-                let path = r["path"].as_str().context("get_pdf returned no path")?;
-                let status = match preferred_pdf_viewer() {
-                    Some(viewer) => std::process::Command::new("gtk-launch")
-                        .args([viewer.as_str(), path])
-                        .status()?,
-                    None => std::process::Command::new("xdg-open").arg(path).status()?,
-                };
-                anyhow::ensure!(status.success(), "Unable to open {path}");
+                let r = omabib::transport::request(
+                    "get_reference",
+                    &json!({"id":reference,"include_metadata":false}),
+                )?;
+                omabib::transport::request("get_pdf", &json!({"ref_id":r["id"]}))?;
+                shell(&["omabib", "openPdf", r["id"].as_str().context("Reference without id")?])?;
+                focus_omabib();
                 return Ok(());
             }
         },
         Command::Status => omabib::transport::request("status", &json!({}))?,
+        // Super+B: show and focus the window, focus it if it is in the
+        // background, or hide it when it already has focus.
         Command::Open => {
-            let zathura_active = std::process::Command::new("hyprctl")
-                .args(["activewindow", "-j"])
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok())
-                .and_then(|active| active["class"].as_str().map(str::to_owned))
-                .is_some_and(|class| {
-                    matches!(
-                        class.to_lowercase().as_str(),
-                        "org.pwmt.zathura" | "zathura"
-                    )
-                });
-            let payload = if zathura_active {
-                let output = std::process::Command::new("omabib-quick-note")
-                    .arg("--open-reference")
-                    .output()?;
-                if output.status.success() {
-                    String::from_utf8(output.stdout)?.trim().to_owned()
-                } else {
-                    // The helper explains an unlinked or changed PDF in a desktop notification.
-                    "{}".to_owned()
+            match omabib_window() {
+                Some((_, true)) => shell(&["shell", "hide", "omabib"])?,
+                Some(_) => focus_omabib(),
+                None => {
+                    shell(&["shell", "summon", "omabib", "{}"])?;
+                    focus_omabib();
                 }
-            } else {
-                "{}".to_owned()
-            };
-            let status = std::process::Command::new("omarchy-shell")
-                .args([
-                    "shell",
-                    if zathura_active { "summon" } else { "toggle" },
-                    "omabib",
-                    &payload,
-                ])
-                .status()?;
-            anyhow::ensure!(status.success(), "Unable to open Omabib");
+            }
             return Ok(());
         }
         Command::Backup { path } => omabib::transport::request("backup", &json!({"path":path}))?,

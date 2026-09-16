@@ -1,15 +1,18 @@
 import QtQuick
 import QtQuick.Layouts
 import "Format.js" as Format
+import "Markdown.js" as Markdown
 
-// Contextual notes as cards: scope, page, the note itself, its labels and a
-// thumbnail of the PDF clip it was taken from.
+// Contextual notes as cards: scope, page, the note itself rendered as Markdown
+// (with math and code blocks), its labels and a thumbnail of the PDF clip it
+// was taken from.
 ScrollPane {
     id: root
 
     required property var app
     readonly property var ref: app.selected
     readonly property var notes: ref && ref.notes ? ref.notes : []
+    readonly property var style: theme.markdownStyle(theme.card)
 
     RowLayout {
         Layout.fillWidth: true
@@ -22,6 +25,9 @@ ScrollPane {
             textFormat: Text.PlainText
         }
         RowLayout {
+            // Shrinks first when the Notes tab sits in a reader's narrow side pane.
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
             spacing: root.theme.space(6)
             Icon {
                 theme: root.theme
@@ -30,16 +36,18 @@ ScrollPane {
                 color: root.app.includeOtherNotes ? root.theme.accentText : root.theme.muted
             }
             Text {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 text: "Other projects’ notes" + (root.ref && root.ref.other_project_note_count !== undefined ? " (" + root.ref.other_project_note_count + ")" : "")
                 color: root.theme.muted
                 font.family: root.theme.mono
                 font.pixelSize: root.theme.small
+                elide: Text.ElideRight
                 textFormat: Text.PlainText
             }
             TapHandler { onTapped: root.app.toggleOtherNotes() }
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
-        Item { Layout.fillWidth: true }
         TextButton { theme: root.theme; icon: "notePlus"; text: "New note"; onClicked: root.app.edit("note", null) }
     }
 
@@ -61,6 +69,7 @@ ScrollPane {
             required property var modelData
             readonly property var image: root.app.noteImages[modelData.id]
             property bool expandedClip: false
+            readonly property var blocks: Markdown.blocks(modelData.body || "")
             Layout.fillWidth: true
             implicitHeight: noteColumn.implicitHeight + root.theme.space(24)
             color: root.theme.app
@@ -69,6 +78,7 @@ ScrollPane {
             radius: root.theme.radius
 
             Component.onCompleted: if (modelData.image) root.app.loadNoteImage(modelData)
+            onBlocksChanged: root.app.ensureMath(Markdown.mathKeys(blocks))
 
             ColumnLayout {
                 id: noteColumn
@@ -87,27 +97,26 @@ ScrollPane {
                         tooltip: card.modelData.evidence || ""
                     }
                     Text {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         text: Format.relativeTime(card.modelData.updated_at || card.modelData.created_at) + " · " + card.modelData.provenance + (card.modelData.revision > 1 ? " · rev " + card.modelData.revision : "")
                         color: root.theme.dim
                         font.family: root.theme.mono
                         font.pixelSize: root.theme.small
+                        elide: Text.ElideRight
                         textFormat: Text.PlainText
                     }
-                    Item { Layout.fillWidth: true }
                     IconButton { theme: root.theme; icon: "pencil"; size: root.theme.space(24); iconSize: root.theme.title; iconColor: root.theme.dim; tooltip: "Edit note"; onClicked: root.app.edit("note", card.modelData) }
                     IconButton { theme: root.theme; icon: "trash"; size: root.theme.space(24); iconSize: root.theme.title; iconColor: root.theme.dim; tooltip: "Delete note"; onClicked: root.app.requestNoteDelete(card.modelData.id) }
                 }
 
-                Text {
+                ReadingText {
+                    objectName: "noteBody"
                     Layout.fillWidth: true
-                    visible: text !== ""
-                    text: card.modelData.body || ""
-                    color: root.theme.bright
-                    font.family: root.theme.readingFamily
-                    font.pixelSize: root.theme.title
-                    lineHeight: 1.45
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
+                    visible: card.blocks.length > 0
+                    theme: root.theme
+                    text: visible ? Markdown.toHtml(card.blocks, root.style, root.app.mathCache) : ""
+                    onOpenLink: url => root.app.openExternal(url)
                 }
 
                 Flow {

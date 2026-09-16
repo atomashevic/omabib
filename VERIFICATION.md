@@ -176,3 +176,32 @@ The popup was rebuilt from one 1,272-line `App.qml` into `App.qml` (state, RPC, 
 - **Installed, driven over IPC with the popup hidden:** `setQuery wang_when_2026` then `openTab` opened a paper tab, showed that reference, and wrote `~/.local/state/omabib/tabs.json` with the tab active. After `omarchy restart shell` the tab, the active tab and the reference were restored. `selectTab ai` loaded the cached 16,030-character overview inside the tab and saved `detail_tab: "ai"`. `closeTab 0` returned to the library tab and removed the library's entry from the file. The shell log showed no QML errors.
 - **Also passing:** Rust (45), renderer (10), `scripts/test_claude.py`, `omarchy plugin validate plugin`.
 - **Not run:** `scripts/test_tabs_ui.py`, which now also covers Ctrl+T, Ctrl+Enter, Alt+0, Ctrl+PgUp, persistence across hiding the popup, and Ctrl+W. It types into the popup and needs an idle desktop. The tab strip was not visually inspected on the desktop.
+
+## Markdown note editor with math and code blocks (2026-09-16)
+
+- **Rust:** `cargo test --locked` passes, including `tests/math.rs`: inline, display and matrix formulas render to SVG; `\frac{a`, an unknown command and an empty formula return errors; repeat calls hit the cache; color changes miss it; bad colors and oversized formulas are rejected. `cargo clippy --all-targets -- -D warnings` is clean.
+- **Renderer:** `node scripts/test_overview_text.js` (10) and `node scripts/test_markdown.js` (9) pass: source line ranges, `$5 and $10` versus `$E=mc^2$`, `\$`, `$$`/`\[` blocks, unclosed fences, fence languages, escaping, and forged placeholders.
+- **Offscreen QML:** 23 tests pass. `3b-markdown-note` renders a heading, inline and centered display math from real `render_math` SVGs, a failed formula as red TeX, a code block and a list. `10-note-editor` checks list continuation, double Enter, ↑/↓ block navigation, clicking a rendered block, Backspace joining blocks, Enter inside and after a fence, toolbar wrapping and the active-block math preview.
+- **Installed:** `./scripts/install.sh` succeeded, and `omabib call render_math` on the running service returned SVGs (two new formulas in 7 ms once fonts were loaded). The release binary grew from 10.9 MB to 56.7 MB (Typst and its bundled fonts).
+- **Not verified live:** `scripts/test_quick_note_ui.py` fails at "Background search changes must not retarget an already-open editor" (`selected` stays `null` after `setQuery`) with both this plugin and the previous commit's plugin, so the failure predates this change. A wtype-driven note-editor run was abandoned because the popup did not hold keyboard focus while the desktop was in use.
+
+## MuPDF reader tabs, clip notes, native window (2026-09-16)
+
+- **Rust:** `cargo test --locked` passes; `cargo clippy --all-targets -- -D warnings` is clean.
+  - `tests/pdf.rs` uses a hand-written two-page Helvetica PDF: page sizes; renders snapping to quarter scales and hitting the cache; out-of-range pages and unknown documents refused; word boxes with a top-left origin; search across pages; a changed file invalidates its `doc_id`.
+  - Through `Library`: `pdf_open` for attached PDFs only; a `rect_pt` clip saved as a 3× PNG (602×60 for 200.5×20 pt) with `unit:"pt"`, returned by `get_note_image`, idempotent; unattached PDFs, missing pages, rectangles off the page and sub-point rectangles rejected.
+- **Offscreen QML:** 24 tests pass. `test_11_pdf_reader` covers:
+  - restoring the saved page;
+  - only pt clips for the open PDF drawn;
+  - `G`, `gg` and `2G`, and `j` scrolling;
+  - pixels to points at zoom 1.5;
+  - multi-line selection copied with Ctrl+C, and Esc clearing it;
+  - search jumping to its hit;
+  - an internal link;
+  - the clip tool's drag giving a pt rectangle with a preview;
+  - `a` for a page note;
+  - clicking a saved clip to edit its note.
+  Screenshots `11-reader-clip-tool` and `11b-reader` were checked, which caught and fixed the Notes pane overflowing its column.
+- **Scripts:** `scripts/test_claude.py` and `scripts/test_codex.py` pass. `omabib-codex` and `omabib-overview` now carry their own socket helper instead of loading the deleted `omabib-quick-note`.
+- **Installed:** `./scripts/install.sh` built MuPDF 1.27.2 from the `mupdf` crate (the release binary grew from 56.7 MB to 65.6 MB), restarted the service, and removed the old Zathura helpers. On the real library, `pdf_open` for a 69-page paper took 37 ms (27 outline entries). Renders at 2× took about 45 ms per page and 3 ms from cache. Searching "language model" found 144 hits in 82 ms.
+- **Not yet verified live:** the Omabib window, `omabib open` toggling, reader tabs and saving a clip in the running shell. The shell keeps cached plugin code until `omarchy restart shell`.

@@ -5,7 +5,6 @@ import Qt.labs.folderlistmodel
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
 import qs.Commons
 import "components"
 import "components/Format.js" as Format
@@ -34,17 +33,18 @@ Item {
     property int noteDeleteRequest: -1
     property string pendingOpenRefId: ""
     property bool codexBusy: false
-    property var readingContext: null
-    property bool quickNoteMode: false
-    property var quickNoteContext: null
     property string noteTargetId: ""
     property string noteTargetTitle: ""
     property int noteSaveRequest: -1
     property bool noteSaving: false
-    property string clipPath: ""
-    property var clipRectangle: null
-    property bool captureBusy: false
-    property var pendingQuickNote: null
+    // A note being written in a reader tab's side pane; see NoteComposer.
+    property var composer: null
+    property bool composerSaving: false
+    property string composerError: ""
+    // Error callbacks for requests that handle their own failures, by request id.
+    property var rpcErrors: ({})
+    // Bumped on every (re)connection, so views waiting on lost replies can start over.
+    property int connectionEpoch: 0
     property string projectId: ""
     property string serviceSocket: Quickshell.env("OMABIB_SOCKET") || ((Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/omabib/socket")
     readonly property string pdfShortcut: Quickshell.env("OMABIB_PDF_SHORTCUT") || "Ctrl+O"
@@ -106,24 +106,35 @@ Item {
     property bool syncBusy: false
     property bool repoBusy: false
     property int syncRequest: -1
-    // Preferences from omabib-settings: {pdf_viewer, ai_cli, ai_desktop}, plus
+    // Preferences from omabib-settings: {ai_cli, ai_desktop}, plus
     // the installed choices the Settings dialog offers.
-    property var settings: ({pdf_viewer: "", ai_cli: "codex", ai_desktop: "chatgpt"})
+    property var settings: ({ai_cli: "codex", ai_desktop: "chatgpt"})
     property var settingsInfo: null
     property bool settingsBusy: false
     property var settingsQueue: []
     // Paper tabs: opened beside the library tab, sticky until closed, at most
     // maxTabs, and kept per library socket in $XDG_STATE_HOME/omabib/tabs.json.
-    readonly property int maxTabs: 10
+    readonly property int maxTabs: 12
     property var paperTabs: []
     property int activeTab: -1
     readonly property bool inPaperTab: activeTab >= 0 && activeTab < paperTabs.length
     readonly property var activePaper: inPaperTab ? paperTabs[activeTab] : null
-    readonly property var tabIds: paperTabs.map(function(t){return t.id})
+    // Tab identity: a reference can be open both as a paper tab and as a PDF tab.
+    readonly property var tabIds: paperTabs.map(function(t){return tabKey(t)})
+    readonly property bool inPdfTab: inPaperTab && activePaper.kind==="pdf"
     // The library tab's detail while a paper tab is showing.
     property var searchView: ({selected: null, detailTab: "overview"})
     property var paperCache: ({})
     property var overviewCache: ({})
+    // Rendered LaTeX for Markdown notes and overviews, by Markdown.mathKey:
+    // {path, width, height} or {error}. Rendered in the reading color, so a
+    // theme change starts over.
+    property var mathCache: ({})
+    property var mathQueued: ({})
+    property var mathQueue: []
+    property var mathRequests: ({})
+    readonly property string mathColor: ui.css(ui.bright)
+    onMathColorChanged: { mathCache=({}); mathQueued=({}); mathQueue=[] }
     property var tabsStore: ({})
     property bool tabsRestored: false
     readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omabib"
@@ -331,9 +342,9 @@ Item {
     function open(payloadJson) {
         var payload = {}
         try { payload = JSON.parse(payloadJson || "{}") } catch (e) {}
-        if(payload.action==="quick_note") { openQuickNote(payload); return }
-        if(editorDialog.opened) { editor.forceActiveFocus(); return }
-        if(payload.socket_path && payload.socket_path!==serviceSocket){saveTabs();readingContext=null;resetOverview();overviewCache=({});socket.connected=false;serviceSocket=payload.socket_path;applyTabs();Qt.callLater(function(){socket.connected=true})}
+        if(editorDialog.opened) { activeEditor().forceActiveFocus(); return }
+        if(payload.socket_path && payload.socket_path!==serviceSocket){saveTabs();resetOverview();overviewCache=({});socket.connected=false;serviceSocket=payload.socket_path;applyTabs();Qt.callLater(function(){socket.connected=true})}
+        if(payload.action==="pdf" && payload.ref_id) { opened=true; if(socket.connected)refresh(); openPdfTabById(payload.ref_id); return }
         if(payload.ref_id || payload.query!==undefined || payload.action==="add") activateTab(-1)
         pendingOpenRefId=payload.ref_id||""
         if(pendingOpenRefId){authorFilter.text="";yearFilter.text="";typeFilter.text="";labelFilter.text="";attentionView=""}
@@ -344,12 +355,11 @@ Item {
         opened = true
         if (socket.connected) refresh()
         else socket.connected = true
-        Qt.callLater(function() { if(payload.action==="add"){closeMenus();commandDialog.close();bibFileDialog.close();metadataDialog.close();previewDialog.close();repoDialog.close();projectDialog.close();if(editorDialog.opened)editor.forceActiveFocus();else edit("quick");}else{query.forceActiveFocus(); query.selectAll()} })
+        Qt.callLater(function() { if(payload.action==="add"){closeMenus();commandDialog.close();bibFileDialog.close();metadataDialog.close();previewDialog.close();repoDialog.close();projectDialog.close();if(editorDialog.opened)activeEditor().forceActiveFocus();else edit("quick");}else if(root.inPaperTab){root.focusActiveTab()}else{query.forceActiveFocus(); query.selectAll()} })
     }
     function close() {
         opened = false
         closeMenus()
-        if(quickNoteMode) { quickNoteMode=false; editorDialog.close() }
     }
     function closeMenus() {
         projectMenu.close();attentionMenu.close();overflowMenu.close()
@@ -375,11 +385,17 @@ Item {
     function enterPaper(index) {
         var tab=paperTabs[index]
         activeTab=index
-        detailTab=tab.detail_tab||"overview"
+        detailTab=tab.detail_tab||(tab.kind==="pdf"?"notes":"overview")
         selected=paperCache[tab.id]||null
         loadPaper(index)
-        Qt.callLater(function(){if(root.inPaperTab)paperKeys.forceActiveFocus()})
+        Qt.callLater(focusActiveTab)
     }
+    function focusActiveTab() {
+        if(!inPaperTab)return
+        if(inPdfTab)readerPane.forceActiveFocus()
+        else paperKeys.forceActiveFocus()
+    }
+    function tabKey(tab) { return (tab.kind==="pdf"?"pdf:":"")+tab.id }
     function activateTab(index) {
         if(index<-1 || index>=paperTabs.length)return
         closeMenus()
@@ -403,8 +419,10 @@ Item {
         var id=tab.id
         rpc("get_reference",{id:id,project_id:projectId||null,include_notes:true,include_attachments:true,include_other_projects:includeOtherNotes,note_chars:65536},function(r){
             root.paperCache[id]=r
-            var at=root.tabIds.indexOf(id)
-            if(at>=0 && (root.paperTabs[at].title!==(r.title||r.citekey) || root.paperTabs[at].citekey!==r.citekey))root.updateTab(at,{title:r.title||r.citekey,citekey:r.citekey})
+            for(var at=0;at<root.paperTabs.length;++at){
+                var t=root.paperTabs[at]
+                if(t.id===id && (t.title!==(r.title||r.citekey) || t.citekey!==r.citekey))root.updateTab(at,{title:r.title||r.citekey,citekey:r.citekey})
+            }
             if(root.inPaperTab && root.activePaper.id===id)root.selected=r
         })
     }
@@ -431,12 +449,27 @@ Item {
         if(background){saveTabs();flash("Opened "+ref.citekey+" in a tab")}
         else activateTab(paperTabs.length-1)
     }
+    // Opens a reference's PDF in a reader tab, or shows its existing reader tab.
+    function openPdfTab(ref, background) {
+        ref=ref||targetRef()
+        if(!ref)return
+        var at=tabIds.indexOf("pdf:"+ref.id)
+        if(at>=0){ if(!background)activateTab(at); return }
+        if(paperTabs.length>=maxTabs){flash(maxTabs+" tabs are open. Close one to open another.");return}
+        if(selected && selected.id===ref.id)paperCache[ref.id]=selected
+        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,kind:"pdf",detail_tab:"notes",page:1,zoom_mode:"width",zoom:1}])
+        if(background)saveTabs()
+        else activateTab(paperTabs.length-1)
+    }
+    function openPdfTabById(refId) {
+        rpc("get_reference",{id:refId,include_metadata:false},function(r){root.openPdfTab(r,false)})
+    }
     function closeTab(index) {
         if(index<0 || index>=paperTabs.length)return
         var closing=paperTabs[index]
         var tabs=paperTabs.slice()
         tabs.splice(index,1)
-        delete paperCache[closing.id]
+        if(!tabs.some(function(t){return t.id===closing.id}))delete paperCache[closing.id]
         closeMenus()
         if(index===activeTab){
             activeTab=-1
@@ -480,7 +513,11 @@ Item {
         if(!tabsRestored)return
         var entry=tabsStore[serviceSocket]||{}
         var tabs=(Array.isArray(entry.tabs)?entry.tabs:[]).filter(function(t){return t && typeof t.id==="string" && typeof t.citekey==="string"})
-            .slice(0,maxTabs).map(function(t){return {id:t.id,citekey:t.citekey,title:String(t.title||t.citekey),detail_tab:detailTabs.indexOf(t.detail_tab)>=0?t.detail_tab:"overview"}})
+            .slice(0,maxTabs).map(function(t){
+                var tab={id:t.id,citekey:t.citekey,title:String(t.title||t.citekey),detail_tab:detailTabs.indexOf(t.detail_tab)>=0?t.detail_tab:"overview"}
+                if(t.kind==="pdf"){tab.kind="pdf";tab.page=Number.isInteger(t.page)&&t.page>0?t.page:1;tab.zoom_mode=["width","page","custom"].indexOf(t.zoom_mode)>=0?t.zoom_mode:"width";tab.zoom=typeof t.zoom==="number"&&t.zoom>0?t.zoom:1}
+                return tab
+            })
         if(inPaperTab){activeTab=-1;selected=searchView.selected;detailTab=searchView.detailTab||"overview";searchView={selected:null,detailTab:"overview"}}
         paperCache=({})
         paperTabs=tabs
@@ -494,95 +531,67 @@ Item {
         onLoaded:root.restoreTabs(text())
         onLoadFailed:error=>root.restoreTabs("")
     }
-    function readingTarget(hit) {
-        return hit ? {ref_id:hit.id,project_id:projectId,socket_path:serviceSocket} : null
+    // Opens a clip (rect_pt) or page note from a reader tab in the note editor.
+    function editClip(clip) {
+        if(!selected || !inPdfTab || selected.id!==activePaper.id)return
+        composeInSide(null,clip)
     }
-    function discardClip(path) {
-        if(path)Quickshell.execDetached(["omabib-capture-note","--discard",path])
+    function composeInSide(note, clip) {
+        closeMenus()
+        composerError=""
+        composer={note:note||null,clip:clip||null,token:"ui-"+Date.now()+"-"+Math.random().toString(36).slice(2),
+            projectId:note?note.project_id:(projectId||null),labels:note?(note.labels||[]).join(", "):"",
+            evidence:note?(note.evidence||""):clip?"PDF p. "+clip.page:""}
+        detailTab="notes"
     }
-    function captureClip() {
-        if(!quickNoteMode || captureBusy || noteSaving)return
-        error=""
-        captureBusy=true
-        clipStart.restart()
+    function cancelComposer() {
+        composer=null
+        composerError=""
+        Qt.callLater(focusActiveTab)
     }
-    Timer {id:clipStart;interval:80;onTriggered:{clipCapture.command=["omabib-capture-note",JSON.stringify(root.quickNoteContext)];clipCapture.running=true}}
-    Process {
-        id:clipCapture
-        stdout:SplitParser {
-        onRead: data => {
-            var result={}
-            try{result=JSON.parse(data)}catch(e){result.error="Capture did not return an image"}
-            root.captureBusy=false
-            if(!root.opened || !root.quickNoteMode){root.discardClip(result.path);return}
-            if(result.path){root.discardClip(root.clipPath);root.clipPath=result.path;root.clipRectangle=result.rectangle}
-            else if(result.error)root.error=result.error
-            Qt.callLater(function(){editor.forceActiveFocus()})
-        }
-        }
+    function saveComposer(body, noteProjectId, labelText, evidenceText) {
+        var draft=composer
+        if(!draft || composerSaving || !selected)return
+        var clip=draft.note ? null : draft.clip
+        if(!body.trim() && !(clip && clip.rect_pt) && !(draft.note && draft.note.image)){composerError="Write something first";return}
+        var method=draft.note ? "update_note" : clip && clip.rect_pt ? "add_visual_note" : "add_note"
+        var args={ref_id:selected.id,project_id:noteProjectId,body:body,provenance:"human",evidence:evidenceText,idempotency_key:draft.token,
+            labels:labelText.split(",").map(function(s){return s.trim()}).filter(function(s){return s.length>0})}
+        if(clip && clip.rect_pt){args.source_pdf=clip.source_pdf;args.page=clip.page;args.rect_pt=clip.rect_pt}
+        if(draft.note){args.id=draft.note.id;args.expected_revision=draft.note.revision}
+        composerSaving=true
+        composerError=""
+        var id=rpc(method,args,function(){
+            root.composerSaving=false
+            if(root.composer!==draft)return
+            root.composer=null
+            root.flash("Saved")
+            root.reloadDetail()
+            Qt.callLater(root.focusActiveTab)
+        },function(message){root.composerSaving=false;root.composerError=message})
+        if(id<0)composerSaving=false
     }
-    function openQuickNote(payload) {
-        if(editorDialog.opened) { editor.forceActiveFocus(); return }
-        if(!payload.ref_id || !payload.socket_path || !Number.isInteger(payload.page) || payload.page<1) return
-        if(payload.socket_path!==serviceSocket || !socket.connected) {
-            pendingQuickNote=payload
-            saveTabs()
-            resetOverview()
-            overviewCache=({})
-            socket.connected=false
-            serviceSocket=payload.socket_path
-            applyTabs()
-            Qt.callLater(function(){socket.connected=true})
-            return
-        }
-        readingContext={ref_id:payload.ref_id,project_id:payload.project_id||"",socket_path:payload.socket_path}
-        quickNoteContext=payload
-        quickNoteMode=true
-        opened=true
-        error=""
-        rpc("list_projects",{},function(r){
-            if(!opened || !quickNoteMode || quickNoteContext!==payload)return
-            projects=r.projects
-            rpc("get_reference",{id:payload.ref_id,include_attachments:true},function(ref){
-                if(!opened || !quickNoteMode || quickNoteContext!==payload)return
-                selected=ref
-                edit("note",null)
-                editorDialog.title="Note  ·  p. "+payload.page
-                if(payload.clip && payload.clip.path){clipPath=payload.clip.path;clipRectangle=payload.clip.rectangle}
-                evidence.text="PDF p. "+payload.page+" · "+payload.pdf_path
-                noteScope.currentIndex=0
-                for(var i=0;i<projects.length;i++)if(projects[i].id===payload.project_id)noteScope.currentIndex=i+1
-            })
-        })
-    }
+    onActiveTabChanged: if(composer)composer=null
     function fileUrl(path) { return "file://" + path.split("/").map(encodeURIComponent).join("/") }
-    function openExternal(url, context, isPdf) {
-        readingContext=context || readingTarget(selected || currentHit())
-        // The browser launcher explicitly focuses an existing browser window.
-        // Drop our exclusive layer focus before starting either application.
-        dismiss()
-        if(/^file:\/\//i.test(url) && (isPdf || /\.pdf$/i.test(url)) && settings.pdf_viewer) {
-            Quickshell.execDetached(["gtk-launch", settings.pdf_viewer, decodeURIComponent(url.slice(7))])
-        } else if(/^https?:\/\//i.test(url)) {
+    function openExternal(url) {
+        if(/^https?:\/\//i.test(url)) {
             Quickshell.execDetached(["omarchy-launch-browser", url])
         } else {
-            Qt.callLater(function() {
-                if(!Qt.openUrlExternally(url)) {
-                    error="Could not open "+url
-                    if(shell && shell.summon) shell.summon("omabib", "{}")
-                }
-            })
+            Qt.callLater(function() { if(!Qt.openUrlExternally(url)) error="Could not open "+url })
         }
     }
+    // Enter on a result: its PDF in a reader tab, or its link when there is no PDF.
     function openPdf() {
         var hit=targetRef();if(!hit)return
-        var context=readingTarget(hit)
-        rpc("open_target",{id:hit.id},function(r){openExternal(r.url,context,r.kind==="pdf")})
+        rpc("open_target",{id:hit.id},function(r){ if(r.kind==="pdf")openPdfTab(hit,false); else openExternal(r.url) })
     }
     function openLink() {
         var hit=targetRef();if(!hit)return
-        var context=readingTarget(hit)
-        rpc("open_target",{id:hit.id,prefer:"link"},function(r){openExternal(r.url,context)})
+        rpc("open_target",{id:hit.id,prefer:"link"},function(r){openExternal(r.url)})
+    }
+    function openPdfExternally() {
+        var hit=targetRef();if(!hit)return
+        rpc("get_pdf",{ref_id:hit.id,download:false},function(r){Quickshell.execDetached(["xdg-open",r.path])})
     }
     function arxivIdOf(ref) { return Format.arxivId(ref) }
     function openCodex(desktop) {
@@ -727,13 +736,15 @@ Item {
     }
     property bool pdfBusy: false
     property int pdfRequest: -1
+    // Opens the PDF in a reader tab, first downloading an open-access copy if none is attached.
     function getPdf() {
         var hit=targetRef();if(!hit||pdfBusy)return
-        var context=readingTarget(hit)
+        if(inPdfTab && activePaper.id===hit.id)return
         pdfBusy=true
         pdfRequest=rpc("get_pdf",{ref_id:hit.id},function(r){
             pdfBusy=false
-            openExternal(root.fileUrl(r.path),context,true)
+            openPdfTab(hit,false)
+            if(r.source==="download")reloadDetail()
         })
         if(pdfRequest<0)pdfBusy=false
     }
@@ -817,11 +828,38 @@ Item {
         close()
         if (shell && shell.hide) shell.hide("omabib")
     }
-    function rpc(method, params, callback) {
+    // Queue formulas ([{key, tex, display}]) that are not rendered or queued yet.
+    function ensureMath(items) {
+        var added=false
+        for(var i=0;i<(items||[]).length;++i){var m=items[i];if(mathCache[m.key]||mathQueued[m.key])continue;mathQueued[m.key]=true;mathQueue.push(m);added=true}
+        if(added)mathTimer.restart()
+    }
+    function flushMath() {
+        if(!mathQueue.length||!socket.connected)return
+        var batch=mathQueue.splice(0,200),color=mathColor
+        var id=rpc("render_math",{items:batch.map(function(m){return {tex:m.tex,display:m.display}}),color:color,size_px:ui.title},function(r){
+            if(color!==root.mathColor)return
+            var next=Object.assign({},root.mathCache)
+            for(var i=0;i<batch.length;++i){next[batch[i].key]=r.items[i]||{error:""};delete root.mathQueued[batch[i].key]}
+            root.mathCache=next
+        })
+        if(id>=0)mathRequests[id]=batch
+        if(mathQueue.length)mathTimer.restart()
+    }
+    // A failed request leaves its formulas as TeX source instead of an error banner.
+    function mathFailed(id, message) {
+        var batch=mathRequests[id]||[]
+        delete mathRequests[id]
+        var next=Object.assign({},mathCache)
+        for(var i=0;i<batch.length;++i){next[batch[i].key]={error:message};delete mathQueued[batch[i].key]}
+        mathCache=next
+    }
+    function rpc(method, params, callback, onError) {
         if (!socket.connected) { error = "Omabib service is unavailable. Start it with systemctl --user start omabib."; return -1 }
         var id = ++sequence
         if(method==="search"){if(pendingSearch!==-1)delete pending[pendingSearch];pendingSearch=id}
         pending[id] = callback || function() {}
+        if(onError)rpcErrors[id]=onError
         socket.write(JSON.stringify({v:1,id:id,method:method,params:params}) + "\n")
         socket.flush()
         return id
@@ -1007,32 +1045,34 @@ Item {
         editor.text=text
     }
     function edit(kind, n) {
+        // In a reader tab notes are written in the side pane, beside the page.
+        if(kind==="note" && inPdfTab && selected && selected.id===activePaper.id){composeInSide(n,null);return}
         closeMenus()
         editToken = "ui-"+Date.now()+"-"+Math.random().toString(36).slice(2)
         editKind = kind
         editingNote = n || null
-        discardClip(clipPath);clipPath="";clipRectangle=null
         if(kind==="note") { noteTargetId=selected?selected.id:""; noteTargetTitle=selected?selected.title:"" }
         editorDialog.title = kind==="note" ? (n ? "Edit note" : "New note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add to library" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
-        editor.text = kind==="note" ? (n ? n.body : "") : kind==="metadata" && selected ? selected.bibtex : kind==="import" ? "@article{key,\n  title = {},\n  author = {},\n  year = {}\n}" : ""
+        if(kind==="note") noteEditor.text = n ? n.body : ""
+        else editor.text = kind==="metadata" && selected ? selected.bibtex : kind==="import" ? "@article{key,\n  title = {},\n  author = {},\n  year = {}\n}" : ""
         labels.text = n ? (n.labels || []).join(", ") : ""
         evidence.text = n ? (n.evidence || "") : ""
         noteScope.currentIndex = 0
         var pid = n ? n.project_id : projectId
         for(var i=0;i<projects.length;++i) if(projects[i].id===pid)noteScope.currentIndex=i+1
         editorDialog.open()
-        Qt.callLater(function(){editor.forceActiveFocus()})
+        Qt.callLater(function(){activeEditor().forceActiveFocus()})
     }
+    // Notes get the Markdown editor; every other kind edits plain text.
+    function activeEditor() { return editKind==="note" ? noteEditor : editor }
     function saveEditor() {
-        var body=editor.text
-        if ((!body.trim() && !clipPath && !(editingNote && editingNote.image)) || noteSaving || captureBusy) return
-        var wasQuick=quickNoteMode
+        var body=activeEditor().text
+        if ((!body.trim() && !(editingNote && editingNote.image)) || noteSaving) return
         var method, args
         if (editKind==="note") {
             if (!noteTargetId) return
-            method = editingNote ? "update_note" : clipPath ? "add_visual_note" : "add_note"
+            method = editingNote ? "update_note" : "add_note"
             args={ref_id:noteTargetId,project_id:noteScope.currentIndex===0 ? null : projects[noteScope.currentIndex-1].id,body:body,provenance:"human",labels:labels.text.split(",").map(function(s){return s.trim()}).filter(function(s){return s.length>0}),evidence:evidence.text}
-            if(clipPath){args.image_path=clipPath;args.source_pdf=quickNoteContext.pdf_path;args.page=quickNoteContext.page;args.rectangle=clipRectangle}
             if(editingNote){args.id=editingNote.id;args.expected_revision=editingNote.revision}
         } else if(editKind==="metadata") {
             method="upsert_reference";args={id:selected.id,expected_revision:selected.revision,bibtex:body}
@@ -1050,7 +1090,7 @@ Item {
         args.idempotency_key=editToken
         noteSaving=editKind==="note"
         var submittedToken=editToken
-        noteSaveRequest=rpc(method,args,function(r){if(editToken!==submittedToken)return;editorDialog.close();if(wasQuick)return;flash("Saved");refresh();if(!inPaperTab && expanded)showDetail();showImportReport(r)})
+        noteSaveRequest=rpc(method,args,function(r){if(editToken!==submittedToken)return;editorDialog.close();flash("Saved");refresh();if(!inPaperTab && expanded)showDetail();showImportReport(r)})
         if(noteSaveRequest<0)noteSaving=false
     }
     function showImportReport(r) {
@@ -1262,6 +1302,8 @@ Item {
             {key:"copy_bibtex",label:"BibTeX",icon:"braces"},
             {key:"copy_pdf",label:"PDF path",icon:"pdf"},
             {separator:true},
+            {key:"external_pdf",label:"Open PDF in another app",icon:"external"},
+            {separator:true},
             {key:"delete",label:"Delete…",icon:"trash",danger:true}
         ]
         overflowMenu.openAt(anchor,"right")
@@ -1296,12 +1338,10 @@ Item {
         error=""
         deleteRequest=rpc("delete_reference",{id:target.id,expected_revision:target.revision,confirm_citekey:target.citekey,expected_notes:target.note_count,expected_attachments:target.attachment_count,idempotency_key:"ui-delete-"+Date.now()+"-"+Math.random().toString(36).slice(2)},function(r){
             deleteBusy=false;deleteRequest=-1;deleteDialog.close()
-            if(readingContext && readingContext.ref_id===target.id)readingContext=null
             if(overviewRefId===target.id)resetOverview()
             delete overviewCache[target.id]
             var fromTab=inPaperTab && activePaper.id===target.id
-            var tabIndex=tabIds.indexOf(target.id)
-            if(tabIndex>=0)closeTab(tabIndex)
+            for(var i=paperTabs.length-1;i>=0;--i)if(paperTabs[i].id===target.id)closeTab(i)
             if(!fromTab){setSearchSelected(null);expanded=false}
             if(query.text.trim()===target.citekey)query.text=""
             flash("Deleted "+r.citekey+" · PDF files kept")
@@ -1347,24 +1387,26 @@ Item {
         function openCodex(): void { root.openCodex() }
         function openSettings(): void { root.openSettings() }
         function openTab(): void { root.openInTab(null, false) }
+        function openPdf(refId: string): void { root.open(JSON.stringify({action: "pdf", ref_id: refId})) }
         function activateTab(index: int): void { root.activateTab(index) }
         function closeTab(index: int): void { root.closeTab(index) }
         function openChatGPT(): void { root.openCodex(true) }
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,reading_context:root.readingContext,quick_note:root.quickNoteMode,note_target_id:root.noteTargetId,note_evidence:evidence.text,clip_path:root.clipPath,capture_busy:root.captureBusy,note_scope:noteScope.currentIndex,editor_focused:editor.activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),active_tab:root.activeTab,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_viewer:root.settings.pdf_viewer,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
     Timer { interval: 1500; running: !socket.connected; repeat: true; onTriggered: socket.connected=true }
+    Timer { id: mathTimer; interval: 60; onTriggered: root.flushMath() }
     Socket {
         id: socket
         path: root.serviceSocket
         connected: true
         onConnectedChanged: {
-            if(connected){root.error="";if(root.pendingQuickNote){var p=root.pendingQuickNote;root.pendingQuickNote=null;root.openQuickNote(p)}else if(root.opened)root.refresh()}
-            else {root.pending=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
+            if(connected){root.error="";root.connectionEpoch++;Qt.callLater(root.flushMath);if(root.opened)root.refresh()}
+            else {for(var id in root.mathRequests)root.mathQueue=root.mathQueue.concat(root.mathRequests[id]);root.mathRequests=({});root.pending=({});root.rpcErrors=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
         }
         parser: SplitParser {
             onRead: data => {
@@ -1378,6 +1420,10 @@ Item {
                     if(message.id===root.noteSaveRequest)root.noteSaving=false
                     if(message.id===root.deleteRequest){root.deleteBusy=false;root.deleteRequest=-1}
                     if(message.id===root.noteDeleteRequest){root.noteDeleteBusy=false;root.noteDeleteRequest=-1}
+                    if(root.mathRequests[message.id]){if(message.error){root.mathFailed(message.id,message.error.message);return}delete root.mathRequests[message.id]}
+                    var onError=root.rpcErrors[message.id]
+                    delete root.rpcErrors[message.id]
+                    if(message.error && onError){onError(message.error.message);return}
                     if(message.error){if(message.id===root.metadataRequest)root.metadataInfo=message.error.message;if(message.id===root.pendingSearch)root.searchPending=false;root.error=message.error.message;return}
                     if(callback)callback(message.result)
                 } catch(e){root.error="Could not read the library response: "+e}
@@ -1391,43 +1437,24 @@ Item {
             if(root.openPending){root.openMs=Date.now()-root.openedAt;root.openPending=false}
         }
     }
-    PanelWindow {
+    // A normal Hyprland window. `omabib open` (Super+B) shows, focuses or hides it.
+    FloatingWindow {
         id: window
-        visible: root.opened && !root.captureBusy
-        color: "transparent"
-        anchors { top: true; bottom: true; left: true; right: true }
-        exclusionMode: ExclusionMode.Ignore
-        WlrLayershell.namespace: "omabib"
-        WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-        MouseArea { anchors.fill:parent;onClicked:root.dismiss() }
-        Text {
-            anchors.centerIn: parent
-            width: Math.min(600, parent.width - 60)
-            visible: root.quickNoteMode && !editorDialog.opened
-            text: root.error || "Opening note…"
-            color: ui.bright
-            font.family: ui.mono
-            font.pixelSize: ui.subtitle
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-        }
+        title: "Omabib"
+        visible: root.opened
+        color: ui.app
+        implicitWidth: 1320
+        implicitHeight: 840
+        minimumSize: Qt.size(760, 520)
+        // Closed from Hyprland (Super+W, a close button): tell the shell, as dev-gallery does.
+        onVisibleChanged: if(!visible && root.opened){root.close();if(root.shell && root.shell.hide)root.shell.hide("omabib")}
         Rectangle {
             id: card
-            visible: !root.quickNoteMode
-            anchors.centerIn: parent
+            anchors.fill: parent
             readonly property bool wide: root.expanded || root.inPaperTab
-            width: Math.min(parent.width-48,wide?1320:800)
-            height: Math.min(parent.height-64,wide?840:620)
             color: ui.app
-            radius: ui.radius
-            border.color: ui.border
-            border.width: 1
             clip: true
-            Behavior on width { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-            Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-            MouseArea { anchors.fill:parent;onClicked:root.inPaperTab?paperKeys.forceActiveFocus():query.forceActiveFocus() }
+            MouseArea { anchors.fill:parent;onClicked:root.inPaperTab?root.focusActiveTab():query.forceActiveFocus() }
             // Keyboard focus while a paper tab shows: typing starts a search in the library tab.
             Item {
                 id: paperKeys
@@ -1484,10 +1511,21 @@ Item {
                                 spacing: 0
                                 ErrorBanner { Layout.fillWidth: true }
                                 DetailPane {
+                                    visible: !root.inPdfTab
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     theme: ui
                                     app: root
+                                }
+                                ReaderPane {
+                                    id: readerPane
+                                    objectName: "readerPane"
+                                    visible: root.inPdfTab
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    theme: ui
+                                    app: root
+                                    tab: root.inPdfTab ? root.activePaper : null
                                 }
                             }
                         }
@@ -1498,7 +1536,9 @@ Item {
                     Layout.fillWidth: true
                     theme: ui
                     notice: root.notice
-                    hints: root.inPaperTab
+                    hints: root.inPdfTab
+                        ? [["j/k", "scroll"], ["gg/G", "first/last"], ["/", "search"], ["r", "clip"], ["a", "page note"], ["o", "contents"], ["]", "notes"], ["^W", "close tab"]]
+                        : root.inPaperTab
                         ? [[root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^1–5", "sections"], ["^PgUp/Dn", "switch tab"], ["^W", "close tab"], ["type", "search"], ["q", "close"]]
                         : root.expanded
                         ? [["↑↓", "navigate"], ["↵", "open"], [root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^T", "new tab"], ["^1–5", "sections"], ["^K", "actions"], ["q", "close"]]
@@ -1523,6 +1563,7 @@ Item {
                     case "copy_pandoc": root.copyFormat("pandoc"); break
                     case "copy_bibtex": root.copyFormat("bibtex"); break
                     case "copy_pdf": root.copyPdfPath(); break
+                    case "external_pdf": root.openPdfExternally(); break
                     case "delete": root.requestDelete(); break
                     }
                 }
@@ -1554,8 +1595,9 @@ Item {
         Shortcut {sequence:"Ctrl+5";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("bibtex")}
         Shortcut {sequences:["Ctrl+Tab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(1)}
         Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(-1)}
-        Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen;onActivated:root.dismiss()}
-        Shortcut {sequence:"Q";enabled:root.opened&&(root.inPaperTab||query.text.trim()==="")&&!root.modalOpen;onActivated:root.dismiss()}
+        // In a reader tab Esc first cancels the clip tool, a selection or a search.
+        Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen&&!(root.inPdfTab&&readerPane.wantsEscape);onActivated:root.dismiss()}
+        Shortcut {sequence:"Q";enabled:root.opened&&(root.inPaperTab||query.text.trim()==="")&&!root.modalOpen&&!(root.inPdfTab&&readerPane.searching);onActivated:root.dismiss()}
         BibDialog {
             id:settingsDialog;title:"Settings";iconName:"cog";anchors.centerIn:parent
             width:Math.min(640,window.width-60);height:Math.min(settingsScroll.contentHeight+ui.space(130),window.height-60);modal:true
@@ -1787,52 +1829,48 @@ Item {
         BibDialog {
             id:editorDialog;anchors.centerIn:parent
             iconName:root.editKind==="note"?(root.editingNote?"pencil":"notePlus"):root.editKind==="metadata"||root.editKind==="import"?"braces":root.editKind==="quick"?"plus":root.editKind==="doi"?"link":root.editKind==="project"?"folderOpen":"pdf"
-            width:Math.min(root.quickNoteMode?460:760,window.width-60)
-            height:Math.min(root.quickNoteMode?(root.clipPath?440:300):(root.editKind==="quick"||root.editKind==="doi"||root.editKind==="project"?340:640),window.height-60)
-            leftPadding:root.quickNoteMode?ui.space(16):ui.space(20)
-            rightPadding:root.quickNoteMode?ui.space(16):ui.space(20)
+            width:Math.min(760,window.width-60)
+            height:Math.min(root.editKind==="quick"||root.editKind==="doi"||root.editKind==="project"?340:640,window.height-60)
+            leftPadding:ui.space(20)
+            rightPadding:ui.space(20)
             modal:true;closePolicy:Popup.CloseOnEscape
-            onClosed:{if(!root.noteSaving){root.discardClip(root.clipPath);root.clipPath=""}if(root.quickNoteMode){root.quickNoteMode=false;if(root.inPaperTab)root.loadPaper(root.activeTab);root.dismiss()}}
+            onClosed:{if(root.inPdfTab)Qt.callLater(root.focusActiveTab)}
             ColumnLayout {
                 anchors.fill:parent;spacing:ui.space(8)
                 Text {visible:root.editKind==="note";text:root.noteTargetTitle;color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;font.weight:Font.DemiBold;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText}
                 BibLabel {visible:root.editKind==="quick";text:"Paste a DOI, arXiv ID or URL (several at once work too), or a whole BibTeX entry. Omabib looks up the metadata, abstract and an open-access PDF.";color:ui.muted;Layout.fillWidth:true}
                 RowLayout {
-                    visible:root.quickNoteMode
-                    spacing:ui.space(6)
-                    BibButton {iconName:"image";text:root.clipPath?"Recapture":"Add clip";enabled:!root.noteSaving&&!root.captureBusy;onClicked:root.captureClip()}
-                    BibButton {variant:"ghost";visible:root.clipPath!=="";iconName:"close";text:"Remove";enabled:!root.noteSaving;onClicked:{root.discardClip(root.clipPath);root.clipPath="";root.clipRectangle=null}}
-                    Item {Layout.fillWidth:true}
-                    Keycap {theme:ui;text:"Ctrl+Shift+C"}
-                }
-                Image {visible:root.clipPath!=="";source:root.clipPath?root.fileUrl(root.clipPath):"";Layout.fillWidth:true;Layout.preferredHeight:130;fillMode:Image.PreserveAspectFit;cache:false}
-                RowLayout {
                     visible:root.editKind==="note"
                     Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel {visible:!root.quickNoteMode;text:"Scope";color:ui.muted}
+                    BibLabel {text:"Scope";color:ui.muted}
                     BibCombo{id:noteScope;model:["Global · all projects"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
                 }
+                NoteEditor {
+                    id:noteEditor;objectName:"noteEditor"
+                    visible:root.editKind==="note"
+                    Layout.fillWidth:true;Layout.fillHeight:true
+                    theme:ui;app:root
+                    placeholderText:"What matters about this paper for the project?"
+                }
                 ScrollView {
+                    visible:root.editKind!=="note"
                     Layout.fillWidth:true;Layout.fillHeight:true
                     BibTextArea{
                         id:editor;objectName:"editor"
-                        font.family:root.editKind==="note"?ui.readingFamily:ui.mono
-                        font.pixelSize:root.editKind==="note"?ui.subtitle:ui.body
-                        placeholderText:root.quickNoteMode?(root.clipPath?"Add a comment…":"Write a note…"):root.editKind==="quick"?"10.1038/…   2609.07987   https://…   @article{…}":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":root.editKind==="note"?"What matters about this paper for the project?":""
+                        placeholderText:root.editKind==="quick"?"10.1038/…   2609.07987   https://…   @article{…}":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""
                     }
                 }
-                BibField{id:labels;visible:root.editKind==="note"&&!root.quickNoteMode;placeholderText:"Labels, separated by commas";Layout.fillWidth:true}
-                BibField{id:evidence;visible:root.editKind==="note"&&!root.quickNoteMode;placeholderText:"Evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
+                BibField{id:labels;visible:root.editKind==="note";placeholderText:"Labels, separated by commas";Layout.fillWidth:true}
+                BibField{id:evidence;visible:root.editKind==="note";placeholderText:"Evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
                 BibLabel{visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
                 RowLayout {
                     Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel{text:root.quickNoteMode?"Esc cancel · Ctrl+Enter save":"";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
-                    BibButton{variant:"ghost";text:"Cancel";visible:!root.quickNoteMode;onClicked:editorDialog.close()}
+                    BibLabel{text:"";Layout.fillWidth:true}
+                    BibButton{variant:"ghost";text:"Cancel";onClicked:editorDialog.close()}
                     BibButton{variant:"primary";text:(root.editKind==="doi"||root.editKind==="quick")?(root.noteSaving?"Looking up…":"Preview"):(root.noteSaving?"Saving…":"Save");shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.saveEditor()}
                 }
             }
             Shortcut{sequence:"Ctrl+Return";enabled:editorDialog.opened;onActivated:root.saveEditor()}
-            Shortcut{sequence:"Ctrl+Shift+C";enabled:editorDialog.opened&&root.quickNoteMode;onActivated:root.captureClip()}
         }
         BibDialog {
             id:metadataDialog;title:"Fill metadata online";iconName:"refresh";anchors.centerIn:parent;width:Math.min(780,window.width-60);height:Math.min(680,window.height-60);modal:true

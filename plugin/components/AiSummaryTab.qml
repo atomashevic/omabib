@@ -20,11 +20,8 @@ ColumnLayout {
     spacing: 0
 
     // The overview as one selectable rich-text document.
-    readonly property string html: loaded ? OverviewText.toHtml(blocks, {
-        reading: theme.readingFamily, mono: theme.mono, size: theme.title, heading: theme.heading, small: theme.small,
-        text: theme.css(theme.text), bright: theme.css(theme.bright), muted: theme.css(theme.muted), dim: theme.css(theme.dim),
-        line: theme.css(theme.line), codeBg: theme.css(theme.app), link: theme.css(theme.accentText)
-    }) : ""
+    readonly property string html: loaded ? OverviewText.toHtml(blocks, theme.markdownStyle(theme.app), app.mathCache) : ""
+    onBlocksChanged: app.ensureMath(OverviewText.mathKeys(blocks))
     // Character offset of each section heading in the document's plain text.
     property var headingOffsets: []
 
