@@ -39,9 +39,13 @@ pub fn socket_path() -> PathBuf {
         })
 }
 pub fn request(method: &str, params: &Value) -> Result<Value> {
+    request_with_timeout(method, params, Duration::from_secs(120))
+}
+/// For calls that wait on the reader, such as a chat approval.
+pub fn request_with_timeout(method: &str, params: &Value, timeout: Duration) -> Result<Value> {
     let mut stream = UnixStream::connect(socket_path())
         .context("Omabib service is unavailable. Run: systemctl --user start omabib")?;
-    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    stream.set_read_timeout(Some(timeout))?;
     writeln!(
         stream,
         "{}",
@@ -112,6 +116,19 @@ pub fn serve(db: PathBuf) -> Result<()> {
 }
 fn handle(stream: UnixStream, lib: Arc<Library>) -> Result<()> {
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    let mut subscription = None;
+    let result = serve_connection(stream, &lib, &writer, &mut subscription);
+    if let Some(token) = subscription {
+        lib.chats.unsubscribe(token);
+    }
+    result
+}
+fn serve_connection(
+    stream: UnixStream,
+    lib: &Arc<Library>,
+    writer: &Arc<Mutex<UnixStream>>,
+    subscription: &mut Option<u64>,
+) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let generation = Arc::new(AtomicUsize::new(0));
     let in_flight = Arc::new(AtomicUsize::new(0));
@@ -139,6 +156,17 @@ fn handle(stream: UnixStream, lib: Arc<Library>) -> Result<()> {
         };
         if req["method"] == "cancel" {
             generation.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        // Chat events are pushed on this connection as lines with an "event" key.
+        if req["method"] == "chat_subscribe" {
+            if subscription.is_none() {
+                let events = writer.clone();
+                *subscription = Some(lib.chats.subscribe(Box::new(move |line| {
+                    writeln!(events.lock().unwrap(), "{line}").is_ok()
+                })));
+            }
+            writeln!(writer.lock().unwrap(), "{}", json!({"v":1,"id":req["id"],"result":{"subscribed":true}}))?;
             continue;
         }
         if in_flight.load(Ordering::Relaxed) >= 8 {

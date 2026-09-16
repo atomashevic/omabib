@@ -1,0 +1,7 @@
+{"type": "thread.started", "thread_id": "01a0ab16-8113-7aa0-8bf3-e53dbf59ae11"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "I’ll list that directory exactly as requested."}}
+{"type": "item.started", "item": {"id": "item_1", "type": "command_execution", "command": "/usr/bin/bash -lc 'ls /tmp/omabib-chat-fixture/chats/chat-fts12uyr'", "aggregated_output": "", "exit_code": null, "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "/usr/bin/bash -lc 'ls /tmp/omabib-chat-fixture/chats/chat-fts12uyr'", "aggregated_output": "context.json\n", "exit_code": 0, "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": "```text\ncontext.json\n```"}}
+{"type": "turn.completed", "usage": {"input_tokens": 148844, "cached_input_tokens": 118656, "cache_write_input_tokens": 0, "output_tokens": 507, "reasoning_output_tokens": 47}}

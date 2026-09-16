@@ -1,0 +1,3 @@
+{"type": "thread.started", "thread_id": "01a0ab16-8113-7aa0-8bf3-e53dbf59ae11"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "reasoning", "text": "**Planning approximate 400-word response**\n**Refining 400-word count approximation**"}}

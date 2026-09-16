@@ -20,6 +20,8 @@ pub struct Library {
     pub spell: RwLock<SymSpell<UnicodeStringStrategy>>,
     /// MuPDF rendering for reader tabs and clip notes.
     pub pdf: crate::pdf::Pdf,
+    /// Claude Code and Codex chats about a reference.
+    pub chats: std::sync::Arc<crate::chat::Chats>,
 }
 pub struct ReadLease<'a> {
     connection: Option<Connection>,
@@ -268,8 +270,10 @@ impl Library {
         )?;
         c.execute_batch(crate::visual::SCHEMA)?;
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
+        c.execute_batch(crate::chat::SCHEMA)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let chats = crate::chat::Chats::new(&path);
         let lib = Self {
             path,
             writer: Mutex::new(c),
@@ -283,6 +287,7 @@ impl Library {
                     .unwrap(),
             ),
             pdf: crate::pdf::Pdf::new(crate::pdf::cache_dir()),
+            chats,
         };
         if eager {
             lib.load_vocabulary()?;
@@ -346,6 +351,15 @@ impl Library {
             "get_note_image" => crate::visual::get(&read_connection(&self.path)?, a),
             "get_alphaxiv_overview" => crate::alphaxiv::get(self, a),
             "render_math" => crate::math::render(a),
+            "chat_list" => self.chats.list(a),
+            "chat_get" => self.chats.get(a),
+            "chat_start" => self.chats.start(self, a),
+            "chat_send" => self.chats.send(self, a),
+            "chat_cancel" => self.chats.cancel(a),
+            "chat_approve" => self.chats.approve(a),
+            "chat_delete" => self.chats.delete(a),
+            "chat_resume_command" => self.chats.resume_command(a),
+            "chat_permission_request" => self.chats.request_approval(a),
             "pdf_open" => crate::pdf::open(self, a),
             "pdf_render" => crate::pdf::render(self, a),
             "pdf_text" => crate::pdf::text(self, a),
@@ -419,7 +433,13 @@ impl Library {
             }
             "import_bibtex" | "upsert_reference" | "create_project" | "update_project"
             | "associate" | "add_note" | "add_visual_note" | "update_note" | "attach"
-            | "remove_pdf" | "relink_attachment" | "apply_metadata" | "delete_reference" | "delete_note" => self.write(method, a),
+            | "remove_pdf" | "relink_attachment" | "apply_metadata" | "delete_note" => self.write(method, a),
+            "delete_reference" => {
+                let out = self.write(method, a)?;
+                let ids: Vec<String> = out["chats_deleted"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+                self.chats.forget(&ids);
+                Ok(out)
+            }
             _ => bail!("Unknown operation: {method}"),
         }
     }
@@ -529,7 +549,13 @@ impl Library {
                     "Notes or attachments changed since preview; reopen Delete item"
                 );
                 let rid = required(&preview, "id")?;
+                let chat_ids = {
+                    let mut stmt = tx.prepare("SELECT id FROM chats WHERE ref_id=?")?;
+                    stmt.query_map([rid], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
+                };
                 for sql in [
+                    "DELETE FROM chat_events WHERE chat_id IN (SELECT id FROM chats WHERE ref_id=?)",
+                    "DELETE FROM chats WHERE ref_id=?",
                     "DELETE FROM note_revisions WHERE note_id IN (SELECT id FROM notes WHERE ref_id=?)",
                     "DELETE FROM note_images WHERE note_id IN (SELECT id FROM notes WHERE ref_id=?)",
                     "DELETE FROM docs WHERE ref_id=?",
@@ -541,7 +567,7 @@ impl Library {
                     tx.execute(sql, [rid])?;
                 }
                 ensure!(tx.execute("DELETE FROM refs WHERE id=?", [rid])? == 1, "Reference not found");
-                json!({"id":rid,"citekey":preview["citekey"],"deleted":true,"notes_deleted":preview["note_count"],"attachments_unlinked":preview["attachment_count"],"files_deleted":false})
+                json!({"id":rid,"citekey":preview["citekey"],"deleted":true,"notes_deleted":preview["note_count"],"attachments_unlinked":preview["attachment_count"],"chats_deleted":chat_ids,"files_deleted":false})
             }
             "remove_pdf" => {
                 let id = required(a, "attachment_id")?;
@@ -1138,18 +1164,19 @@ fn delete_reference_preview(c: &Connection, a: &Value) -> Result<Value> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .context("Reference not found")?;
-    let (note_count, attachment_count, project_count, summary_count): (i64, i64, i64, i64) = c
+    let (note_count, attachment_count, project_count, summary_count, chat_count): (i64, i64, i64, i64, i64) = c
         .query_row(
             "SELECT (SELECT count(*) FROM notes WHERE ref_id=?1), \
              (SELECT count(*) FROM attachments WHERE ref_id=?1), \
              (SELECT count(*) FROM associations WHERE ref_id=?1), \
-             (SELECT count(*) FROM external_summaries WHERE ref_id=?1)",
+             (SELECT count(*) FROM external_summaries WHERE ref_id=?1), \
+             (SELECT count(*) FROM chats WHERE ref_id=?1)",
             [&id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
     Ok(json!({"id":id,"citekey":citekey,"title":title,"revision":revision,
         "note_count":note_count,"attachment_count":attachment_count,
-        "project_count":project_count,"summary_count":summary_count}))
+        "project_count":project_count,"summary_count":summary_count,"chat_count":chat_count}))
 }
 
 fn get_references(c: &Connection, a: &Value) -> Result<Value> {

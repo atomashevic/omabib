@@ -1,6 +1,7 @@
 pub mod abstracts;
 pub mod alphaxiv;
 pub mod attachments;
+pub mod chat;
 pub mod db;
 pub mod history;
 pub mod ingest;

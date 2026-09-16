@@ -1,0 +1,7 @@
+{"type": "user", "message": {"role": "user", "content": "What is the title of this paper? Verify it with the get_reference tool."}}
+{"type": "user", "message": {"role": "user", "content": "Use the Bash tool to run exactly: ls /tmp/omabib-chat-fixture/chats/chat-uk5k18nz"}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "What color is this square? One word."}, {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGMQsblDU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAJZHsD13ae3vAAAAAElFTkSuQmCC"}}]}}
+{"type": "user", "message": {"role": "user", "content": "Use the WebFetch tool to fetch https://example.org and tell me its title."}}
+{"type": "user", "message": {"role": "user", "content": "Write a 400 word explanation of self-attention."}}
+{"type": "control_request", "request_id": "interrupt-1", "request": {"subtype": "interrupt"}}
+{"type": "user", "message": {"role": "user", "content": "Reply with just OK."}}
