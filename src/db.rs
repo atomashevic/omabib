@@ -369,6 +369,7 @@ impl Library {
             }
             "search" => crate::search::search(self, a),
             "get_reference" => get_reference(&read_connection(&self.path)?, a),
+            "get_references" => get_references(&read_connection(&self.path)?, a),
             "delete_reference_preview" => delete_reference_preview(&read_connection(&self.path)?, a),
             "delete_note_preview" => delete_note_preview(&read_connection(&self.path)?, a),
             "list_projects" => list_projects(&read_connection(&self.path)?, a),
@@ -1149,6 +1150,26 @@ fn delete_reference_preview(c: &Connection, a: &Value) -> Result<Value> {
     Ok(json!({"id":id,"citekey":citekey,"title":title,"revision":revision,
         "note_count":note_count,"attachment_count":attachment_count,
         "project_count":project_count,"summary_count":summary_count}))
+}
+
+fn get_references(c: &Connection, a: &Value) -> Result<Value> {
+    let ids = a.get("ids").and_then(Value::as_array).context("ids must be an array")?;
+    ensure!((1..=25).contains(&ids.len()), "Provide between 1 and 25 reference IDs");
+    ensure!(ids.iter().all(|id| id.as_str().is_some_and(|s| !s.trim().is_empty())), "Each reference ID must be a non-empty string");
+    let mut args = a.clone();
+    args.as_object_mut().unwrap().remove("ids");
+    // One connection and snapshot for the complete batch; preserve each item's
+    // identity even if another ID is missing or has been deleted.
+    let tx = c.unchecked_transaction()?;
+    let results = ids.iter().map(|id| {
+        args["id"] = id.clone();
+        match get_reference(&tx, &args) {
+            Ok(reference) => json!({"id":id,"reference":reference}),
+            Err(error) => json!({"id":id,"error":format!("{error:#}")}),
+        }
+    }).collect::<Vec<_>>();
+    tx.commit()?;
+    Ok(json!({"results":results}))
 }
 
 pub fn get_reference(c: &Connection, a: &Value) -> Result<Value> {

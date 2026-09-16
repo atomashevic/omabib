@@ -853,3 +853,28 @@ fn get_reference_lists_projects_and_added_date() {
     assert_eq!(names, ["Alpha", "Beta"]);
     assert!(got["created_at"].as_str().unwrap().starts_with("20"));
 }
+
+#[test]
+fn batch_references_preserve_order_errors_and_note_visibility() {
+    let (_dir, lib, refs) = setup();
+    let rid = first(&refs);
+    let project = lib.call("create_project", &json!({"name":"Private assessment"})).unwrap()["id"].clone();
+    lib.call("add_note", &json!({"ref_id":rid,"project_id":null,"body":"Global assessment","provenance":"test"})).unwrap();
+    lib.call("add_note", &json!({"ref_id":rid,"project_id":project,"body":"Project assessment","provenance":"test"})).unwrap();
+    let args = json!({"ids":["Book2020","missing",rid,rid],"include_notes":true,"include_metadata":false});
+    let batch = lib.call("get_references", &args).unwrap();
+    let results = batch["results"].as_array().unwrap();
+    assert_eq!(results.len(), 4);
+    assert_eq!(results[0]["reference"]["citekey"], "Book2020");
+    assert!(results[1]["error"].as_str().unwrap().contains("Reference not found"));
+    let single = lib.call("get_reference", &json!({"id":rid,"include_notes":true,"include_metadata":false})).unwrap();
+    assert_eq!(results[2]["reference"], single);
+    assert_eq!(results[2], results[3]);
+    assert_eq!(single["notes"].as_array().unwrap().len(), 1);
+    assert!(single.get("bibtex").is_none());
+    let scoped = lib.call("get_references", &json!({"ids":[rid],"include_notes":true,"project_id":project})).unwrap();
+    assert_eq!(scoped["results"][0]["reference"]["notes"].as_array().unwrap().len(), 2);
+    for ids in [json!([]), json!([null]), json!([""]), json!([1]), json!(vec![rid;26]), json!("wrong")] {
+        assert!(lib.call("get_references", &json!({"ids":ids})).is_err());
+    }
+}

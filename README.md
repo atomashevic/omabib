@@ -317,3 +317,20 @@ Gateway documentation: [Crossref REST API](https://www.crossref.org/documentatio
 ## License
 
 Omabib is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE), Copyright (c) 2026 Omabib contributors. It links [MuPDF](https://mupdf.com/) (AGPL-3.0) for PDF rendering. The embedded [mitex](https://github.com/mitex-rs/mitex) Typst scope in `src/mitex/` and the [Typst](https://github.com/typst/typst) libraries used for math rendering are Apache-2.0.
+
+### MCP latency and batching
+
+Use `get_references` with `ids` (1–25 IDs or citation keys) to fetch several
+selected papers in one tool call. It accepts the same metadata, attachment,
+note pagination and project visibility options as `get_reference`. Its `results`
+array preserves input order, including duplicates; each item contains the input
+`id` and either `reference` or `error`. Invalid batch arguments reject the call.
+Use `include_metadata:false` when abstracts and BibTeX are unnecessary.
+
+The stdio adapter runs up to eight tool calls concurrently, with eight additional
+queued calls. Responses may arrive out of order and must be matched by JSON-RPC
+ID. At capacity, additional calls receive a retryable busy error; accepted calls
+drain on input EOF. Ping and discovery remain responsive during tool work.
+Send dependent mutations only after their prerequisite call completes.
+PDF retrieval still runs synchronously within its own call; use
+`add_reference(download_pdf:false)` when only metadata is needed immediately.

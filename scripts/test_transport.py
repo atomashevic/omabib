@@ -28,12 +28,12 @@ with tempfile.TemporaryDirectory(prefix='omabib-test-')as d:
   messages=[{'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2024-11-05','capabilities':{},'clientInfo':{'name':'test','version':'1'}}},{'jsonrpc':'2.0','method':'notifications/initialized'},{'jsonrpc':'2.0','id':2,'method':'tools/list'},{'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'search','arguments':{'query':'network'}}}]
   mcp=subprocess.run([binary,'mcp'],input=''.join(json.dumps(x)+'\n'for x in messages),text=True,capture_output=True,env=env,timeout=15)
   assert mcp.returncode==0,mcp.stderr
-  replies=[json.loads(x)for x in mcp.stdout.splitlines()];assert len(replies)==3
-  listed={t['name']:t for t in replies[1]['result']['tools']}
-  assert {'search','add_pdf','pull_pdf','remove_pdf','delete_reference_preview','delete_reference','delete_note_preview','delete_note'}.issubset(listed)
+  replies={r['id']:r for r in map(json.loads,mcp.stdout.splitlines())};assert len(replies)==3
+  listed={t['name']:t for t in replies[2]['result']['tools']}
+  assert {'search','get_references','add_pdf','pull_pdf','remove_pdf','delete_reference_preview','delete_reference','delete_note_preview','delete_note'}.issubset(listed)
   assert listed['delete_reference']['annotations']['destructiveHint'] and listed['delete_note']['annotations']['destructiveHint']
   assert listed['delete_reference_preview']['annotations']['readOnlyHint'] and listed['delete_note_preview']['annotations']['readOnlyHint']
-  assert json.loads(replies[2]['result']['content'][0]['text'])['results'][0]['id']==rid
+  assert json.loads(replies[3]['result']['content'][0]['text'])['results'][0]['id']==rid
   backup=pathlib.Path(d)/'backup.db';restored=pathlib.Path(d)/'restored.db'
   assert 'result'in call('backup',{'path':str(backup)})
   subprocess.run([binary,'restore',str(backup),'--to',str(restored)],check=True,capture_output=True)
@@ -71,6 +71,8 @@ with tempfile.TemporaryDirectory(prefix='omabib-test-')as d:
    reply=json.loads(run.stdout.strip())
    assert not reply['result'].get('isError'),reply
    return json.loads(reply['result']['content'][0]['text'])
+  batch=mcp_call('get_references',{'ids':[rid,'missing'],'include_notes':True})
+  assert batch['results'][0]['reference']['id']==rid and 'error' in batch['results'][1]
   note_preview=mcp_call('delete_note_preview',{'id':n['id']})
   assert note_preview['revision']==2 and note_preview['ref_id']==rid
   assert mcp_call('delete_note',{'id':n['id'],'expected_revision':note_preview['revision'],'confirm_ref_id':rid,'idempotency_key':'mcp-delete-note'})['deleted']
