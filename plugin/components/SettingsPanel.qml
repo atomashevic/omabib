@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Preferences: which apps the chat buttons start. PDFs open in reader tabs.
+// Preferences: PDF page colors in reader tabs and which apps the chat buttons start.
 // App.qml owns reading and writing them through omabib-settings.
 ColumnLayout {
     id: root
@@ -61,7 +61,24 @@ ColumnLayout {
         font.pixelSize: root.theme.body
     }
 
-    SectionLabel { theme: root.theme; text: "Terminal chat" }
+    SectionLabel { theme: root.theme; text: "PDF pages" }
+    Choice {
+        objectName: "pdfColors:original"
+        label: "Original colors"
+        detail: "as the PDF was made"
+        checked: root.settings.pdf_colors !== "theme"
+        onChosen: root.app.setSetting("pdf_colors", "original")
+    }
+    Choice {
+        objectName: "pdfColors:theme"
+        label: "Omarchy theme colors"
+        detail: "the theme's background and text"
+        checked: root.settings.pdf_colors === "theme"
+        onChosen: root.app.setSetting("pdf_colors", "theme")
+    }
+    Hint { text: "Reader tabs draw the page in the current theme's colors; colored figures and links keep their hue. Ctrl+R in a reader tab switches. Clips saved to notes keep the PDF's own colors." }
+
+    SectionLabel { theme: root.theme; text: "Terminal chat"; Layout.topMargin: root.theme.space(10) }
     Repeater {
         model: root.info.clis || []
         Choice {

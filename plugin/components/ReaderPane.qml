@@ -478,6 +478,8 @@ FocusScope {
                     IconButton { theme: root.theme; icon: "fitWidth"; active: root.zoomMode === "width"; tooltip: "Fit width"; shortcut: "w"; onClicked: root.setZoomMode("width") }
                     IconButton { theme: root.theme; icon: "fitPage"; active: root.zoomMode === "page"; tooltip: "Fit page"; shortcut: "z"; onClicked: root.setZoomMode("page") }
                     Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(4); Layout.rightMargin: root.theme.space(4) }
+                    IconButton { theme: root.theme; objectName: "readerColorsButton"; icon: "pageColors"; active: root.app.pdfThemed; tooltip: root.app.pdfThemed ? "Original page colors" : "Theme page colors"; shortcut: "Ctrl+R"; onClicked: root.app.togglePdfColors() }
+                    Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(4); Layout.rightMargin: root.theme.space(4) }
                     IconButton { theme: root.theme; icon: "crop"; active: root.tool === "rect"; tooltip: "Clip a region into a note"; shortcut: "r"; onClicked: { root.tool = root.tool === "rect" ? "select" : "rect"; keys.forceActiveFocus() } }
                     IconButton { theme: root.theme; icon: "notePlus"; tooltip: "Note on this page"; shortcut: "a"; onClicked: root.composeNote(root.currentPage, null) }
                     Item { Layout.fillWidth: true }
@@ -670,10 +672,13 @@ FocusScope {
             x: Math.round((pageItem.width - pageItem.sheetWidth) / 2)
             width: pageItem.sheetWidth
             height: pageItem.sheetHeight
-            color: "white"
+            color: root.app.pdfThemed ? root.theme.pageBackground : "white"
 
             Image {
+                id: pageImage
                 anchors.fill: parent
+                // Stays visible even under theme colors: a hidden Image uploads no
+                // texture for the shader to read. The shader's output is opaque.
                 // Far pages drop their image so long documents don't hold every page in memory.
                 source: pageItem.render && pageItem.page >= root.firstVisible - 4 && pageItem.page <= root.lastVisible + 4 ? root.app.fileUrl(pageItem.render.path) : ""
                 asynchronous: true
@@ -681,6 +686,16 @@ FocusScope {
                 smooth: true
                 mipmap: true
                 retainWhileLoading: true
+            }
+            ShaderEffect {
+                objectName: "readerPageColors"
+                anchors.fill: parent
+                visible: root.app.pdfThemed
+                property variant source: pageImage
+                property color background: root.theme.pageBackground
+                property color foreground: root.theme.pageText
+                property real keepHue: 1
+                fragmentShader: Qt.resolvedUrl("shaders/pagecolors.frag.qsb")
             }
 
             Repeater {

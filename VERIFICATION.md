@@ -205,3 +205,12 @@ The popup was rebuilt from one 1,272-line `App.qml` into `App.qml` (state, RPC, 
 - **Scripts:** `scripts/test_claude.py` and `scripts/test_codex.py` pass. `omabib-codex` and `omabib-overview` now carry their own socket helper instead of loading the deleted `omabib-quick-note`.
 - **Installed:** `./scripts/install.sh` built MuPDF 1.27.2 from the `mupdf` crate (the release binary grew from 56.7 MB to 65.6 MB), restarted the service, and removed the old Zathura helpers. On the real library, `pdf_open` for a 69-page paper took 37 ms (27 outline entries). Renders at 2× took about 45 ms per page and 3 ms from cache. Searching "language model" found 144 hits in 82 ms.
 - **Not yet verified live:** the Omabib window, `omabib open` toggling, reader tabs and saving a clip in the running shell. The shell keeps cached plugin code until `omarchy restart shell`.
+
+## Theme colors for PDF pages (2026-09-16)
+
+- **Shader:** `plugin/components/shaders/pagecolors.frag` compiles with `qsb` to SPIR-V, GLSL 100 es/120/150, HLSL 50 and MSL 12 (`scripts/build-shaders`).
+- **Offscreen QML on OpenGL** (`QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl`, Mesa radeonsi): 24 tests pass. The reader test renders a synthetic page (`tests/qml/page.png`: white paper, black text bars, a blue link, a red figure, a gray rule), switches theme colors with the reader toolbar button, and samples the window: paper matches the theme background and ink the theme text color within 4%, the link stays blue and the figure red. It switches back to original colors.
+- **Offscreen QML in software** (plain `QT_QPA_PLATFORM=offscreen`): 24 tests pass. The software scene graph does not run ShaderEffects, so the pixel checks are skipped with a warning; the first attempt at this test passed wrongly on the page rectangle's fill, which is why the check now requires a GPU backend.
+- **Settings:** `scripts/test_claude.py` checks that `pdf_colors` defaults to `original`, accepts `theme`, and refuses other values.
+- **Also passing:** Rust (52), `omarchy plugin validate plugin`.
+- **Installed:** after `./scripts/install.sh` and `omarchy restart shell`, the shell log shows no QML errors, `state` reports `pdf_colors: "original"`, and the saved paper and reader tabs were restored. Theme colors were not viewed in the running window, which stayed closed.

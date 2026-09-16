@@ -108,7 +108,8 @@ Item {
     property int syncRequest: -1
     // Preferences from omabib-settings: {ai_cli, ai_desktop}, plus
     // the installed choices the Settings dialog offers.
-    property var settings: ({ai_cli: "codex", ai_desktop: "chatgpt"})
+    property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt"})
+    readonly property bool pdfThemed: settings.pdf_colors === "theme"
     property var settingsInfo: null
     property bool settingsBusy: false
     property var settingsQueue: []
@@ -632,6 +633,7 @@ Item {
         settingsDialog.open()
         runSettings([])
     }
+    function togglePdfColors() { setSetting("pdf_colors", pdfThemed ? "original" : "theme") }
     function setSetting(key, value) {
         var next=Object.assign({},settings); next[key]=value; settings=next
         runSettings(["set",key,value])
@@ -1163,7 +1165,7 @@ Item {
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");reloadDetail()})
     }
-    readonly property int actionCount: 26
+    readonly property int actionCount: 27
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
@@ -1210,6 +1212,7 @@ Item {
         case 24:openSettings();break
         case 25:openInTab(null,false);break
         case 26:closeActiveTab();break
+        case 27:togglePdfColors();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
@@ -1394,7 +1397,7 @@ Item {
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
@@ -1573,6 +1576,7 @@ Item {
         Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.getPdf()}
         Shortcut {sequence:"Ctrl+U";enabled:root.opened&&!editorDialog.opened;onActivated:root.openLink()}
         Shortcut {sequence:"Ctrl+S";enabled:root.opened&&!root.modalOpen&&!root.inPaperTab;onActivated:root.toggleBrowseSort()}
+        Shortcut {sequence:"Ctrl+R";enabled:root.opened&&!root.modalOpen&&root.inPdfTab;onActivated:root.togglePdfColors()}
         Shortcut {sequence:"Ctrl+T";enabled:root.opened&&!root.modalOpen&&!root.inPaperTab;onActivated:root.openInTab(null,false)}
         Shortcut {sequence:"Ctrl+W";enabled:root.opened&&!root.modalOpen&&root.inPaperTab;onActivated:root.closeActiveTab()}
         Shortcut {sequence:"Ctrl+F";enabled:root.opened&&!root.modalOpen;onActivated:{root.activateTab(-1);query.forceActiveFocus();query.selectAll()}}

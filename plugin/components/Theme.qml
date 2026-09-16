@@ -31,6 +31,9 @@ QtObject {
     // contrast in either direction.
     readonly property color accentText: light ? Qt.darker(accent, 1.25) : Qt.lighter(accent, 1.5)
     readonly property color urgent: Color.urgent
+    // PDF pages in theme colors: the paper and the ink.
+    readonly property color pageBackground: card
+    readonly property color pageText: text
     readonly property color scrim: Color.menu.scrim
 
     readonly property color controlBorder: Style.normalBorderColor

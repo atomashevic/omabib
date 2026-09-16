@@ -45,6 +45,7 @@ The window has three panes. The **rail** on the left switches between all refere
 
 The cog at the bottom of the rail (or Ctrl+K action **24**) opens Settings. Changes apply immediately and are saved in `$XDG_CONFIG_HOME/omabib/settings.json`; `omabib-settings` prints or changes them from a terminal (`omabib-settings set ai_cli claude`).
 
+- **PDF pages** chooses **Original colors** or **Omarchy theme colors** for reader tabs (see [Theme colors](#theme-colors)). Ctrl+R in a reader tab, the reader toolbar's half-moon button and action **27** switch it too.
 - **Terminal chat** chooses **Codex CLI** or **Claude Code** for the toolbar's terminal button and action **22**.
 - **Desktop chat** chooses **ChatGPT Desktop** or **Claude Desktop** for the toolbar's chat button and action **23**. Claude Desktop reads the library through Omabib's MCP server, which it loads from its own config: **Add Omabib to Claude Desktop** merges an `omabib` entry into `~/.config/Claude/claude_desktop_config.json`, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`. Restart Claude Desktop afterwards.
 
@@ -217,7 +218,7 @@ python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary tar
 
 `scripts/test_metadata.py target/release/omabib` makes live requests to Crossref/DataCite/OpenAlex/Semantic Scholar/Europe PMC/arXiv against a temporary, isolated library; run it only when checking those gateways specifically, since a busy run can hit Crossref's rate limit. The benchmark refuses to overwrite a database and uses synthetic metadata. `scripts/test_ui.py` is an opt-in live keyboard test requiring an isolated socket; it interacts with the desktop and should run while no one else is typing. `scripts/test_tabs_ui.py` is the same kind of test for the detail tabs, the cached AI summary, the project menu and the command palette. `scripts/test_claude.py target/release/omabib` checks the Claude Code and Claude Desktop handoffs and the settings helper against an isolated library and a temporary config directory.
 
-The UI components render offscreen without a desktop: `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml` loads them against stub `qs.Commons`/`qs.Ui` modules and a stand-in for `App.qml`, and saves screenshots of every tab to `/tmp/omabib-qml-shots`. `node scripts/test_overview_text.js [overview.md]` tests the AI summary's Markdown renderer, optionally on a real overview file, and `node scripts/test_markdown.js` tests the note features (source line ranges, math, code blocks).
+The UI components render offscreen without a desktop: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml` loads them against stub `qs.Commons`/`qs.Ui` modules and a stand-in for `App.qml`, and saves screenshots of every tab to `/tmp/omabib-qml-shots` (create it first). The OpenGL backend is needed for the check of theme page colors; without it Qt renders in software, skips shaders, and that check is skipped with a warning. `node scripts/test_overview_text.js [overview.md]` tests the AI summary's Markdown renderer, optionally on a real overview file, and `node scripts/test_markdown.js` tests the note features (source line ranges, math, code blocks).
 
 V1 excludes automatic multi-computer metadata merging, embeddings, and remote ChatGPT connectivity. `identify_pdf` reads a PDF's first two pages to recognize an identifier or search by title, but that text is never stored or indexed for search — full-text PDF indexing and annotation remain out of scope.
 
@@ -269,10 +270,17 @@ omabib repo status [--fetch] [--json]
 | r | clip tool: drag a rectangle to clip it into a note |
 | a | note on the current page |
 | o / ] | contents / notes pane |
+| Ctrl+R | original / theme page colors |
 | Esc | cancel the clip tool, selection or search |
 | Ctrl+W | close the tab |
 
 Internal links jump to their page and web links open in the browser. **Open PDF in another app** in the **⋯** menu hands the file to `xdg-open` when you need a different viewer.
+
+### Theme colors
+
+With **Omarchy theme colors** on, reader tabs draw each page in the current theme: the paper takes the theme's background and black ink its text color, with every shade in between on that ramp, so a dark theme reads as light text on a dark page. Colored ink keeps its hue and saturation, so links, highlighted terms and chart series stay recognizable, though their lightness follows the page (a dark red becomes a light red on a dark theme). Photographs look like tinted negatives on dark themes; switch back with Ctrl+R when a figure needs its real colors. Changing the Omarchy theme recolors open pages immediately.
+
+The recoloring happens on the GPU as the page is drawn (`plugin/components/shaders/pagecolors.frag`); the PDF, the page cache and clips saved to notes keep the PDF's own colors. After editing the shader, rebuild its `.qsb` with `scripts/build-shaders` (needs `qt6-shadertools`).
 
 ## Visual notes
 

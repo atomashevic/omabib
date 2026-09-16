@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Read and change Omabib's desktop preferences: the chat apps.
+"""Read and change Omabib's desktop preferences: PDF page colors and the chat apps.
 
 Preferences live in $XDG_CONFIG_HOME/omabib/settings.json:
 
+  pdf_colors  PDF pages in reader tabs: "original" or "theme" (Omarchy theme colors)
   ai_cli      terminal chat: "codex" (Codex CLI) or "claude" (Claude Code)
   ai_desktop  desktop chat: "chatgpt" (ChatGPT Desktop) or "claude" (Claude Desktop)
 
@@ -18,7 +19,8 @@ import shutil
 import sys
 
 # An older pdf_viewer key is ignored: PDFs open in Omabib's reader tabs.
-DEFAULTS = {'ai_cli': 'codex', 'ai_desktop': 'chatgpt'}
+DEFAULTS = {'pdf_colors': 'original', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt'}
+PDF_COLORS = ('original', 'theme')
 CLIS = [('codex', 'Codex CLI', 'codex'), ('claude', 'Claude Code', 'claude')]
 DESKTOPS = [('chatgpt', 'ChatGPT Desktop', 'chatgpt'), ('claude', 'Claude Desktop', 'claude-desktop')]
 
@@ -76,6 +78,8 @@ def show():
 def set_value(key, value):
     if key not in DEFAULTS:
         raise ValueError(f'Unknown setting {key}')
+    if key == 'pdf_colors' and value not in PDF_COLORS:
+        raise ValueError('PDF colors must be original or theme')
     if key == 'ai_cli' and value not in {i for i, _, _ in CLIS}:
         raise ValueError('Terminal chat must be codex or claude')
     if key == 'ai_desktop' and value not in {i for i, _, _ in DESKTOPS}:

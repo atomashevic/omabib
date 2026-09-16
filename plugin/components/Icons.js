@@ -70,7 +70,8 @@ var GLYPHS = {
   fitPage: 0xF0EF6,       // fit-to-page-outline
   sidebar: 0xF10AB,       // dock-right — the reader's notes pane
   outline: 0xF0836,       // table-of-contents
-  chevronUp: 0xF0143      // chevron-up
+  chevronUp: 0xF0143,     // chevron-up
+  pageColors: 0xF050E     // theme-light-dark — PDF pages in theme colors
 }
 
 function has(name) {

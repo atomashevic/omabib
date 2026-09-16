@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Compile the QML ShaderEffect sources in plugin/components/shaders into the
+# .qsb files the plugin loads. Needs qsb from qt6-shadertools.
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+qsb=${QSB:-$(command -v qsb || echo /usr/lib/qt6/bin/qsb)}
+[[ -x $qsb ]] || { echo "qsb not found; install qt6-shadertools" >&2; exit 1; }
+for shader in "$source_dir"/plugin/components/shaders/*.frag; do
+  "$qsb" --glsl "100 es,120,150" --hlsl 50 --msl 12 -o "$shader.qsb" "$shader"
+done

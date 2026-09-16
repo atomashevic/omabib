@@ -52,7 +52,7 @@ Rectangle {
             var page = function (i) { return {x0: 0, y0: 0, w: 612, h: 792} }
             var answer = null
             if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
-            else if (method === "pdf_render") answer = {path: String(Qt.resolvedUrl("math/display.svg")).replace(/^file:\/\//, ""), width: 612, height: 792, scale: params.scale, links: params.page === 1 ? [{rect: [72, 300, 300, 330], page: 3, uri: null}] : []}
+            else if (method === "pdf_render") answer = {path: String(Qt.resolvedUrl("page.png")).replace(/^file:\/\//, ""), width: 306, height: 396, scale: params.scale, links: params.page === 1 ? [{rect: [72, 300, 300, 330], page: 3, uri: null}] : []}
             else if (method === "pdf_text") answer = {page: params.page, words: [["Sparse", 72, 66, 148, 99, 0, 0], ["attention", 154, 66, 246, 99, 0, 0], ["Table", 72, 129, 110, 145, 1, 0], ["headline", 176, 129, 221, 145, 1, 0]]}
             else if (method === "pdf_search") answer = {query: params.query, hits: [{page: 2, rects: [[176, 129, 221, 145]]}], total: 1, truncated: false}
             if (!answer) { if (onError) onError("unsupported"); return 1 }
@@ -97,7 +97,9 @@ Rectangle {
         function findInLibrary() { note("findInLibrary") }
         property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
         property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
-        property var settings: ({ai_cli: "codex", ai_desktop: "chatgpt"})
+        property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt"})
+        readonly property bool pdfThemed: settings.pdf_colors === "theme"
+        function togglePdfColors() { setSetting("pdf_colors", pdfThemed ? "original" : "theme") }
         property bool settingsBusy: false
         property var settingsInfo: ({
             settings: settings, path: "/home/reader/.config/omabib/settings.json", claude_desktop_mcp: false,
@@ -629,6 +631,50 @@ Rectangle {
             reader.showOutline = true
             wait(150)
             shot("11b-reader")
+
+            // Theme colors: paper becomes the theme background, ink its text color,
+            // colored ink keeps its hue. The toolbar button switches.
+            reader.showOutline = false
+            reader.setZoom(1)
+            reader.goToPage(1)
+            wait(300)
+            var sheet = find(find(reader, "readerPage1"), "readerSheet")
+            var viewport = find(reader, "readerPages")
+            // Sample the window at a point given in the fixture page's pixels (306 x 396).
+            var sample = function (image, x, y) {
+                var p = sheet.mapToItem(stage, x * sheet.width / 306, y * sheet.height / 396)
+                var inView = viewport.mapToItem(stage, 0, 0)
+                verify(p.y >= inView.y && p.y < inView.y + viewport.height, "sample point on screen: " + p.y)
+                return image.pixel(p.x, p.y)
+            }
+            var original = grabImage(stage)
+            var white = sample(original, 20, 20)
+            verify(white.r > 0.95 && white.g > 0.95 && white.b > 0.95, "original paper is white: " + white)
+            mouseClick(find(reader, "readerColorsButton"))
+            compare(app.settings.pdf_colors, "theme")
+            var colors = find(find(reader, "readerPage1"), "readerPageColors")
+            tryVerify(function () { return colors.visible })
+            wait(250)
+            // The software renderer (plain QT_QPA_PLATFORM=offscreen) skips ShaderEffects;
+            // run with QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl to check the pixels.
+            if (stage.GraphicsInfo.api === GraphicsInfo.Software) {
+                console.warn("Software scene graph: theme page colors not rendered, pixel checks skipped")
+                mouseClick(find(reader, "readerColorsButton"))
+                compare(app.settings.pdf_colors, "original")
+                return
+            }
+            var themed = grabImage(stage)
+            var near = function (a, b) { return Math.abs(a.r - b.r) < 0.04 && Math.abs(a.g - b.g) < 0.04 && Math.abs(a.b - b.b) < 0.04 }
+            shot("11d-reader-theme-colors")
+            // Ink away from the saved clip's outline on the first line.
+            var paper = sample(themed, 20, 20), ink = sample(themed, 200, 62)
+            var link = sample(themed, 100, 204), figure = sample(themed, 150, 270)
+            verify(near(paper, ui.pageBackground), "paper takes the theme background: " + paper + " vs " + ui.pageBackground)
+            verify(near(ink, ui.pageText), "ink takes the theme text color: " + ink + " vs " + ui.pageText)
+            verify(link.b > link.r + 0.1 && link.b > link.g + 0.05, "a blue link stays blue: " + link)
+            verify(figure.r > figure.g + 0.1 && figure.r > figure.b + 0.1, "a red figure stays red: " + figure)
+            mouseClick(find(reader, "readerColorsButton"))
+            compare(app.settings.pdf_colors, "original")
             } finally {
                 reader.showOutline = false
                 readerSheet.visible = false
