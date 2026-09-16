@@ -27,13 +27,16 @@ Rectangle {
         anchors.bottomMargin: root.theme.space(10)
         spacing: root.theme.space(4)
 
-        Icon {
-            theme: root.theme
+        Item {
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredHeight: root.theme.space(36)
-            name: "book"
-            size: root.theme.space(20)
-            color: root.theme.bright
+            implicitWidth: root.theme.space(22)
+            OmabibMark {
+                objectName: "omabibMark"
+                anchors.centerIn: parent
+                width: root.theme.space(22); height: width
+                color: root.theme.bright
+            }
         }
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
