@@ -355,6 +355,12 @@ FocusScope {
         else if (t === "r") tool = tool === "rect" ? "select" : "rect"
         else if (t === "a") composeNote(currentPage, null)
         else if (t === "o") showOutline = !showOutline
+        else if (t === "c") {
+            // Chat about the selection, or just open the chat.
+            if (selection) { app.askAboutSelection(selection.page, selectionText()); selection = null }
+            else app.focusChat()
+            if (!showSide) showSide = true
+        }
         else if (t === "]") showSide = !showSide
         else if (t === "+" || t === "=") setZoom(zoom * 1.2)
         else if (t === "-") setZoom(zoom / 1.2)
@@ -364,6 +370,9 @@ FocusScope {
     }
 
     Item { id: keys; focus: true; Keys.onPressed: event => root.handleKey(event) }
+    // Keys back to the pages, even when the side pane's chat or composer had focus
+    // (forceActiveFocus on the scope would return to that).
+    function focusPages() { keys.forceActiveFocus() }
 
     RowLayout {
         anchors.fill: parent
@@ -616,7 +625,8 @@ FocusScope {
                     tabs: [
                         { key: "notes", label: "Notes", count: root.ref && root.ref.notes ? root.ref.notes.length : 0 },
                         { key: "overview", label: "Abstract" },
-                        { key: "ai", label: "AI summary", icon: "sparkles", visible: !!root.ref && root.app.arxivIdOf(root.ref) !== "" }
+                        { key: "ai", label: "AI summary", icon: "sparkles", visible: !!root.ref && root.app.arxivIdOf(root.ref) !== "" },
+                        { key: "chat", label: "Chat", icon: "robot" }
                     ]
                     onSelected: key => { if (root.app.composer) root.app.cancelComposer(); root.app.selectTab(key) }
                 }
@@ -633,7 +643,7 @@ FocusScope {
                 StackLayout {
                     id: side
                     visible: !root.app.composer
-                    readonly property var sections: ["notes", "overview", "ai"]
+                    readonly property var sections: ["notes", "overview", "ai", "chat"]
                     readonly property string key: sections.indexOf(root.app.detailTab) >= 0 ? root.app.detailTab : "notes"
                     // The AI summary's header row would otherwise force the pane wider than it is.
                     Layout.minimumWidth: 0
@@ -643,6 +653,7 @@ FocusScope {
                     NotesTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(14) }
                     OverviewTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(14) }
                     AiSummaryTab { theme: root.theme; app: root.app }
+                    ChatPane { objectName: "readerChat"; theme: root.theme; app: root.app; compact: true }
                 }
             }
         }

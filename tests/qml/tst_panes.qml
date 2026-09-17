@@ -110,6 +110,44 @@ Rectangle {
         function registerClaudeDesktop() { note("registerClaudeDesktop") }
         function openSettings() { settingsSheet.visible = true }
 
+        // Chat stand-in: a store the pane reads, and the calls it makes.
+        property var chats: ({})
+        property var chatForRef: ({})
+        property var chatLists: ({})
+        property int chatRevision: 0
+        property string chatDraft: ""
+        property string chatAgent: "claude"
+        property var chatAttachment: null
+        property bool chatSending: false
+        property string chatError: ""
+        property int chatFocus: 0
+        readonly property string activeChatId: (chatRevision, selected && chatForRef[selected.id] ? chatForRef[selected.id] : "")
+        signal chatEvent(string chatId, var event)
+        signal chatReset(string chatId)
+        function loadChatFor(ref) { note("loadChatFor") }
+        function refreshChatList(ref) { note("refreshChatList") }
+        function openChat(id) { note("openChat:" + id) }
+        function newChat() { note("newChat") }
+        function sendChat(text) { note("sendChat:" + text) }
+        function cancelChat() { note("cancelChat") }
+        function approveChat(id, allow) { note("approveChat:" + id + ":" + allow) }
+        function deleteActiveChat() { note("deleteActiveChat") }
+        function openChatInTerminal() { note("openChatInTerminal") }
+        function focusChat() { note("focusChat"); detailTab = "chat"; chatFocus++ }
+        function askAboutSelection(page, text) { chatAttachment = {selection: {page: page, text: text}}; focusChat() }
+        function askAboutClip(clip) { chatAttachment = {clip: clip}; focusChat() }
+        function openChatLink(url) { note("openChatLink:" + url) }
+        function saveAnswerAsNote(text) { note("saveAnswerAsNote:" + text) }
+        function focusActiveTab() { note("focusActiveTab") }
+        function pushChat(chatId, kind, data) {
+            var st = chats[chatId]
+            var e = {seq: st.events.length + 1, kind: kind, data: data}
+            st.events.push(e)
+            st.lastSeq = e.seq
+            chatEvent(chatId, e)
+            chatRevision++
+        }
+
         function note(name) { calls = calls.concat([name]) }
         function looksLikeIdentifier(text) { return /^10\.|arxiv|^https?:/i.test(String(text || "").trim()) }
         function syncChipText() { return "Changes pending sync" }
@@ -568,6 +606,17 @@ Rectangle {
             keyClick(Qt.Key_Escape)
             compare(reader.selection, null)
 
+            // `c` asks the chat about the selection.
+            reader.selection = {page: 1, from: 0, to: 1}
+            keyClick("c")
+            compare(app.chatAttachment.selection.text, "Sparse attention")
+            compare(app.detailTab, "chat")
+            compare(reader.selection, null)
+            app.chatAttachment = null
+            app.detailTab = "notes"
+            // `c` moved focus into the chat box; Escape there hands it back (focusActiveTab).
+            reader.focusPages()
+
             // Search jumps to the first hit.
             reader.goToPage(1)
             reader.runSearch("headline")
@@ -682,6 +731,70 @@ Rectangle {
                 app.paperTabs = []
                 app.activeTab = -1
             }
+        }
+        function test_12_chat_pane() {
+            var ref = Fixture.ref
+            app.selected = ref
+            app.detailTab = "chat"
+            var store = {}
+            store["chat-1"] = {chat: {id: "chat-1", ref_id: ref.id, agent: "claude", agent_label: "Claude Code", resumable: true}, events: [], draft: "", status: "idle", busy: false, lastSeq: 0}
+            app.chats = store
+            var owners = {}
+            owners[ref.id] = "chat-1"
+            app.chatForRef = owners
+            app.chatRevision++
+            wait(100)
+            var transcript = find(detail, "chatTranscript")
+            verify(transcript, "chat transcript")
+            compare(transcript.count, 0)
+
+            app.pushChat("chat-1", "user", {text: "What does Table 2 show?", selection: {page: 6, text: "Table 2 reports the headline result"}})
+            app.pushChat("chat-1", "session", {agent: "claude", version: "2.1.272", model: "claude-opus-5"})
+            app.pushChat("chat-1", "tool_call", {id: "t1", name: "mcp__omabib__get_reference", input: {id: "r2"}})
+            app.pushChat("chat-1", "tool_result", {id: "t1", output: "{\"title\":\"Sparse\"}", is_error: false})
+            app.pushChat("chat-1", "assistant", {text: "Table 2 compares **dense** and sparse attention on p. 6: sparse stays within 2%."})
+            app.pushChat("chat-1", "turn_end", {interrupted: false, is_error: false, usage: {input_tokens: 6, cache_read_input_tokens: 20412, output_tokens: 389}})
+            app.pushChat("chat-1", "approval", {request_id: "q1", tool: "mcp__omabib__add_note", input: {body: "Sparse stays within 2% (Table 2)", project_id: null}, source: "omabib"})
+            app.chats["chat-1"].busy = true
+            app.chats["chat-1"].status = "approval"
+            app.chatRevision++
+            app.chatDraft = "I'll save the note once you **approve** it."
+            wait(250)
+            compare(transcript.count, 6, "a tool result joins its call")
+            var answer = find(detail, "chatAnswer")
+            verify(answer.text.indexOf("omabib-page:6") >= 0, "page references link to the reader")
+            answer.openLink("omabib-page:6")
+            verify(app.calls.indexOf("openChatLink:omabib-page:6") >= 0, app.calls)
+            var draft = find(detail, "chatDraft")
+            tryVerify(function () { return draft.visible && draft.getText(0, draft.length).indexOf("approve") >= 0 }, 1000, "the streaming draft renders")
+            shot("12-chat")
+
+            mouseClick(find(detail, "chatAllow"))
+            verify(app.calls.indexOf("approveChat:q1:true") >= 0, app.calls)
+            app.pushChat("chat-1", "approval_result", {request_id: "q1", allow: true})
+            wait(50)
+            verify(!find(detail, "chatAllow").visible, "an answered request hides its buttons")
+
+            // Enter sends only when no reply is running.
+            app.chats["chat-1"].busy = false
+            app.chatRevision++
+            app.chatDraft = ""
+            var input = find(detail, "chatInput")
+            input.forceActiveFocus()
+            input.text = "Thanks"
+            keyClick(Qt.Key_Return)
+            verify(app.calls.indexOf("sendChat:Thanks") >= 0, app.calls)
+            compare(input.text, "")
+
+            // A selection from the reader rides along as a chip.
+            app.askAboutSelection(6, "Table 2 reports the headline result")
+            wait(50)
+            verify(find(detail, "chatAttachment").visible)
+            shot("12b-chat-attachment")
+            app.chatAttachment = null
+            app.chats = ({})
+            app.chatForRef = ({})
+            app.chatRevision++
         }
         function test_8_no_abstract_and_empty() {
             var r = JSON.parse(JSON.stringify(Fixture.ref))

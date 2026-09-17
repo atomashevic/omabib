@@ -17,7 +17,7 @@ FocusScope {
 
     onDraftChanged: {
         if (!draft) return
-        editor.text = draft.note ? draft.note.body : ""
+        editor.text = draft.note ? draft.note.body : (draft.body || "")
         labels.text = draft.labels || ""
         evidence.text = draft.evidence || ""
         var at = 0
@@ -77,6 +77,16 @@ FocusScope {
                 font.pixelSize: root.theme.body
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
+            }
+            TextButton {
+                objectName: "composerAskChat"
+                visible: root.isClip
+                theme: root.theme
+                variant: "ghost"
+                icon: "robot"
+                text: "Ask chat"
+                fontSize: root.theme.small
+                onClicked: root.app.askAboutClip(root.draft.clip)
             }
             IconButton { theme: root.theme; icon: "close"; size: root.theme.space(24); iconSize: root.theme.title; iconColor: root.theme.dim; tooltip: "Discard"; shortcut: "Esc"; onClicked: root.app.cancelComposer() }
         }

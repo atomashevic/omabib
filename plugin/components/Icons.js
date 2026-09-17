@@ -71,7 +71,12 @@ var GLYPHS = {
   sidebar: 0xF10AB,       // dock-right — the reader's notes pane
   outline: 0xF0836,       // table-of-contents
   chevronUp: 0xF0143,     // chevron-up
-  pageColors: 0xF050E     // theme-light-dark — PDF pages in theme colors
+  pageColors: 0xF050E,    // theme-light-dark — PDF pages in theme colors
+  robot: 0xF167A,         // robot-outline — in-window agent chat
+  send: 0xF048A,          // send
+  stop: 0xF04DB,          // stop — end a streaming reply
+  quote: 0xF0757,         // format-quote-open — a quoted selection
+  history: 0xF02DA        // history — earlier chats
 }
 
 function has(name) {

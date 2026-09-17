@@ -8,6 +8,7 @@ import Quickshell.Io
 import qs.Commons
 import "components"
 import "components/Format.js" as Format
+import "components/ChatText.js" as ChatText
 
 Item {
     id: root
@@ -24,7 +25,7 @@ Item {
     property string lastSelectedId: ""
     // overview | ai | notes | files | bibtex
     property string detailTab: "overview"
-    readonly property var detailTabs: ["overview", "ai", "notes", "files", "bibtex"]
+    readonly property var detailTabs: ["overview", "ai", "notes", "files", "bibtex", "chat"]
     property var deletePreview: null
     property bool deleteBusy: false
     property int deleteRequest: -1
@@ -41,6 +42,25 @@ Item {
     property var composer: null
     property bool composerSaving: false
     property string composerError: ""
+    // In-window chats with Claude Code or Codex, run by the service (src/chat).
+    // chats[chat_id] = {chat, events, draft, status, busy, lastSeq}, mutated in
+    // place with chatRevision bumped; chatForRef[ref_id] is the chat shown for a
+    // paper ("" for a new one). ChatPane follows chatEvent / chatReset.
+    property var chats: ({})
+    property var chatForRef: ({})
+    property var chatLists: ({})
+    property int chatRevision: 0
+    property string chatDraft: ""
+    property string chatAgent: settings.ai_cli === "codex" ? "codex" : "claude"
+    // {selection:{page,text}} or {clip:{page,rect_pt,source_pdf,preview}} for the next message.
+    property var chatAttachment: null
+    property bool chatSending: false
+    property string chatError: ""
+    property int chatFocus: 0
+    property bool chatSubscribed: false
+    readonly property string activeChatId: (chatRevision, selected && chatForRef[selected.id] ? chatForRef[selected.id] : "")
+    signal chatEvent(string chatId, var event)
+    signal chatReset(string chatId)
     // Error callbacks for requests that handle their own failures, by request id.
     property var rpcErrors: ({})
     // Bumped on every (re)connection, so views waiting on lost replies can start over.
@@ -393,7 +413,7 @@ Item {
     }
     function focusActiveTab() {
         if(!inPaperTab)return
-        if(inPdfTab)readerPane.forceActiveFocus()
+        if(inPdfTab)readerPane.focusPages()
         else paperKeys.forceActiveFocus()
     }
     function tabKey(tab) { return (tab.kind==="pdf"?"pdf:":"")+tab.id }
@@ -451,14 +471,14 @@ Item {
         else activateTab(paperTabs.length-1)
     }
     // Opens a reference's PDF in a reader tab, or shows its existing reader tab.
-    function openPdfTab(ref, background) {
+    function openPdfTab(ref, background, page) {
         ref=ref||targetRef()
         if(!ref)return
         var at=tabIds.indexOf("pdf:"+ref.id)
         if(at>=0){ if(!background)activateTab(at); return }
         if(paperTabs.length>=maxTabs){flash(maxTabs+" tabs are open. Close one to open another.");return}
         if(selected && selected.id===ref.id)paperCache[ref.id]=selected
-        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,kind:"pdf",detail_tab:"notes",page:1,zoom_mode:"width",zoom:1}])
+        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,kind:"pdf",detail_tab:"notes",page:page>0?page:1,zoom_mode:"width",zoom:1}])
         if(background)saveTabs()
         else activateTab(paperTabs.length-1)
     }
@@ -1165,7 +1185,7 @@ Item {
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");reloadDetail()})
     }
-    readonly property int actionCount: 27
+    readonly property int actionCount: 29
     function actionDigit(digit) {
         actionTimer.stop()
         var number=Number(actionDigits+digit)
@@ -1213,10 +1233,197 @@ Item {
         case 25:openInTab(null,false);break
         case 26:closeActiveTab();break
         case 27:togglePdfColors();break
+        case 28:focusChat();break
+        case 29:askAboutReaderSelection();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
     // added reference itself, expanded — it's what the user just asked for.
+    // ---- Chat ----
+    function subscribeChats() {
+        if(!socket.connected || chatSubscribed)return
+        chatSubscribed=true
+        rpc("chat_subscribe",{},function(){
+            // Catch up on anything missed while disconnected.
+            for(var id in root.chats)root.loadChat(id,true)
+        })
+    }
+    function onChatMessage(m) {
+        var s=chats[m.chat_id]
+        if(!s)return
+        if(m.kind==="delta"){
+            s.draft+=m.data.text
+            if(m.chat_id===activeChatId)chatDraft=s.draft
+            return
+        }
+        if(m.kind==="status"){
+            s.status=m.data.status
+            s.busy=m.data.busy
+            chatRevision++
+            return
+        }
+        if(m.seq===null || m.seq<=s.lastSeq)return
+        var e={seq:m.seq,kind:m.kind,data:m.data}
+        s.events.push(e)
+        s.lastSeq=m.seq
+        if(m.kind==="user")s.busy=true
+        if(m.kind==="assistant"||m.kind==="turn_end"){s.draft="";if(m.chat_id===activeChatId)chatDraft=""}
+        if(m.kind==="turn_end"){s.busy=false;s.status="idle"}
+        chatEvent(m.chat_id,e)
+        chatRevision++
+    }
+    // Shows the paper's most recent chat, or an empty one ready to start.
+    function loadChatFor(ref) {
+        subscribeChats()
+        if(!ref || chatForRef[ref.id]!==undefined)return
+        chatForRef[ref.id]=""
+        rpc("chat_list",{ref_id:ref.id},function(r){
+            root.chatLists[ref.id]=r.chats
+            if(r.chats.length && root.chatForRef[ref.id]==="")root.openChat(r.chats[0].id)
+            root.chatRevision++
+        })
+    }
+    function refreshChatList(ref) {
+        if(!ref)return
+        rpc("chat_list",{ref_id:ref.id},function(r){root.chatLists[ref.id]=r.chats;root.chatRevision++})
+    }
+    function loadChat(chatId, catchUp) {
+        var s=chats[chatId]
+        rpc("chat_get",{chat_id:chatId,after_seq:catchUp&&s?s.lastSeq:0},function(r){
+            var current=root.chats[chatId]
+            if(catchUp && current){
+                for(var i=0;i<r.events.length;i++)root.onChatMessage({chat_id:chatId,seq:r.events[i].seq,kind:r.events[i].kind,data:r.events[i].data})
+                current.busy=r.chat.busy;current.status=r.chat.status;current.chat=r.chat
+                root.chatRevision++
+                return
+            }
+            var events=r.events
+            root.chats[chatId]={chat:r.chat,events:events,draft:r.chat.draft||"",status:r.chat.status,busy:r.chat.busy,lastSeq:events.length?events[events.length-1].seq:0}
+            root.chatForRef[r.chat.ref_id]=chatId
+            if(root.selected && root.selected.id===r.chat.ref_id)root.chatDraft=r.chat.draft||""
+            root.chatRevision++
+            root.chatReset(chatId)
+        })
+    }
+    function openChat(chatId) {
+        chatError=""
+        if(chats[chatId]){
+            chatForRef[chats[chatId].chat.ref_id]=chatId
+            chatDraft=chats[chatId].draft
+            chatRevision++
+            chatReset(chatId)
+        }
+        loadChat(chatId,false)
+    }
+    function newChat() {
+        if(!selected)return
+        chatForRef[selected.id]=""
+        chatDraft=""
+        chatError=""
+        chatRevision++
+        chatReset("")
+        chatFocus++
+    }
+    function sendChat(text) {
+        subscribeChats()
+        var ref=selected
+        if(!ref || chatSending)return
+        var attachment=chatAttachment
+        chatError=""
+        var send=function(chatId){
+            var args={chat_id:chatId,text:text}
+            if(attachment && attachment.selection)args.selection=attachment.selection
+            if(attachment && attachment.clip)args.clip={page:attachment.clip.page,rect_pt:attachment.clip.rect_pt,source_pdf:attachment.clip.source_pdf}
+            root.chatSending=true
+            var id=root.rpc("chat_send",args,function(){root.chatSending=false;root.chatAttachment=null},function(message){root.chatSending=false;root.chatError=message})
+            if(id<0)root.chatSending=false
+        }
+        var existing=chatForRef[ref.id]
+        if(existing && chats[existing]){send(existing);return}
+        chatSending=true
+        var started=rpc("chat_start",{ref_id:ref.id,project_id:projectId||null,agent:chatAgent},function(r){
+            root.chatSending=false
+            root.chats[r.chat.id]={chat:r.chat,events:[],draft:"",status:"idle",busy:false,lastSeq:0}
+            root.chatForRef[ref.id]=r.chat.id
+            root.chatLists[ref.id]=[r.chat].concat(root.chatLists[ref.id]||[])
+            root.chatRevision++
+            root.chatReset(r.chat.id)
+            send(r.chat.id)
+        },function(message){root.chatSending=false;root.chatError=message})
+        if(started<0)chatSending=false
+    }
+    function cancelChat() {
+        if(activeChatId)rpc("chat_cancel",{chat_id:activeChatId})
+    }
+    function approveChat(requestId, allow) {
+        if(activeChatId)rpc("chat_approve",{chat_id:activeChatId,request_id:requestId,allow:allow},null,function(message){root.chatError=message})
+    }
+    function deleteActiveChat() {
+        var chatId=activeChatId
+        if(!chatId || !selected)return
+        var refId=selected.id
+        rpc("chat_delete",{chat_id:chatId},function(){
+            delete root.chats[chatId]
+            root.chatLists[refId]=(root.chatLists[refId]||[]).filter(function(c){return c.id!==chatId})
+            root.chatForRef[refId]=""
+            root.chatDraft=""
+            root.chatRevision++
+            root.chatReset("")
+            root.flash("Chat deleted")
+        })
+    }
+    function openChatInTerminal() {
+        if(!activeChatId)return
+        rpc("chat_resume_command",{chat_id:activeChatId},function(r){
+            Quickshell.execDetached(["xdg-terminal-exec","--dir="+r.cwd,"--title="+r.title].concat(r.argv))
+        },function(message){root.chatError=message})
+    }
+    // The Chat section: the side pane in reader tabs, the Chat tab elsewhere.
+    function focusChat() {
+        if(!selected && !inPaperTab){var hit=currentHit();if(!hit)return}
+        selectTab("chat")
+        chatFocus++
+    }
+    function askAboutSelection(page, text) {
+        if(!text)return
+        chatAttachment={selection:{page:page,text:text}}
+        focusChat()
+    }
+    function askAboutReaderSelection() {
+        if(!inPdfTab || !readerPane.selection){focusChat();return}
+        askAboutSelection(readerPane.selection.page,readerPane.selectionText())
+    }
+    function askAboutClip(clip) {
+        if(!clip || !clip.rect_pt)return
+        composer=null
+        chatAttachment={clip:clip}
+        focusChat()
+    }
+    // "omabib-page:N" links in answers open the page in the reader.
+    function openChatLink(url) {
+        var m=/^omabib-page:(\d+)$/.exec(url)
+        if(!m){openExternal(url);return}
+        var page=Number(m[1])
+        if(inPdfTab){readerPane.goToPage(page);return}
+        var ref=selected||targetRef()
+        if(!ref)return
+        var at=tabIds.indexOf("pdf:"+ref.id)
+        if(at>=0){updateTab(at,{page:page});activateTab(at);Qt.callLater(function(){readerPane.goToPage(page)});return}
+        openPdfTab(ref,false,page)
+    }
+    function saveAnswerAsNote(text) {
+        if(!selected)return
+        var page=ChatText.firstPage(text)
+        if(inPdfTab){
+            composeInSide(null,null)
+            composer=Object.assign({},composer,{body:text,evidence:page?"PDF p. "+page:""})
+            return
+        }
+        edit("note",null)
+        editor.text=text
+        if(page)evidence.text="PDF p. "+page
+    }
+    onActiveChatIdChanged: chatDraft=activeChatId && chats[activeChatId] ? chats[activeChatId].draft : ""
     function focusOnReference(citekey) {
         if(!citekey)return
         activateTab(-1)
@@ -1397,7 +1604,7 @@ Item {
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
@@ -1408,13 +1615,14 @@ Item {
         path: root.serviceSocket
         connected: true
         onConnectedChanged: {
-            if(connected){root.error="";root.connectionEpoch++;Qt.callLater(root.flushMath);if(root.opened)root.refresh()}
-            else {for(var id in root.mathRequests)root.mathQueue=root.mathQueue.concat(root.mathRequests[id]);root.mathRequests=({});root.pending=({});root.rpcErrors=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.error="Library service disconnected. Reconnecting…"}
+            if(connected){root.error="";root.connectionEpoch++;Qt.callLater(root.flushMath);Qt.callLater(root.subscribeChats);if(root.opened)root.refresh()}
+            else {for(var id in root.mathRequests)root.mathQueue=root.mathQueue.concat(root.mathRequests[id]);root.mathRequests=({});root.pending=({});root.rpcErrors=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.chatSubscribed=false;root.chatSending=false;root.error="Library service disconnected. Reconnecting…"}
         }
         parser: SplitParser {
             onRead: data => {
                 try {
                     var message=JSON.parse(data)
+                    if(message.event==="chat"){root.onChatMessage(message);return}
                     var callback=root.pending[message.id]
                     delete root.pending[message.id]
                     if(message.id===root.syncRequest)root.syncBusy=false
@@ -1597,6 +1805,7 @@ Item {
         Shortcut {sequence:"Ctrl+3";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("notes")}
         Shortcut {sequence:"Ctrl+4";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("files")}
         Shortcut {sequence:"Ctrl+5";enabled:root.opened&&!root.modalOpen;onActivated:root.selectTab("bibtex")}
+        Shortcut {sequence:"Ctrl+6";enabled:root.opened&&!root.modalOpen;onActivated:root.focusChat()}
         Shortcut {sequences:["Ctrl+Tab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(1)}
         Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(-1)}
         // In a reader tab Esc first cancels the clip tool, a selection or a search.

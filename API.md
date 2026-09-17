@@ -116,3 +116,24 @@ Notes returned by `get_reference` include optional compact `image` metadata. `ge
 `pdf_open` (JSON/CLI, read-only) opens a reference's PDF for a reader tab: `ref_id`, optional `attachment_id` (must be a PDF attachment of that reference) and `download` (default true; otherwise the first local PDF, restored from history or downloaded like `get_pdf`). It returns `doc_id`, `path`, `source`, `attachment_id`, `page_count`, `pages` (`{x0, y0, w, h}` in points), the PDF `title`, and a flat `outline` of `{title, level, page, uri}`. The `doc_id` changes when the file changes; the other `pdf_*` operations refuse a stale or unknown `doc_id` with "open it again".
 
 `pdf_render` (`doc_id`, 1-based `page`, `scale`) renders a page to PNG in `$XDG_CACHE_HOME/omabib/pages/<doc_id>/` and returns `{path, width, height, scale, links}`. Scales snap to quarter steps between 0.25 and 8 so zooming reuses cached pages; the cache is capped at 500 MB. `links` are `{rect, page, uri}` with rectangles in points (`page` for internal links, `uri` for web and mail links). `pdf_text` (`doc_id`, `page`) returns `words` as `[text, x0, y0, x1, y1, block, line]`. `pdf_search` (`doc_id`, `query`) returns `hits` of `{page, rects}`, at most 500, with `total` and `truncated`. MuPDF runs on one service thread that keeps up to 8 documents open.
+
+## Chat
+
+Chats with Claude Code or Codex about one reference, run by the service. JSON/CLI only; the agents themselves reach the library through `omabib mcp`.
+
+| Method | Parameters |
+|---|---|
+| `chat_start` | `ref_id` (UUID or citation key); optional `agent` (`claude`, the default, or `codex`), `project_id`. Creates the chat; no process starts until the first message. Returns `{chat, events}` like `chat_get`. |
+| `chat_list` | `ref_id`. Returns `chats`, newest first: `id`, `ref_id`, `project_id`, `agent`, `agent_label`, `title`, `created_at`, `updated_at`, `busy`, `status`, `resumable`, `event_count`. |
+| `chat_get` | `chat_id`; optional `after_seq`. Returns `chat` (as above, plus `draft`, the reply streaming right now, and `pending_approvals`) and stored `events` of `{seq, kind, data, created_at}`. |
+| `chat_send` | `chat_id`, `text`; optional `selection` (`{page, text}`, sent as a quoted passage) and `clip` (`{page, rect_pt:{x,y,width,height}, source_pdf?}`, rendered from the reference's PDF and sent as an image). Refreshes the chat's context file, stores the `user` event and starts the turn; returns `{seq}`. One turn at a time per chat. |
+| `chat_cancel` | `chat_id`. Interrupts the running turn (Claude Code: an interrupt request, Codex: SIGINT; either is stopped outright after 8 seconds) and denies pending approvals. |
+| `chat_approve` | `chat_id`, `request_id`, `allow` (boolean). Answers a pending approval once. |
+| `chat_delete` | `chat_id`. Stops its agent, denies pending approvals, deletes the chat, its events and its folder. |
+| `chat_resume_command` | `chat_id`. Returns `argv`, `cwd` and `title` for continuing the session in a terminal (`claude --resume` / `codex resume`) with an MCP config that has no approval queue. Needs a started session. |
+| `chat_permission_request` | `chat_id`, `tool`, `input`, `source`. Used by `omabib mcp` inside a chat: records an `approval` event and blocks until `chat_approve`, a cancel, or ten minutes (deny). Returns `{allow, message}`. |
+| `chat_subscribe` | none. On this connection, pushes every chat event as a line `{"v":1,"event":"chat","chat_id","seq","kind","data"}` until the connection closes. |
+
+Event kinds: `user`, `session` (agent, version, model), `assistant` (`text`), `tool_call` (`id`, `name`, `input` with long strings shortened), `tool_result` (`id`, `output` up to 4 KB, `is_error`), `approval` (`request_id`, `tool`, `input`, `source`), `approval_result` (`request_id`, `allow`, optional `reason`: `expired`, `cancelled`, `deleted`), `turn_end` (`interrupted`, `is_error`, `usage`, and for Claude Code `session_cost_usd`), `error` (`message`) and `note`. Pushed only, with `seq:null`: `delta` (`text`, the streaming reply) and `status` (`status`: `thinking`, `writing`, `tool`, `approval` or `idle`; `busy`).
+
+When `omabib mcp` runs with `OMABIB_CHAT_ID` set, every tool with `readOnlyHint:false` except `get_pdf` and `get_alphaxiv_overview` first asks `chat_permission_request`; a denial returns a tool error and the write never runs. With `OMABIB_CHAT_AGENT=claude` it also offers `chat_permission`, Claude Code's `--permission-prompt-tool`, which answers `{"behavior":"allow","updatedInput":…}` or `{"behavior":"deny","message":…}` from the same queue. `delete_reference_preview` reports `chat_count`, and `delete_reference` returns the deleted `chats_deleted` IDs.

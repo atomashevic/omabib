@@ -105,8 +105,9 @@ pub fn parse(line: &str) -> Vec<Event> {
             "interrupted": false,
             "is_error": false,
             "usage": {
+                // Codex counts cached input inside input_tokens.
                 "input_tokens": e["usage"]["input_tokens"],
-                "cache_read_input_tokens": e["usage"]["cached_input_tokens"],
+                "cached_input_tokens": e["usage"]["cached_input_tokens"],
                 "output_tokens": e["usage"]["output_tokens"],
             },
         }))],

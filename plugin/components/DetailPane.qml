@@ -11,7 +11,7 @@ Rectangle {
 
     readonly property var ref: app.selected
     readonly property string arxiv: Format.arxivId(ref)
-    readonly property var tabKeys: ["overview", "ai", "notes", "files", "bibtex"]
+    readonly property var tabKeys: ["overview", "ai", "notes", "files", "bibtex", "chat"]
 
     color: theme.card
 
@@ -183,7 +183,8 @@ Rectangle {
                 {key: "ai", label: "AI summary", icon: "sparkles", visible: root.arxiv !== ""},
                 {key: "notes", label: "Notes", count: root.ref && root.ref.notes ? root.ref.notes.length + (root.ref.next_note_cursor !== null && root.ref.next_note_cursor !== undefined ? "+" : "") : 0},
                 {key: "files", label: "Files", count: root.ref && root.ref.attachments ? root.ref.attachments.length : 0},
-                {key: "bibtex", label: "BibTeX"}
+                {key: "bibtex", label: "BibTeX"},
+                {key: "chat", label: "Chat", icon: "robot"}
             ]
             onSelected: key => root.app.selectTab(key)
         }
@@ -197,6 +198,7 @@ Rectangle {
             NotesTab { theme: root.theme; app: root.app }
             FilesTab { theme: root.theme; app: root.app }
             BibtexTab { theme: root.theme; app: root.app }
+            ChatPane { theme: root.theme; app: root.app }
         }
     }
 

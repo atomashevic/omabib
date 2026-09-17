@@ -35,6 +35,8 @@ Popup {
         {n: 20, group: "Sync", icon: "branch", label: "Repository settings"},
         {n: 22, group: "Agents", icon: "terminal", label: "Chat about item in " + app.cliName, ref: true},
         {n: 23, group: "Agents", icon: "chat", label: "Chat about item in " + app.desktopName, ref: true},
+        {n: 28, group: "Agents", icon: "robot", label: "Chat here", hint: "Claude Code or Codex beside the paper", shortcut: "Ctrl+6", ref: true},
+        {n: 29, group: "Agents", icon: "quote", label: "Ask chat about the selection", hint: "in a reader tab", shortcut: "c", ref: true},
         {n: 24, group: "Settings", icon: "cog", label: "Settings…", hint: "PDF colors, chat apps"},
         {n: 27, group: "Settings", icon: "pageColors", label: app.pdfThemed ? "PDF pages in original colors" : "PDF pages in theme colors", shortcut: "Ctrl+R"},
         {n: 21, group: "Danger", icon: "trash", label: "Delete current item…", danger: true, ref: true}
