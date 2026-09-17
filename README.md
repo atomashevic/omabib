@@ -161,7 +161,7 @@ The stdio MCP server exposes search, retrieval, note, PDF, reference, and deleti
 - `project_context` defaults to 8,000 serialized characters. Follow its reference cursor; fetch a reference to obtain additional or unabridged notes.
 - The service never launches an LLM or extracts/indexes PDF text. It can validate, download, archive and restore PDF files. Paths are returned to agents; reading the paper remains their responsibility.
 
-`omabib schema` prints tool schemas and available CLI-only operations. See [API.md](API.md) for metadata, export and attachment operations.
+`omabib schema` prints tool schemas and available CLI-only operations; `omabib schema get_reference search` prints only those tools. See [API.md](API.md) for metadata, export and attachment operations.
 
 ## Search behavior and performance
 
@@ -287,11 +287,13 @@ The recoloring happens on the GPU as the page is drawn (`plugin/components/shade
 
 Omabib can chat with **Claude Code** or **Codex** about the paper you are looking at, inside the window: the **Chat** tab of a paper tab (Ctrl+6), or the Chat section of a reader tab's side pane (**c**). Both agents run under your own logins; nothing needs an API key, and every turn uses your Claude or ChatGPT subscription.
 
-- **What the agent sees:** the same private context the terminal button prepares (the reference, abstract, BibTeX, every note with its project, exported clips and the PDF path) plus Omabib's MCP tools for this library. Instructions ask it to cite pages as "p. N"; those become links that open the page in the reader.
+- **What the agent sees:** the same private context the terminal button prepares (the reference, abstract, BibTeX, every note with its project, exported clips and the PDF path) plus Omabib's MCP tools for this library. Instructions ask it to cite pages as "p. N"; those become links that open the page in the reader. Codex's own file citations (`:codex-file-citation{…}`) show as the file name and link to it: the paper's PDF opens in the reader, other files in their default application.
 - **Asking about part of the paper:** select words in a reader tab and press **c** to attach them with their page, or drag a clip with **r** and press **Ask chat** instead of writing a note; the region goes along as an image.
-- **Streaming and stopping:** answers stream in and render with the same Markdown and math as notes. **Stop** interrupts a reply. Tool calls appear as one-line rows ("Read the reference", "Ran `ls`") that expand to their output.
+- **Streaming and stopping:** answers stream in and render with the same Markdown and math as notes. **Stop** interrupts a reply.
+- **Agent steps:** the agent's steps are hidden by default: tool calls, and the short messages it writes before one ("Let me check the PDF"). While it works, the current step shows beside the typing dots. The steps button in the chat header shows them as one-line rows ("Read the reference", "Ran `ls`") that expand to their output; the choice is remembered.
+- **Model and effort:** the model chip in the header picks the model and reasoning effort. Codex lists the models from `codex debug models`; Claude Code offers its aliases (Fable, Opus, Sonnet, Haiku) and effort levels. **Default** uses the agent's own configuration (`~/.codex/config.toml`, `~/.claude/settings.json`), and the chip names that model. A change applies from the chat's next message (Claude Code restarts on the same session) and becomes the default for new chats with that agent.
 - **Permissions:** reading is free: the context file, the PDF, and Omabib's read tools. Anything that changes the library (saving or editing a note, adding or deleting a reference, attaching a PDF) waits for an **Allow once / Deny** card in the chat; unanswered requests are denied after ten minutes. Claude Code also asks there before running commands that change things, editing files or going online. Codex runs its shell in a read-only sandbox without network, so it can look but not change or fetch.
-- **Saving answers:** hover an answer for **Copy** and **Save as note** (the note editor opens with the answer and, when it cites a page, that page as evidence).
+- **Saving answers:** **Copy** and **Save as note** sit under each turn's final answer (the note editor opens with the answer and, when it cites a page, that page as evidence).
 - **History:** each paper keeps its chats; the history button lists them, starts a new chat (choosing Claude Code or Codex; the default follows Settings → Terminal chat) or deletes one. **Continue in a terminal** resumes the same session with `claude --resume` or `codex resume`, outside Omabib's approval queue.
 
 The service runs the agents, so a reply keeps streaming while the window is hidden. Claude Code keeps one process per chat and is stopped after ten idle minutes (the next message resumes the session); Codex starts one process per turn and resumes its thread. At most three chats run agents at once. Transcripts are stored in the library database (and its backups), not exported by history sync; each chat's context folder is under `$XDG_DATA_HOME/omabib/chats/`. Deleting a reference deletes its chats.

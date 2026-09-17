@@ -6,20 +6,28 @@ Preferences live in $XDG_CONFIG_HOME/omabib/settings.json:
   pdf_colors  PDF pages in reader tabs: "original" or "theme" (Omarchy theme colors)
   ai_cli      terminal chat: "codex" (Codex CLI) or "claude" (Claude Code)
   ai_desktop  desktop chat: "chatgpt" (ChatGPT Desktop) or "claude" (Claude Desktop)
+  chat_steps  in-window chat: agent commands and tool calls "hidden" or "shown"
+  claude_model, claude_effort, codex_model, codex_effort
+              model and effort for new in-window chats; "" is the agent's default
 
   omabib-settings                      print preferences and the available choices
-  omabib-settings set KEY VALUE        change one preference
+  omabib-settings set KEY VALUE [KEY VALUE ...]
+                                       change preferences, all or none
   omabib-settings register-claude-desktop SOCKET
                                        add Omabib's MCP server to Claude Desktop
 """
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
 
 # An older pdf_viewer key is ignored: PDFs open in Omabib's reader tabs.
-DEFAULTS = {'pdf_colors': 'original', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt'}
+DEFAULTS = {'pdf_colors': 'original', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt', 'chat_steps': 'hidden',
+            'claude_model': '', 'claude_effort': '', 'codex_model': '', 'codex_effort': ''}
+CHAT_STEPS = ('hidden', 'shown')
+EFFORTS = ('', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 PDF_COLORS = ('original', 'theme')
 CLIS = [('codex', 'Codex CLI', 'codex'), ('claude', 'Claude Code', 'claude')]
 DESKTOPS = [('chatgpt', 'ChatGPT Desktop', 'chatgpt'), ('claude', 'Claude Desktop', 'claude-desktop')]
@@ -75,7 +83,7 @@ def show():
     )
 
 
-def set_value(key, value):
+def check(key, value):
     if key not in DEFAULTS:
         raise ValueError(f'Unknown setting {key}')
     if key == 'pdf_colors' and value not in PDF_COLORS:
@@ -84,8 +92,19 @@ def set_value(key, value):
         raise ValueError('Terminal chat must be codex or claude')
     if key == 'ai_desktop' and value not in {i for i, _, _ in DESKTOPS}:
         raise ValueError('Desktop chat must be chatgpt or claude')
+    if key == 'chat_steps' and value not in CHAT_STEPS:
+        raise ValueError('Chat steps must be hidden or shown')
+    if key.endswith('_effort') and value not in EFFORTS:
+        raise ValueError(f'Unknown effort level {value}')
+    if key.endswith('_model') and not re.fullmatch(r'(?:[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99})?', value):
+        raise ValueError('Invalid model name')
+
+
+def set_values(pairs):
+    for key, value in pairs:
+        check(key, value)
     settings = load()
-    settings[key] = value
+    settings.update(pairs)
     write_json(settings_path(), settings)
 
 
@@ -112,8 +131,8 @@ def register_claude_desktop(socket_path):
 
 
 def main(argv):
-    if argv[:1] == ['set'] and len(argv) == 3:
-        set_value(argv[1], argv[2])
+    if argv[:1] == ['set'] and len(argv) >= 3 and len(argv) % 2 == 1:
+        set_values(list(zip(argv[1::2], argv[2::2])))
     elif argv[:1] == ['register-claude-desktop'] and len(argv) == 2:
         register_claude_desktop(argv[1])
     elif argv not in ([], ['show']):

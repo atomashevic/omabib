@@ -123,14 +123,16 @@ Chats with Claude Code or Codex about one reference, run by the service. JSON/CL
 
 | Method | Parameters |
 |---|---|
-| `chat_start` | `ref_id` (UUID or citation key); optional `agent` (`claude`, the default, or `codex`), `project_id`. Creates the chat; no process starts until the first message. Returns `{chat, events}` like `chat_get`. |
-| `chat_list` | `ref_id`. Returns `chats`, newest first: `id`, `ref_id`, `project_id`, `agent`, `agent_label`, `title`, `created_at`, `updated_at`, `busy`, `status`, `resumable`, `event_count`. |
+| `chat_start` | `ref_id` (UUID or citation key); optional `agent` (`claude`, the default, or `codex`), `project_id`, `model`, `effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; absent or empty uses the agent's default). Creates the chat; no process starts until the first message. Returns `{chat, events}` like `chat_get`. |
+| `chat_list` | `ref_id`. Returns `chats`, newest first: `id`, `ref_id`, `project_id`, `agent`, `agent_label`, `title`, `created_at`, `updated_at`, `busy`, `status`, `resumable`, `model`, `effort`, `event_count`. |
+| `chat_models` | `agent`. Returns `models` (`id`, `label`, `efforts`, `default_effort`) and `default` (`model`, `effort`: what the agent uses without a choice, when its config says). Codex's come from `codex debug models` (listed models only, in Codex's order) and `config.toml`; Claude Code's are its aliases and `settings.json`'s `model`. Cached for ten minutes. |
+| `chat_set_model` | `chat_id`, `model`, `effort` (null or empty for the default). Applies from the next message: Codex passes `-m` and `model_reasoning_effort`; a running Claude Code process started with other choices is restarted on the same session with `--model` and `--effort`. Returns `{chat_id, model, effort}`. |
 | `chat_get` | `chat_id`; optional `after_seq`. Returns `chat` (as above, plus `draft`, the reply streaming right now, and `pending_approvals`) and stored `events` of `{seq, kind, data, created_at}`. |
 | `chat_send` | `chat_id`, `text`; optional `selection` (`{page, text}`, sent as a quoted passage) and `clip` (`{page, rect_pt:{x,y,width,height}, source_pdf?}`, rendered from the reference's PDF and sent as an image). Refreshes the chat's context file, stores the `user` event and starts the turn; returns `{seq}`. One turn at a time per chat. |
 | `chat_cancel` | `chat_id`. Interrupts the running turn (Claude Code: an interrupt request, Codex: SIGINT; either is stopped outright after 8 seconds) and denies pending approvals. |
 | `chat_approve` | `chat_id`, `request_id`, `allow` (boolean). Answers a pending approval once. |
 | `chat_delete` | `chat_id`. Stops its agent, denies pending approvals, deletes the chat, its events and its folder. |
-| `chat_resume_command` | `chat_id`. Returns `argv`, `cwd` and `title` for continuing the session in a terminal (`claude --resume` / `codex resume`) with an MCP config that has no approval queue. Needs a started session. |
+| `chat_resume_command` | `chat_id`. Returns `argv`, `cwd` and `title` for continuing the session in a terminal (`claude --resume` / `codex resume`, with the chat's model and effort) with an MCP config that has no approval queue. Needs a started session. |
 | `chat_permission_request` | `chat_id`, `tool`, `input`, `source`. Used by `omabib mcp` inside a chat: records an `approval` event and blocks until `chat_approve`, a cancel, or ten minutes (deny). Returns `{allow, message}`. |
 | `chat_subscribe` | none. On this connection, pushes every chat event as a line `{"v":1,"event":"chat","chat_id","seq","kind","data"}` until the connection closes. |
 

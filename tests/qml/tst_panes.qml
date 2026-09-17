@@ -97,7 +97,7 @@ Rectangle {
         function findInLibrary() { note("findInLibrary") }
         property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
         property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
-        property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt"})
+        property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
         readonly property bool pdfThemed: settings.pdf_colors === "theme"
         function togglePdfColors() { setSetting("pdf_colors", pdfThemed ? "original" : "theme") }
         property bool settingsBusy: false
@@ -121,6 +121,15 @@ Rectangle {
         property bool chatSending: false
         property string chatError: ""
         property int chatFocus: 0
+        property var chatModels: ({})
+        readonly property bool chatStepsShown: settings.chat_steps === "shown"
+        function loadChatModels(agent) {
+            if (chatModels[agent]) return
+            chatModels[agent] = {models: [{id: "opus", label: "Opus", efforts: ["low", "high"], default_effort: null}, {id: "sonnet", label: "Sonnet", efforts: ["low", "high"], default_effort: null}], default: {model: "opus", effort: null}}
+            chatRevision++
+        }
+        function setChatModel(agent, model, effort) { note("setChatModel:" + agent + ":" + model + ":" + effort) }
+        function toggleChatSteps() { settings = Object.assign({}, settings, {chat_steps: chatStepsShown ? "hidden" : "shown"}) }
         readonly property string activeChatId: (chatRevision, selected && chatForRef[selected.id] ? chatForRef[selected.id] : "")
         signal chatEvent(string chatId, var event)
         signal chatReset(string chatId)
@@ -611,6 +620,8 @@ Rectangle {
             keyClick("c")
             compare(app.chatAttachment.selection.text, "Sparse attention")
             compare(app.detailTab, "chat")
+            wait(100)
+            shot("11c-reader-chat")
             compare(reader.selection, null)
             app.chatAttachment = null
             app.detailTab = "notes"
@@ -750,9 +761,10 @@ Rectangle {
 
             app.pushChat("chat-1", "user", {text: "What does Table 2 show?", selection: {page: 6, text: "Table 2 reports the headline result"}})
             app.pushChat("chat-1", "session", {agent: "claude", version: "2.1.272", model: "claude-opus-5"})
+            app.pushChat("chat-1", "assistant", {text: "Let me read the reference first."})
             app.pushChat("chat-1", "tool_call", {id: "t1", name: "mcp__omabib__get_reference", input: {id: "r2"}})
             app.pushChat("chat-1", "tool_result", {id: "t1", output: "{\"title\":\"Sparse\"}", is_error: false})
-            app.pushChat("chat-1", "assistant", {text: "Table 2 compares **dense** and sparse attention on p. 6: sparse stays within 2%."})
+            app.pushChat("chat-1", "assistant", {text: "Table 2 compares **dense** and sparse attention on p. 6: sparse stays within 2%. :codex-file-citation{path=\"/papers/sparse.pdf\" purpose=\"source\"}"})
             app.pushChat("chat-1", "turn_end", {interrupted: false, is_error: false, usage: {input_tokens: 6, cache_read_input_tokens: 20412, output_tokens: 389}})
             app.pushChat("chat-1", "approval", {request_id: "q1", tool: "mcp__omabib__add_note", input: {body: "Sparse stays within 2% (Table 2)", project_id: null}, source: "omabib"})
             app.chats["chat-1"].busy = true
@@ -760,14 +772,37 @@ Rectangle {
             app.chatRevision++
             app.chatDraft = "I'll save the note once you **approve** it."
             wait(250)
-            compare(transcript.count, 6, "a tool result joins its call")
+            compare(transcript.count, 7, "a tool result joins its call")
+            // Steps are hidden by default: the session line, the message written
+            // before a tool call, and the call itself take no space.
+            compare(app.chatStepsShown, false)
+            for (var i = 1; i <= 3; i++) compare(transcript.itemAtIndex(i).height, 0, "step row " + i + " is hidden")
+            verify(transcript.itemAtIndex(0).height > 0 && transcript.itemAtIndex(4).height > 0)
             var answer = find(detail, "chatAnswer")
             verify(answer.text.indexOf("omabib-page:6") >= 0, "page references link to the reader")
+            verify(answer.text.indexOf("omabib-file:%2Fpapers%2Fsparse.pdf") >= 0 && answer.text.indexOf("codex-file-citation") < 0, answer.text)
+            verify(answer.getText(0, answer.length).indexOf("sparse.pdf") >= 0, "a citation reads as the file name")
+            mouseClick(find(detail, "chatCopy"))
+            verify(app.calls.indexOf("copy:Table 2 compares **dense** and sparse attention on p. 6: sparse stays within 2%.") >= 0, app.calls)
+            compare(find(detail, "chatModel").text, "Opus", "the default model is named")
             answer.openLink("omabib-page:6")
             verify(app.calls.indexOf("openChatLink:omabib-page:6") >= 0, app.calls)
             var draft = find(detail, "chatDraft")
             tryVerify(function () { return draft.visible && draft.getText(0, draft.length).indexOf("approve") >= 0 }, 1000, "the streaming draft renders")
             shot("12-chat")
+            mouseClick(find(detail, "chatSteps"))
+            compare(app.settings.chat_steps, "shown")
+            tryVerify(function () { return transcript.itemAtIndex(3).height > 0 }, 1000, "the tool call shows with steps on")
+            shot("12c-chat-steps")
+            mouseClick(find(detail, "chatSteps"))
+            tryVerify(function () { return transcript.itemAtIndex(3).height === 0 }, 1000)
+
+            // The model menu: Down from Default picks the first listed model.
+            mouseClick(find(detail, "chatModel"))
+            wait(100)
+            keyClick(Qt.Key_Down)
+            keyClick(Qt.Key_Return)
+            verify(app.calls.indexOf("setChatModel:claude:opus:") >= 0, app.calls)
 
             mouseClick(find(detail, "chatAllow"))
             verify(app.calls.indexOf("approveChat:q1:true") >= 0, app.calls)
@@ -785,6 +820,17 @@ Rectangle {
             keyClick(Qt.Key_Return)
             verify(app.calls.indexOf("sendChat:Thanks") >= 0, app.calls)
             compare(input.text, "")
+
+            // While steps are hidden, the current one shows beside the typing dots.
+            app.pushChat("chat-1", "user", {text: "Thanks"})
+            app.chats["chat-1"].busy = true
+            app.chatRevision++
+            app.pushChat("chat-1", "tool_call", {id: "t2", name: "shell", input: {command: "pdftotext paper.pdf -"}})
+            var activity = find(detail, "chatActivity")
+            tryVerify(function () { return activity.visible }, 1000, "activity line")
+            compare(activity.text, "Ran `pdftotext paper.pdf -`")
+            app.chats["chat-1"].busy = false
+            app.chatRevision++
 
             // A selection from the reader rides along as a chip.
             app.askAboutSelection(6, "Table 2 reports the headline result")

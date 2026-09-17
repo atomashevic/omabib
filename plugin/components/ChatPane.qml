@@ -26,17 +26,42 @@ FocusScope {
     readonly property string agentLabel: agent === "codex" ? "Codex" : "Claude Code"
     readonly property var style: theme.markdownStyle(theme.app)
     readonly property bool empty: transcript.count === 0 && renderedDraft === ""
+    readonly property bool stepsShown: app.chatStepsShown
     property string renderedDraft: ""
     property bool atBottom: true
+    // What the agent is doing, shown beside the typing dots while steps are hidden.
+    property string activity: ""
+
+    // Model and effort: the chat's own, or the defaults for a new chat.
+    readonly property var models: (app.chatRevision, app.chatModels[agent] || null)
+    readonly property string model: chat ? (chat.chat.model || "") : (app.settings[agent + "_model"] || "")
+    readonly property string effort: chat ? (chat.chat.effort || "") : (app.settings[agent + "_effort"] || "")
+    readonly property var defaults: models && models.default ? models.default : ({})
+    function modelEntry(id) {
+        var list = models ? models.models : []
+        for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+        return null
+    }
+    readonly property var activeModel: modelEntry(model || defaults.model || "")
+    readonly property string modelLabel: {
+        var id = model || defaults.model || ""
+        return activeModel ? activeModel.label : id !== "" ? id : "Default model"
+    }
+    readonly property string effortLabel: effort || defaults.effort || (activeModel && activeModel.default_effort) || ""
 
     ListModel { id: transcript }
 
+    readonly property var stepKinds: ["tool_call", "session", "note"]
     function rebuild() {
         transcript.clear()
+        activity = ""
         renderedDraft = chat ? chat.draft : ""
         if (chat) for (var i = 0; i < chat.events.length; i++) add(chat.events[i])
         Qt.callLater(function () { list.positionViewAtEnd(); root.atBottom = true })
     }
+    // Steps are tool calls, agent notes, and messages the agent wrote before
+    // another tool call ("Let me check the PDF"). The turn's footer carries its
+    // final answer for Copy and Save as note.
     function add(e) {
         if (e.kind === "tool_result" || e.kind === "approval_result") {
             var key = e.kind === "tool_result" ? "id" : "request_id"
@@ -49,7 +74,53 @@ FocusScope {
             }
             return
         }
-        transcript.append({ kind: e.kind, seq: e.seq, payload: JSON.stringify(e.data), result: "" })
+        var answer = ""
+        for (var j = transcript.count - 1; j >= 0; j--) {
+            var earlier = transcript.get(j)
+            if (earlier.kind === "user" || earlier.kind === "turn_end") break
+            if (earlier.kind !== "assistant") continue
+            if (e.kind === "tool_call") transcript.setProperty(j, "step", true)
+            else if (e.kind === "turn_end" && !earlier.step && answer === "") answer = JSON.parse(earlier.payload).text || ""
+        }
+        if (e.kind === "tool_call") activity = ChatText.toolLabel(e.data.name, e.data.input)
+        else if (e.kind === "assistant") activity = ChatText.short(ChatText.plain(e.data.text), 160)
+        else if (e.kind === "user" || e.kind === "turn_end") activity = ""
+        transcript.append({ kind: e.kind, seq: e.seq, payload: JSON.stringify(e.data), result: "", step: root.stepKinds.indexOf(e.kind) >= 0, answer: answer })
+    }
+    // Rich text for an answer: Markdown, then citation and page links.
+    function answerHtml(blocks, links) {
+        return ChatText.linkPages(ChatText.linkCitations(Markdown.toHtml(blocks, style, app.mathCache), links, style.link), style.link)
+    }
+    function openModelMenu() {
+        app.loadChatModels(agent)
+        var list = models ? models.models : []
+        var items = [{ section: "Model" }]
+        var def = modelEntry(defaults.model || "")
+        items.push({ key: "model:", label: "Default" + (defaults.model ? " · " + (def ? def.label : defaults.model) : ""), icon: "brain", selected: model === "" })
+        for (var i = 0; i < list.length; i++) items.push({ key: "model:" + list[i].id, label: list[i].label, icon: "brain", selected: model === list[i].id })
+        if (model !== "" && !modelEntry(model)) items.push({ key: "model:" + model, label: model, icon: "brain", selected: true })
+        if (models && models.loading) items.push({ section: "Loading models…" })
+        if (models && models.error) items.push({ section: "Couldn't list models" })
+        var efforts = activeModel ? activeModel.efforts : []
+        if (efforts.length) {
+            items.push({ section: "Effort" })
+            var defEffort = defaults.effort || activeModel.default_effort || ""
+            items.push({ key: "effort:", label: "Default" + (defEffort ? " · " + defEffort : ""), icon: "speedometer", selected: effort === "" })
+            for (var k = 0; k < efforts.length; k++) items.push({ key: "effort:" + efforts[k], label: efforts[k], icon: "speedometer", selected: effort === efforts[k] })
+        }
+        modelMenu.items = items
+        modelMenu.openAt(modelChip, "left")
+    }
+    function chooseModel(key) {
+        if (key.indexOf("model:") === 0) {
+            var id = key.slice(6)
+            var entry = modelEntry(id || defaults.model || "")
+            // Keep the effort only where the new model supports it.
+            var keep = effort !== "" && (!entry || entry.efforts.indexOf(effort) >= 0)
+            app.setChatModel(agent, id, keep ? effort : "")
+        } else {
+            app.setChatModel(agent, model, key.slice(7))
+        }
     }
     function send() {
         var text = input.text.trim()
@@ -83,8 +154,9 @@ FocusScope {
     }
     onChatIdChanged: rebuild()
     onRefChanged: if (visible) app.loadChatFor(ref)
-    onVisibleChanged: if (visible) app.loadChatFor(ref)
-    Component.onCompleted: { if (visible) app.loadChatFor(ref); rebuild() }
+    onVisibleChanged: if (visible) { app.loadChatFor(ref); app.loadChatModels(agent) }
+    onAgentChanged: if (visible) app.loadChatModels(agent)
+    Component.onCompleted: { if (visible) { app.loadChatFor(ref); app.loadChatModels(agent) } rebuild() }
 
     ColumnLayout {
         anchors.fill: parent
@@ -104,11 +176,12 @@ FocusScope {
                 theme: root.theme
                 icon: "robot"
                 iconColor: root.theme.accentText
-                text: root.agentLabel
+                // The reader's side pane is narrow: the icon, with the name in the tooltip.
+                text: root.compact ? "" : root.agentLabel
                 trailingIcon: root.chat && transcript.count ? "" : "chevronDown"
                 clickable: !(root.chat && transcript.count)
                 bordered: false
-                tooltip: root.chat && transcript.count ? "Start a new chat to switch agents" : "Chat agent"
+                tooltip: root.agentLabel + (root.chat && transcript.count ? " · start a new chat to switch agents" : " · chat agent")
                 onClicked: {
                     var clis = (root.app.settingsInfo && root.app.settingsInfo.clis) || []
                     var available = function (id) { var c = clis.filter(function (x) { return x.id === id })[0]; return !c || c.available }
@@ -119,6 +192,20 @@ FocusScope {
                     agentMenu.openAt(agentChip, "left")
                 }
             }
+            Chip {
+                id: modelChip
+                objectName: "chatModel"
+                theme: root.theme
+                maxTextWidth: root.theme.space(root.compact ? 110 : 240)
+                icon: "brain"
+                text: root.modelLabel + (root.effortLabel !== "" ? " · " + root.effortLabel : "")
+                textColor: root.theme.muted
+                trailingIcon: "chevronDown"
+                clickable: true
+                bordered: false
+                tooltip: "Model and effort, from the next message"
+                onClicked: root.openModelMenu()
+            }
             Text {
                 Layout.fillWidth: true
                 text: root.busy ? (ChatText.statusLabel(root.status) || "Working…") : ""
@@ -127,6 +214,15 @@ FocusScope {
                 font.pixelSize: root.theme.small
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
+            }
+            IconButton {
+                objectName: "chatSteps"
+                theme: root.theme
+                icon: "steps"
+                iconColor: root.theme.muted
+                active: root.stepsShown
+                tooltip: root.stepsShown ? "Hide agent steps" : "Show agent steps"
+                onClicked: root.app.toggleChatSteps()
             }
             IconButton {
                 id: historyButton
@@ -167,7 +263,8 @@ FocusScope {
                 anchors.fill: parent
                 clip: true
                 model: transcript
-                spacing: root.theme.space(10)
+                // Rows carry their own gap so hidden steps take no space.
+                spacing: 0
                 boundsBehavior: Flickable.StopAtBounds
                 // Drags select text; the wheel and scroll bar scroll.
                 acceptedButtons: Qt.NoButton
@@ -182,9 +279,14 @@ FocusScope {
                     required property string kind
                     required property string payload
                     required property string result
+                    required property bool step
+                    required property string answer
+                    readonly property bool shown: !step || root.stepsShown
                     readonly property var info: JSON.parse(payload)
                     readonly property var outcome: result ? JSON.parse(result) : null
                     width: ListView.view.width
+                    height: shown && item && item.implicitHeight > 0 ? item.implicitHeight + root.theme.space(10) : 0
+                    active: shown
                     sourceComponent: kind === "user" ? userRow
                         : kind === "assistant" ? assistantRow
                         : kind === "tool_call" ? toolRow
@@ -196,10 +298,11 @@ FocusScope {
 
                 footer: Item {
                     width: list.width
-                    height: root.renderedDraft !== "" || root.busy ? draftColumn.implicitHeight + root.theme.space(12) : 0
+                    height: root.renderedDraft !== "" || root.busy ? draftColumn.implicitHeight + root.theme.space(16) : 0
                     ColumnLayout {
                         id: draftColumn
                         x: root.theme.space(root.compact ? 12 : 24)
+                        y: root.theme.space(4)
                         width: parent.width - x * 2
                         visible: root.renderedDraft !== "" || root.busy
                         spacing: root.theme.space(6)
@@ -208,26 +311,42 @@ FocusScope {
                             Layout.fillWidth: true
                             visible: root.renderedDraft !== ""
                             theme: root.theme
-                            readonly property var blocks: Markdown.blocks(root.renderedDraft)
-                            text: visible ? ChatText.linkPages(Markdown.toHtml(blocks, root.style, root.app.mathCache), root.style.link) : ""
+                            readonly property var cited: ChatText.citations(root.renderedDraft)
+                            text: visible ? root.answerHtml(Markdown.blocks(cited.text), cited.links) : ""
                             onOpenLink: url => root.app.openChatLink(url)
                         }
-                        Row {
-                            spacing: root.theme.space(4)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: root.theme.space(10)
                             visible: root.busy
-                            Repeater {
-                                model: 3
-                                Rectangle {
-                                    required property int index
-                                    width: root.theme.space(5); height: width; radius: width / 2
-                                    color: root.theme.dim
-                                    SequentialAnimation on opacity {
-                                        loops: Animation.Infinite
-                                        PauseAnimation { duration: index * 150 }
-                                        NumberAnimation { from: 0.25; to: 1; duration: 350 }
-                                        NumberAnimation { from: 1; to: 0.25; duration: 350 }
+                            Row {
+                                spacing: root.theme.space(4)
+                                Layout.alignment: Qt.AlignVCenter
+                                Repeater {
+                                    model: 3
+                                    Rectangle {
+                                        required property int index
+                                        width: root.theme.space(5); height: width; radius: width / 2
+                                        color: root.theme.dim
+                                        SequentialAnimation on opacity {
+                                            loops: Animation.Infinite
+                                            PauseAnimation { duration: index * 150 }
+                                            NumberAnimation { from: 0.25; to: 1; duration: 350 }
+                                            NumberAnimation { from: 1; to: 0.25; duration: 350 }
+                                        }
                                     }
                                 }
+                            }
+                            Text {
+                                objectName: "chatActivity"
+                                Layout.fillWidth: true
+                                visible: !root.stepsShown && root.activity !== "" && root.renderedDraft === ""
+                                text: root.activity
+                                color: root.theme.dim
+                                font.family: root.theme.mono
+                                font.pixelSize: root.theme.small
+                                elide: Text.ElideRight
+                                textFormat: Text.PlainText
                             }
                         }
                     }
@@ -374,6 +493,12 @@ FocusScope {
         onTriggered: key => { root.app.chatAgent = key; if (root.chatId && transcript.count === 0) root.app.newChat() }
     }
     MenuPopup {
+        id: modelMenu
+        theme: root.theme
+        menuWidth: root.theme.space(240)
+        onTriggered: key => root.chooseModel(key)
+    }
+    MenuPopup {
         id: historyMenu
         theme: root.theme
         menuWidth: root.theme.space(280)
@@ -443,29 +568,18 @@ FocusScope {
         Item {
             id: answer
             readonly property var d: parent ? parent.info : ({})
-            readonly property var blocks: Markdown.blocks(d.text || "")
-            implicitHeight: answerColumn.implicitHeight
+            readonly property var cited: ChatText.citations(d.text || "")
+            readonly property var blocks: Markdown.blocks(cited.text)
+            implicitHeight: answerText.implicitHeight
             onBlocksChanged: root.app.ensureMath(Markdown.mathKeys(blocks))
-            HoverHandler { id: answerHover }
-            ColumnLayout {
-                id: answerColumn
+            ReadingText {
+                id: answerText
+                objectName: "chatAnswer"
                 x: root.side
                 width: parent.width - root.side * 2
-                spacing: root.theme.space(2)
-                ReadingText {
-                    objectName: "chatAnswer"
-                    Layout.fillWidth: true
-                    theme: root.theme
-                    text: ChatText.linkPages(Markdown.toHtml(answer.blocks, root.style, root.app.mathCache), root.style.link)
-                    onOpenLink: url => root.app.openChatLink(url)
-                }
-                RowLayout {
-                    spacing: root.theme.space(2)
-                    opacity: answerHover.hovered ? 1 : 0
-                    Behavior on opacity { NumberAnimation { duration: 120 } }
-                    TextButton { theme: root.theme; variant: "ghost"; icon: "copy"; text: "Copy"; fontSize: root.theme.small; onClicked: root.app.copy(answer.d.text) }
-                    TextButton { theme: root.theme; variant: "ghost"; icon: "notePlus"; text: "Save as note"; fontSize: root.theme.small; onClicked: root.app.saveAnswerAsNote(answer.d.text) }
-                }
+                theme: root.theme
+                text: root.answerHtml(answer.blocks, answer.cited.links)
+                onOpenLink: url => root.app.openChatLink(url)
             }
         }
     }
@@ -628,17 +742,25 @@ FocusScope {
     Component {
         id: turnRow
         Item {
+            id: turn
             readonly property var d: parent ? parent.info : ({})
-            implicitHeight: turnText.text !== "" ? turnText.implicitHeight : 0
-            Text {
-                id: turnText
+            readonly property string answer: parent ? parent.answer : ""
+            readonly property string usage: ChatText.turnLabel(d)
+            implicitHeight: answer !== "" || usage !== "" ? turnLine.implicitHeight : 0
+            RowLayout {
+                id: turnLine
                 x: root.side
                 width: parent.width - root.side * 2
-                text: ChatText.turnLabel(parent.d)
-                horizontalAlignment: Text.AlignRight
-                color: root.theme.dim
-                font.family: root.theme.mono
-                font.pixelSize: root.theme.caption
+                spacing: root.theme.space(2)
+                TextButton { objectName: "chatCopy"; visible: turn.answer !== ""; theme: root.theme; variant: "ghost"; icon: "copy"; text: "Copy"; fontSize: root.theme.small; onClicked: root.app.copy(ChatText.plain(turn.answer)) }
+                TextButton { objectName: "chatSaveNote"; visible: turn.answer !== ""; theme: root.theme; variant: "ghost"; icon: "notePlus"; text: root.compact ? "Note" : "Save as note"; fontSize: root.theme.small; onClicked: root.app.saveAnswerAsNote(ChatText.plain(turn.answer)) }
+                Item { Layout.fillWidth: true }
+                Text {
+                    text: turn.usage
+                    color: root.theme.dim
+                    font.family: root.theme.mono
+                    font.pixelSize: root.theme.caption
+                }
             }
         }
     }

@@ -76,7 +76,10 @@ var GLYPHS = {
   send: 0xF048A,          // send
   stop: 0xF04DB,          // stop — end a streaming reply
   quote: 0xF0757,         // format-quote-open — a quoted selection
-  history: 0xF02DA        // history — earlier chats
+  history: 0xF02DA,       // history — earlier chats
+  steps: 0xF0756,         // format-list-checks — show the agent's steps
+  brain: 0xF09D1,         // brain — the chat model
+  speedometer: 0xF04C5    // speedometer — reasoning effort
 }
 
 function has(name) {

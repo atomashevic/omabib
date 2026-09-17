@@ -3,7 +3,7 @@ name: omabib
 description: Search the local Omabib bibliography, add references by DOI/arXiv ID/URL, read PDFs, and retrieve or save project-specific paper assessments. Use when the user asks for library references or contextual research notes in Omabib.
 ---
 
-Use the Omabib MCP tools when available. The equivalent CLI is `omabib call OPERATION` with a JSON object on stdin. `omabib schema` describes the available tools.
+Use the Omabib MCP tools (`mcp__omabib__search`, `mcp__omabib__get_reference`, …). In Codex's exec tool they are called as `tools.mcp__omabib__get_reference({...})` and can be missing from the tool description: filter `ALL_TOOLS` by name before deciding they are unavailable. Only then use the equivalent CLI, `omabib call OPERATION` with a JSON object on stdin; a sandbox blocks its socket, and it then says so. `omabib schema [TOOL…]` describes the tools.
 
 Resolve the current project through `list_projects` with the actual working directory. If roots are ambiguous, obtain an explicit project selection. Never infer the project from a previous agent's UI selection.
 

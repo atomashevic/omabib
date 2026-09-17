@@ -1,5 +1,5 @@
 use crate::db::Library;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -43,8 +43,16 @@ pub fn request(method: &str, params: &Value) -> Result<Value> {
 }
 /// For calls that wait on the reader, such as a chat approval.
 pub fn request_with_timeout(method: &str, params: &Value, timeout: Duration) -> Result<Value> {
-    let mut stream = UnixStream::connect(socket_path())
-        .context("Omabib service is unavailable. Run: systemctl --user start omabib")?;
+    let mut stream = UnixStream::connect(socket_path()).map_err(|e| {
+        // A sandbox (such as an agent's read-only one) refuses the connection outright.
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            anyhow::anyhow!(
+                "Omabib's socket is blocked here ({e}); this is likely a sandbox. Use Omabib's MCP tools instead."
+            )
+        } else {
+            anyhow::anyhow!("Omabib service is unavailable. Run: systemctl --user start omabib: {e}")
+        }
+    })?;
     stream.set_read_timeout(Some(timeout))?;
     writeln!(
         stream,

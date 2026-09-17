@@ -32,7 +32,8 @@ Popup {
         x = Math.max(root.theme.space(8), Math.min(wantX, parent.width - menuWidth - root.theme.space(8)))
         y = Math.max(root.theme.space(8), Math.min(p.y, parent.height - implicitHeight - root.theme.space(8)))
         var sel = -1
-        for (var i = 0; i < actionable.length; i++) if (actionable[i].selected) sel = i
+        // The first selected entry: a menu with sections may select one in each.
+        for (var i = 0; i < actionable.length && sel < 0; i++) if (actionable[i].selected) sel = i
         cursor = Math.max(0, sel)
         open()
     }

@@ -58,6 +58,9 @@ Item {
     property string chatError: ""
     property int chatFocus: 0
     property bool chatSubscribed: false
+    // chatModels[agent] = {models, default, loading, error} from chat_models.
+    property var chatModels: ({})
+    readonly property bool chatStepsShown: settings.chat_steps === "shown"
     readonly property string activeChatId: (chatRevision, selected && chatForRef[selected.id] ? chatForRef[selected.id] : "")
     signal chatEvent(string chatId, var event)
     signal chatReset(string chatId)
@@ -128,7 +131,7 @@ Item {
     property int syncRequest: -1
     // Preferences from omabib-settings: {ai_cli, ai_desktop}, plus
     // the installed choices the Settings dialog offers.
-    property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt"})
+    property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
     readonly property bool pdfThemed: settings.pdf_colors === "theme"
     property var settingsInfo: null
     property bool settingsBusy: false
@@ -657,6 +660,13 @@ Item {
     function setSetting(key, value) {
         var next=Object.assign({},settings); next[key]=value; settings=next
         runSettings(["set",key,value])
+    }
+    // Several preferences in one write, e.g. {codex_model: "gpt-5.5", codex_effort: ""}.
+    function setSettings(values) {
+        var next=Object.assign({},settings), args=["set"]
+        for(var key in values){next[key]=values[key];args.push(key,values[key])}
+        settings=next
+        runSettings(args)
     }
     function registerClaudeDesktop() { runSettings(["register-claude-desktop",serviceSocket]) }
     Process {
@@ -1341,7 +1351,7 @@ Item {
         var existing=chatForRef[ref.id]
         if(existing && chats[existing]){send(existing);return}
         chatSending=true
-        var started=rpc("chat_start",{ref_id:ref.id,project_id:projectId||null,agent:chatAgent},function(r){
+        var started=rpc("chat_start",{ref_id:ref.id,project_id:projectId||null,agent:chatAgent,model:settings[chatAgent+"_model"]||null,effort:settings[chatAgent+"_effort"]||null},function(r){
             root.chatSending=false
             root.chats[r.chat.id]={chat:r.chat,events:[],draft:"",status:"idle",busy:false,lastSeq:0}
             root.chatForRef[ref.id]=r.chat.id
@@ -1352,6 +1362,37 @@ Item {
         },function(message){root.chatSending=false;root.chatError=message})
         if(started<0)chatSending=false
     }
+    // The models an agent offers; listed once per session, retried after an error.
+    function loadChatModels(agent) {
+        if(!agent || (chatModels[agent] && !chatModels[agent].error))return
+        chatModels[agent]={models:[],default:{},loading:true}
+        var id=rpc("chat_models",{agent:agent},function(r){
+            root.chatModels[agent]={models:r.models||[],default:r.default||{},loading:false}
+            root.chatRevision++
+        },function(message){
+            root.chatModels[agent]={models:[],default:{},loading:false,error:message}
+            root.chatRevision++
+        })
+        if(id<0)delete chatModels[agent]
+        chatRevision++
+    }
+    // Remembers the choice for new chats and applies it to this paper's chat from its next message.
+    function setChatModel(agent, model, effort) {
+        var values={}
+        values[agent+"_model"]=model||""
+        values[agent+"_effort"]=effort||""
+        setSettings(values)
+        var chatId=activeChatId
+        if(!chatId || !chats[chatId] || chats[chatId].chat.agent!==agent)return
+        rpc("chat_set_model",{chat_id:chatId,model:model||null,effort:effort||null},function(r){
+            var s=root.chats[chatId]
+            if(!s)return
+            s.chat.model=r.model
+            s.chat.effort=r.effort
+            root.chatRevision++
+        },function(message){root.chatError=message})
+    }
+    function toggleChatSteps() { setSetting("chat_steps", chatStepsShown ? "hidden" : "shown") }
     function cancelChat() {
         if(activeChatId)rpc("chat_cancel",{chat_id:activeChatId})
     }
@@ -1399,16 +1440,27 @@ Item {
         chatAttachment={clip:clip}
         focusChat()
     }
-    // "omabib-page:N" links in answers open the page in the reader.
+    // "omabib-page:N" links in answers open the page in the reader, and
+    // "omabib-file:" citations of the paper's own PDF open it there too;
+    // other cited files open in their default application.
     function openChatLink(url) {
         var m=/^omabib-page:(\d+)$/.exec(url)
-        if(!m){openExternal(url);return}
-        var page=Number(m[1])
-        if(inPdfTab){readerPane.goToPage(page);return}
+        var file=ChatText.citedFile(url)
         var ref=selected||targetRef()
+        if(file){
+            var own=!!ref && (ref.attachments||[]).some(function(a){return a.path===file.path})
+            if(!own){openExternal("file://"+encodeURI(file.path));return}
+        } else if(!m){openExternal(url);return}
+        var page=m?Number(m[1]):file.page
+        if(inPdfTab){if(page)readerPane.goToPage(page);return}
         if(!ref)return
         var at=tabIds.indexOf("pdf:"+ref.id)
-        if(at>=0){updateTab(at,{page:page});activateTab(at);Qt.callLater(function(){readerPane.goToPage(page)});return}
+        if(at>=0){
+            if(page)updateTab(at,{page:page})
+            activateTab(at)
+            if(page)Qt.callLater(function(){readerPane.goToPage(page)})
+            return
+        }
         openPdfTab(ref,false,page)
     }
     function saveAnswerAsNote(text) {
@@ -1604,7 +1656,7 @@ Item {
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }

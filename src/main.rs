@@ -97,8 +97,8 @@ enum Command {
         #[arg(long)]
         to: PathBuf,
     },
-    /// Print the operations and MCP tool schemas.
-    Schema,
+    /// Print the operations and MCP tool schemas, or only the named tools'.
+    Schema { tools: Vec<String> },
 }
 #[derive(Subcommand)]
 enum RepoCommand {
@@ -633,7 +633,15 @@ fn run() -> Result<()> {
             c.backup(rusqlite::MAIN_DB, &to, None)?;
             json!({"restored_to":to})
         }
-        Command::Schema => {
+        Command::Schema { tools } if !tools.is_empty() => {
+            let found: Vec<Value> = omabib::mcp::tools()
+                .into_iter()
+                .filter(|t| tools.iter().any(|name| t["name"] == name.as_str()))
+                .collect();
+            anyhow::ensure!(found.len() == tools.len(), "Unknown tool; run omabib schema for the list");
+            json!({"tools":found})
+        }
+        Command::Schema { .. } => {
             json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","get_repo_config","set_repo_config","sync_repo","repo_check","repo_setup","repo_status","identify_pdf","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
         }
     };

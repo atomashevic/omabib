@@ -56,18 +56,19 @@ with tempfile.TemporaryDirectory(prefix='omabib-claude-test-') as directory:
         print('PASS: Claude Desktop link prompts for the entry through Omabib tools', flush=True)
 
         # Settings: defaults and validation. An old pdf_viewer key is ignored.
-        assert settings['load']() == dict(pdf_colors='original', ai_cli='codex', ai_desktop='chatgpt')
+        chat_defaults = dict(chat_steps='hidden', claude_model='', claude_effort='', codex_model='', codex_effort='')
+        assert settings['load']() == dict(pdf_colors='original', ai_cli='codex', ai_desktop='chatgpt', **chat_defaults)
         (root / 'config/omabib').mkdir(parents=True, exist_ok=True)
         (root / 'config/omabib/settings.json').write_text(json.dumps(dict(pdf_viewer='org.pwmt.zathura.desktop')))
         shown = json.loads(subprocess.check_output([sys.executable, str(scripts / 'omabib-settings')], text=True))
-        assert 'pdf_viewers' not in shown and shown['settings'] == dict(pdf_colors='original', ai_cli='codex', ai_desktop='chatgpt'), shown
-        for key, value in [('pdf_colors', 'theme'), ('ai_cli', 'claude'), ('ai_desktop', 'claude')]:
+        assert 'pdf_viewers' not in shown and shown['settings'] == dict(pdf_colors='original', ai_cli='codex', ai_desktop='chatgpt', **chat_defaults), shown
+        for key, value in [('pdf_colors', 'theme'), ('ai_cli', 'claude'), ('ai_desktop', 'claude'), ('chat_steps', 'shown'), ('codex_model', 'gpt-5.5'), ('codex_effort', 'high')]:
             out = json.loads(subprocess.check_output([sys.executable, str(scripts / 'omabib-settings'), 'set', key, value], text=True))
             assert out['settings'][key] == value, out
-        for key, value in [('pdf_viewer', 'viewer.desktop'), ('pdf_colors', 'sepia'), ('ai_cli', 'gemini'), ('colour', 'red')]:
+        for key, value in [('pdf_viewer', 'viewer.desktop'), ('pdf_colors', 'sepia'), ('ai_cli', 'gemini'), ('colour', 'red'), ('chat_steps', 'some'), ('claude_effort', 'loud'), ('claude_model', '--resume')]:
             result = subprocess.run([sys.executable, str(scripts / 'omabib-settings'), 'set', key, value], capture_output=True, text=True)
             assert result.returncode == 1 and 'error' in json.loads(result.stdout), result.stdout
-        assert json.loads((root / 'config/omabib/settings.json').read_text()) == dict(pdf_colors='theme', ai_cli='claude', ai_desktop='claude')
+        assert json.loads((root / 'config/omabib/settings.json').read_text()) == dict(pdf_colors='theme', ai_cli='claude', ai_desktop='claude', **dict(chat_defaults, chat_steps='shown', codex_model='gpt-5.5', codex_effort='high'))
         print('PASS: settings validate PDF colors and chat choices and drop the old PDF viewer key', flush=True)
 
         # Claude Desktop registration keeps the user's config and backs it up once.

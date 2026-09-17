@@ -16,6 +16,7 @@ Item {
     property bool bordered: true
     property color textColor: selected ? theme.bright : theme.text
     property color iconColor: theme.muted
+    property real maxTextWidth: theme.space(260)
 
     signal clicked()
 
@@ -38,13 +39,14 @@ Item {
         spacing: root.theme.space(5)
         Icon { theme: root.theme; visible: root.icon !== ""; name: root.icon; size: root.theme.small + 1; color: root.iconColor }
         Text {
+            visible: root.text !== ""
             text: root.text
             color: root.hot ? root.theme.bright : root.textColor
             font.family: root.theme.mono
             font.pixelSize: root.theme.small
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            Layout.maximumWidth: root.theme.space(260)
+            Layout.maximumWidth: root.maxTextWidth
         }
         Icon { theme: root.theme; visible: root.trailingIcon !== ""; name: root.trailingIcon; size: root.theme.small + 1; color: root.hot ? root.theme.bright : root.theme.dim }
     }

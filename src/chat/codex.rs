@@ -14,6 +14,8 @@ pub struct Turn<'a> {
     pub chat_id: &'a str,
     pub images: &'a [PathBuf],
     pub prompt: &'a str,
+    pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
 }
 
 /// The TOML inline table for `-c`, strings quoted as JSON (valid TOML basic strings).
@@ -33,6 +35,24 @@ pub fn mcp_server(omabib: &Path, socket: &Path, chat_id: Option<&str>) -> String
     )
 }
 
+/// `-m` and the reasoning effort override, for a turn or a terminal resume.
+pub fn model_args(model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = model {
+        args.extend(["-m".into(), model.into()]);
+    }
+    if let Some(effort) = effort {
+        args.extend([
+            "-c".into(),
+            format!(
+                "model_reasoning_effort={}",
+                serde_json::to_string(effort).unwrap()
+            ),
+        ]);
+    }
+    args
+}
+
 pub fn args(t: &Turn) -> Vec<String> {
     let mut args: Vec<String> = vec!["exec".into()];
     if let Some(thread) = t.thread_id {
@@ -46,11 +66,61 @@ pub fn args(t: &Turn) -> Vec<String> {
         "-c".into(),
         "sandbox_mode=\"read-only\"".into(),
     ]);
+    args.extend(model_args(t.model, t.effort));
     for image in t.images {
         args.extend(["-i".into(), image.to_string_lossy().into_owned()]);
     }
     args.extend(["--".into(), t.prompt.into()]);
     args
+}
+
+/// The pickable models from `codex debug models`, in Codex's own order.
+pub fn models(catalog: &Value) -> Vec<Value> {
+    let mut models: Vec<&Value> = catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["visibility"] == "list" && m["slug"].is_string())
+        .collect();
+    models.sort_by_key(|m| m["priority"].as_i64().unwrap_or(i64::MAX));
+    models
+        .into_iter()
+        .map(|m| {
+            json!({
+                "id": m["slug"],
+                "label": m["display_name"].as_str().or(m["slug"].as_str()),
+                "efforts": m["supported_reasoning_levels"].as_array().into_iter().flatten()
+                    .filter_map(|l| l["effort"].as_str()).collect::<Vec<_>>(),
+                "default_effort": m["default_reasoning_level"],
+            })
+        })
+        .collect()
+}
+
+/// The top-level `model` and `model_reasoning_effort` of Codex's config.toml:
+/// what a turn without overrides uses.
+pub fn configured_default(config: &str) -> (Option<String>, Option<String>) {
+    let (mut model, mut effort) = (None, None);
+    for line in config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            break;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.split_once('"'))
+            .map(|(v, _)| v.to_string());
+        match key.trim() {
+            "model" => model = model.or(value),
+            "model_reasoning_effort" => effort = effort.or(value),
+            _ => {}
+        }
+    }
+    (model, effort)
 }
 
 pub fn parse(line: &str) -> Vec<Event> {

@@ -54,4 +54,21 @@ test('status and turn lines', () => {
   assert.strictEqual(C.turnLabel({ usage: { input_tokens: 95620, cached_input_tokens: 80512, output_tokens: 1396 } }), '96k read · 1.4k written');
 });
 
+test('Codex file citations become links and other directives disappear', () => {
+  const text = 'Equation (1) is on p. 4. :codex-file-citation{path="/home/u/pdfs/latent 2026.pdf" purpose="source"} Also :codex-annotation{index="2"}.\n:codex-file-citation{path="/tmp/r.docx" purpose="source" artifact_kind="document" page_number="3"}';
+  const cited = C.citations(text);
+  assert.strictEqual(cited.text, 'Equation (1) is on p. 4. 0 Also.\n1');
+  assert.deepStrictEqual(cited.links, [
+    { path: '/home/u/pdfs/latent 2026.pdf', page: 0, label: 'latent 2026.pdf' },
+    { path: '/tmp/r.docx', page: 3, label: 'r.docx, p. 3' }
+  ]);
+  const html = C.linkCitations('<p>' + cited.text + '</p>', cited.links, '#f00');
+  assert(html.includes('<a href="omabib-file:%2Fhome%2Fu%2Fpdfs%2Flatent%202026.pdf"><font color="#f00">latent 2026.pdf</font></a>'), html);
+  assert(html.includes('<a href="omabib-file:%2Ftmp%2Fr.docx#page=3">'), html);
+  assert.deepStrictEqual(C.citedFile('omabib-file:%2Ftmp%2Fr.docx#page=3'), { path: '/tmp/r.docx', page: 3 });
+  assert.strictEqual(C.citedFile('omabib-page:3'), null);
+  assert.strictEqual(C.citations('Streaming :codex-file-citation{path="/ho').text, 'Streaming');
+  assert.strictEqual(C.plain('See p. 4. :codex-file-citation{path="/a.pdf" purpose="source"}'), 'See p. 4.');
+});
+
 console.log(`${passed} passed`);

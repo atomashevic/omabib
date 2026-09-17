@@ -110,6 +110,57 @@ function linkPages(html, color) {
   return parts.join("")
 }
 
+// Codex writes directives such as :codex-file-citation{path="/a/b.pdf" purpose="source"}
+// and :codex-annotation{index="3"}. File citations become links; the others are dropped.
+var DIRECTIVE = /[ \t]*:codex-([a-z-]+)\{((?:[^{}"]|"(?:[^"\\]|\\.)*")*)\}/g
+var CITE_OPEN = "", CITE_CLOSE = ""
+
+function directiveAttributes(body) {
+  var attrs = {}
+  var re = /([A-Za-z_][\w-]*)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s"]+))/g
+  var m
+  while ((m = re.exec(body))) attrs[m[1]] = m[2] !== undefined ? m[2].replace(/\\(.)/g, "$1") : m[3]
+  return attrs
+}
+
+// {text, links}: each file citation in `text` becomes a marker for linkCitations()
+// after Markdown rendering; links[i] = {path, page, label}. An unfinished
+// directive at the end of a streaming draft is hidden.
+function citations(text) {
+  var links = []
+  var out = String(text || "").replace(DIRECTIVE, function (all, kind, body) {
+    var a = kind === "file-citation" ? directiveAttributes(body) : {}
+    if (!a.path) return ""
+    var page = Number(a.page_number) || 0
+    links.push({ path: a.path, page: page, label: basename(a.path) + (page ? ", p. " + page : "") })
+    return (/^[ \t]/.test(all) ? " " : "") + CITE_OPEN + (links.length - 1) + CITE_CLOSE
+  })
+  out = out.replace(/[ \t]*:codex-[a-z-]*(\{[^}]*)?$/, "")
+  return { text: out, links: links }
+}
+
+// Swaps citation markers in rendered HTML for omabib-file links in `color`.
+function linkCitations(html, links, color) {
+  return String(html || "").replace(/(\d+)/g, function (all, n) {
+    var link = links[Number(n)]
+    if (!link) return ""
+    var label = link.label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    var href = "omabib-file:" + encodeURIComponent(link.path) + (link.page ? "#page=" + link.page : "")
+    return "<a href=\"" + href + "\">" + (color ? "<font color=\"" + color + "\">" + label + "</font>" : label) + "</a>"
+  })
+}
+
+// An answer as Markdown for copying or a note: agent directives removed.
+function plain(text) {
+  return String(text || "").replace(DIRECTIVE, "").replace(/[ \t]*:codex-[a-z-]*(\{[^}]*)?$/, "")
+}
+
+// {path, page} from an omabib-file link, or null.
+function citedFile(url) {
+  var m = /^omabib-file:([^#]+)(?:#page=(\d+))?$/.exec(String(url || ""))
+  return m ? { path: decodeURIComponent(m[1]), page: Number(m[2]) || 0 } : null
+}
+
 function firstPage(text) {
   var m = /\b(?:pp?\.|pages?)\s?(\d{1,4})/i.exec(String(text || ""))
   return m ? Number(m[1]) : 0

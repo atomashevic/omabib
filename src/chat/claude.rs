@@ -16,6 +16,36 @@ pub struct Launch<'a> {
     pub resume: bool,
     pub folder: &'a Path,
     pub instructions: &'a str,
+    pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
+}
+
+/// Claude Code's model aliases, each resolving to the latest model of its family.
+pub const MODELS: &[(&str, &str)] = &[
+    ("fable", "Fable"),
+    ("opus", "Opus"),
+    ("sonnet", "Sonnet"),
+    ("haiku", "Haiku"),
+];
+pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+pub fn models() -> Vec<Value> {
+    MODELS
+        .iter()
+        .map(|(id, label)| json!({"id": id, "label": label, "efforts": EFFORTS, "default_effort": null}))
+        .collect()
+}
+
+/// `--model` and `--effort`, for the headless process or a terminal resume.
+pub fn model_args(model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = model {
+        args.extend(["--model".into(), model.into()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["--effort".into(), effort.into()]);
+    }
+    args
 }
 
 pub fn args(l: &Launch) -> Vec<String> {
@@ -51,6 +81,7 @@ pub fn args(l: &Launch) -> Vec<String> {
         "--append-system-prompt".into(),
         l.instructions.into(),
     ]);
+    args.extend(model_args(l.model, l.effort));
     args
 }
 

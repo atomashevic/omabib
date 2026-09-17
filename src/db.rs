@@ -271,6 +271,7 @@ impl Library {
         c.execute_batch(crate::visual::SCHEMA)?;
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
+        crate::chat::migrate(&c)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let chats = crate::chat::Chats::new(&path);
@@ -354,6 +355,8 @@ impl Library {
             "chat_list" => self.chats.list(a),
             "chat_get" => self.chats.get(a),
             "chat_start" => self.chats.start(self, a),
+            "chat_models" => self.chats.models(a),
+            "chat_set_model" => self.chats.set_model(a),
             "chat_send" => self.chats.send(self, a),
             "chat_cancel" => self.chats.cancel(a),
             "chat_approve" => self.chats.approve(a),

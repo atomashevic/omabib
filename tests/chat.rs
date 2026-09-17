@@ -124,9 +124,29 @@ fn claude_adapter_builds_arguments_and_input_lines() {
         resume: true,
         folder: Path::new("/data/chats/chat-1"),
         instructions: "Read the context.",
+        model: None,
+        effort: None,
     });
     let joined = args.join(" ");
     assert!(joined.contains("--resume s-1") && !joined.contains("--session-id"));
+    assert!(!joined.contains("--model") && !joined.contains("--effort"));
+    let chosen = claude::args(&claude::Launch {
+        session_id: "s-1",
+        resume: false,
+        folder: Path::new("/data/chats/chat-1"),
+        instructions: "Read the context.",
+        model: Some("opus"),
+        effort: Some("high"),
+    });
+    assert_eq!(
+        chosen[chosen.len() - 4..],
+        ["--model", "opus", "--effort", "high"]
+    );
+    assert!(
+        claude::models()
+            .iter()
+            .any(|m| m["id"] == "opus" && m["efforts"][0] == "low")
+    );
     assert!(joined.contains("--mcp-config /data/chats/chat-1/mcp.json --strict-mcp-config"));
     assert!(joined.contains("--permission-prompt-tool mcp__omabib__chat_permission"));
     assert!(joined.contains("--allowedTools Read Grep Glob mcp__omabib"));
@@ -198,6 +218,8 @@ fn codex_adapter_reads_the_recorded_turns() {
         chat_id: "chat-1",
         images: &[Path::new("/tmp/q.png").to_path_buf()],
         prompt: "What color?",
+        model: Some("gpt-5.5"),
+        effort: Some("high"),
     });
     assert_eq!(&args[..3], ["exec", "resume", "t-1"]);
     assert!(args.contains(&"sandbox_mode=\"read-only\"".to_string()));
@@ -207,6 +229,38 @@ fn codex_adapter_reads_the_recorded_turns() {
         "{server}"
     );
     assert_eq!(args[args.len() - 3..], ["/tmp/q.png", "--", "What color?"]);
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("-m gpt-5.5 -c model_reasoning_effort=\"high\""),
+        "{joined}"
+    );
+
+    let catalog = json!({"models":[
+        {"slug":"gpt-hidden","display_name":"Hidden","visibility":"hide","priority":0},
+        {"slug":"gpt-b","display_name":"GPT-B","visibility":"list","priority":5,"supported_reasoning_levels":[{"effort":"low"}],"default_reasoning_level":"low"},
+        {"slug":"gpt-a","display_name":"GPT-A","visibility":"list","priority":1,"supported_reasoning_levels":[{"effort":"medium"},{"effort":"high"}],"default_reasoning_level":"medium"}
+    ]});
+    let models = codex::models(&catalog);
+    assert_eq!(
+        models
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["gpt-a", "gpt-b"]
+    );
+    assert_eq!(models[0]["label"], "GPT-A");
+    assert_eq!(models[0]["efforts"], json!(["medium", "high"]));
+    assert_eq!(models[0]["default_effort"], "medium");
+    assert_eq!(
+        codex::configured_default(
+            "# settings\nmodel = \"gpt-a\" # mine\nmodel_reasoning_effort = \"high\"\n\n[profiles.fast]\nmodel = \"gpt-b\"\n"
+        ),
+        (Some("gpt-a".into()), Some("high".into()))
+    );
+    assert_eq!(
+        codex::configured_default("[mcp]\nmodel = \"x\""),
+        (None, None)
+    );
 }
 
 #[test]
@@ -360,6 +414,10 @@ done
         "fake-codex",
         &format!(
             r#"#!/bin/sh
+if [ "$1" = debug ]; then
+  printf '%s\n' '{{"models":[{{"slug":"gpt-listed","display_name":"GPT Listed","visibility":"list","priority":2}},{{"slug":"gpt-internal","visibility":"hide"}}]}}'
+  exit 0
+fi
 echo "CODEX $*" >> {log}
 for last; do :; done
 printf '%s\n' '{{"type":"thread.started","thread_id":"thread-fixture"}}'
@@ -379,7 +437,15 @@ esac
         std::env::set_var("OMABIB_CODEX_BIN", &codex_bin);
         std::env::set_var("OMABIB_BIN", "/usr/bin/omabib-fixture");
         std::env::set_var("OMABIB_CHAT_APPROVAL_TIMEOUT_MS", "300");
+        std::env::set_var("CODEX_HOME", dir.path());
+        std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     }
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "model = \"gpt-listed\"\nmodel_reasoning_effort = \"low\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("settings.json"), r#"{"model":"sonnet"}"#).unwrap();
 
     let lib = Arc::new(Library::open(dir.path().join("library.db")).unwrap());
     let rid = lib
@@ -601,9 +667,90 @@ esac
             .is_none()
     );
 
+    // Models: each agent's list and default; a new choice applies from the next
+    // message, relaunching Claude Code on the same session.
+    let claude_models = lib.call("chat_models", &json!({"agent":"claude"})).unwrap();
+    assert!(
+        claude_models["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "opus")
+    );
+    assert_eq!(claude_models["default"]["model"], "sonnet");
+    let codex_models = lib.call("chat_models", &json!({"agent":"codex"})).unwrap();
+    assert_eq!(
+        codex_models["models"],
+        json!([{"id":"gpt-listed","label":"GPT Listed","efforts":[],"default_effort":null}])
+    );
+    assert_eq!(
+        codex_models["default"],
+        json!({"model":"gpt-listed","effort":"low"})
+    );
+    assert!(
+        lib.call(
+            "chat_set_model",
+            &json!({"chat_id":id,"model":"opus","effort":"loud"})
+        )
+        .is_err()
+    );
+    assert!(
+        lib.call(
+            "chat_set_model",
+            &json!({"chat_id":id,"model":"--dangerous","effort":null})
+        )
+        .is_err()
+    );
+    lib.call(
+        "chat_set_model",
+        &json!({"chat_id":id,"model":"opus","effort":"high"}),
+    )
+    .unwrap();
+    lib.call("chat_send", &json!({"chat_id":id,"text":"With Opus"}))
+        .unwrap();
+    wait_for(&events, "turn with the new model", |e| {
+        turn_ends(e, &id) == 4
+    });
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let starts: Vec<&str> = logged.lines().filter(|l| l.starts_with("START ")).collect();
+    assert_eq!(starts.len(), 2, "{logged}");
+    assert!(
+        starts[1].contains("--resume ") && !starts[1].contains("--session-id"),
+        "{}",
+        starts[1]
+    );
+    assert!(
+        starts[1].ends_with("--model opus --effort high"),
+        "{}",
+        starts[1]
+    );
+    assert!(
+        !kinds(&lib, &id).contains(&"error".to_string()),
+        "the relaunch is not reported as a crash"
+    );
+    let got = lib.call("chat_get", &json!({"chat_id":id})).unwrap();
+    assert_eq!(
+        (&got["chat"]["model"], &got["chat"]["effort"]),
+        (&json!("opus"), &json!("high"))
+    );
+    let resume = lib
+        .call("chat_resume_command", &json!({"chat_id":id}))
+        .unwrap();
+    assert!(
+        resume["argv"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|w| w[0] == "--model" && w[1] == "opus"),
+        "{resume}"
+    );
+
     // Codex: a process per turn; the thread is resumed and instructions sent once.
     let cchat = lib
-        .call("chat_start", &json!({"ref_id":rid,"agent":"codex"}))
+        .call(
+            "chat_start",
+            &json!({"ref_id":rid,"agent":"codex","model":"gpt-listed","effort":"low"}),
+        )
         .unwrap()["chat"]["id"]
         .clone();
     lib.call("chat_send", &json!({"chat_id":cchat,"text":"Hi Codex"}))
@@ -620,7 +767,7 @@ esac
     );
     assert!(
         logged.contains("CODEX exec resume thread-fixture --json")
-            && logged.contains("-- Follow up"),
+            && logged.contains("-m gpt-listed -c model_reasoning_effort=\"low\" -- Follow up"),
         "{logged}"
     );
     assert_eq!(
@@ -657,4 +804,28 @@ esac
         "expected_notes":preview["note_count"],"expected_attachments":preview["attachment_count"],"idempotency_key":"delete-chat-ref"})).unwrap();
     assert!(lib.call("chat_get", &json!({"chat_id":id})).is_err());
     assert!(!folder.exists());
+}
+
+#[test]
+fn older_libraries_gain_the_chat_model_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    drop(Library::open(&path).unwrap());
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch("ALTER TABLE chats DROP COLUMN model; ALTER TABLE chats DROP COLUMN effort;")
+        .unwrap();
+    drop(c);
+    let lib = Library::open(&path).unwrap();
+    let rid = lib
+        .call("import_bibtex", &json!({"bibtex":"@article{m,title={M}}"}))
+        .unwrap()["items"][0]["id"]
+        .clone();
+    let chat = lib
+        .call(
+            "chat_start",
+            &json!({"ref_id":rid,"agent":"codex","model":"gpt-5.5"}),
+        )
+        .unwrap();
+    assert_eq!(chat["chat"]["model"], "gpt-5.5");
+    assert_eq!(chat["chat"]["effort"], Value::Null);
 }
