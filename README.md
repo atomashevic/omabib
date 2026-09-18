@@ -16,6 +16,20 @@ Free and open source. Search your library, read papers, capture ideas, and put y
 
 [Install](#install) · [First run](#first-run) · [AI setup](#optional-ai-setup) · [Sync](#sync) · [Update](#update) · [Troubleshooting](#troubleshooting)
 
+## See it in action
+
+### Demo 1
+
+[![Omabib demo 1](docs/demos/demo-1.gif)](docs/demos/demo-1.mp4)
+
+[Watch the full video](docs/demos/demo-1.mp4)
+
+### Demo 2
+
+[![Omabib demo 2](docs/demos/demo-2.gif)](docs/demos/demo-2.mp4)
+
+[Watch the full video](docs/demos/demo-2.mp4)
+
 ## Install
 
 For **Omarchy on Linux x86-64**:
