@@ -2,6 +2,8 @@
 
 A fast native Omarchy alternative to Zotero with first-class agent support.
 
+[![Sponsor Omabib](https://img.shields.io/badge/Sponsor-Omabib-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/atomashevic)
+
 Free and open source. Search your library, read papers, capture ideas, and put your own agent to work with the references and notes you choose.
 
 ## Why Omabib?
