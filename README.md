@@ -19,9 +19,10 @@ Free and open source. Search your library, read papers, capture ideas, and put y
 ## Requirements
 
 - **Omarchy with its Quickshell plugin system** and systemd user services. Other desktop shells are not currently supported by the installer.
-- **Rust and Cargo** with a toolchain compatible with the locked dependencies (Typst requires Rust 1.92 or newer).
-- **Git, a C/C++ build toolchain, clang, and make.** MuPDF is compiled from source for the built-in PDF reader; SQLite is bundled.
-- An internet connection for the initial build and online metadata/PDF retrieval.
+- **Linux x86-64** for the prebuilt archive, with the standard Omarchy runtime libraries (including glibc and fontconfig), Bash, and Python 3.
+- An internet connection to download the release and retrieve online metadata/PDFs.
+
+Prebuilt installation does not require Rust, Cargo, clang, or make. Other architectures require a [source build](#build-from-source).
 
 AI features additionally require a supported agent installed and signed in: Codex CLI or Claude Code for in-app and terminal chat, or ChatGPT Desktop in Codex mode or Claude Desktop for desktop chat. You can use the bibliography and PDF reader without an AI agent.
 
@@ -29,27 +30,27 @@ AI features additionally require a supported agent installed and signed in: Code
 
 Run these commands from a terminal in your Omarchy desktop session.
 
-### 1. Install build dependencies
+### 1. Download and verify a release
 
-On Omarchy (Arch Linux):
+Open [GitHub Releases](https://github.com/atomashevic/omabib/releases) and download `omabib-VERSION-linux-x86_64.tar.gz` and `SHA256SUMS` from the same release. Choose the binary archive, rather than GitHub's automatic source downloads. Prebuilt assets become available when a version tag runs the release workflow.
+
+In the download directory, set `version` to the release number without its `v` prefix:
 
 ```bash
-sudo pacman -S --needed base-devel clang git rust
-rustc --version
-cargo --version
+version=0.1.0  # replace with the version you downloaded
+archive="omabib-${version}-linux-x86_64.tar.gz"
+grep "  ${archive}\$" SHA256SUMS | sha256sum --check --strict -
 ```
 
-If you already manage Rust with rustup, keep that installation and omit `rust` from the package command. Ensure its active toolchain meets the requirement above.
-
-### 2. Clone and install
+Continue only if verification prints `OK`. Extract and install:
 
 ```bash
-git clone https://github.com/atomashevic/omabib.git
-cd omabib
+tar -xzf "$archive"
+cd "omabib-${version}-linux-x86_64"
 ./scripts/install.sh
 ```
 
-Run the installer as your normal user. It builds with `cargo build --release --locked`; the first build can take several minutes. It installs:
+Run the installer as your normal user inside an active Omarchy desktop session. It checks that the binary runs and the package is complete before installing. It performs no compilation. It installs:
 
 | Component | Default location |
 |---|---|
@@ -57,10 +58,11 @@ Run the installer as your normal user. It builds with `cargo build --release --l
 | Quickshell plugin | `~/.config/omarchy/plugins/omabib/` |
 | User service | `~/.config/systemd/user/omabib.service` |
 | Omabib skill for Codex | `~/.codex/skills/omabib/` |
+| License texts and dependency notices | `~/.local/share/omabib/licenses/` |
 
 The installer enables and restarts the user service, reloads plugins, and enables Omabib. It leaves keyboard shortcut configuration to you.
 
-### 3. Verify and open
+### 2. Verify and open
 
 ```bash
 systemctl --user is-active omabib.service
@@ -70,6 +72,21 @@ omabib open
 ```
 
 The service should report `active`, and `omabib status` should return your library status. If `omabib` is not found, ensure `~/.local/bin` is on your shell's `PATH`; you can also run `~/.local/bin/omabib` directly.
+
+## Build from source
+
+For development, other architectures, or when no prebuilt release is available, install Rust/Cargo (Typst requires Rust 1.92 or newer), Git, clang, and a C/C++ build toolchain. On Omarchy:
+
+```bash
+sudo pacman -S --needed base-devel clang git rust
+
+git clone https://github.com/atomashevic/omabib.git
+cd omabib
+./scripts/build.sh
+./scripts/install.sh
+```
+
+If you manage Rust with rustup, omit `rust` from the package command and use a compatible toolchain. The build uses locked dependencies and compiles MuPDF from source; the first build can take several minutes. The installer uses `target/release/omabib` (or `$CARGO_TARGET_DIR/release/omabib`), and also accepts an explicit binary path: `./scripts/install.sh /path/to/omabib`.
 
 ## First run
 
@@ -115,20 +132,22 @@ For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then resta
 
 ## Update
 
-From your Omabib checkout, review any local changes before updating:
+For prebuilt installations, download the new release archive and its checksums, verify it, and run its `scripts/install.sh` as above. The installer replaces the application files and restarts the service while retaining your library and settings. Close any open Omabib editor first. See [Backup, restore and removal](#backup-restore-and-removal) to back up your library before updating.
+
+For source installations, preserve local changes, then update and rebuild:
 
 ```bash
 git status --short
 git pull --ff-only
+./scripts/build.sh
 ./scripts/install.sh
 omabib status
 ```
 
-Commit or otherwise preserve local changes before pulling. The installer updates the application and restarts its service. See [Backup, restore and removal](#backup-restore-and-removal) to back up your library before an update.
-
 ## Troubleshooting
 
-- **Build fails:** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
+- **Prebuilt binary will not start:** confirm the machine is Linux x86-64 (`uname -sm`) and inspect the error printed by `bin/omabib --version`. The binaries use glibc and system font libraries; they are not static or intended for musl-based distributions.
+- **Build fails (source installations):** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
 - **Service is unavailable:** inspect `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`. After resolving the reported issue, run `systemctl --user restart omabib.service` and `omabib status`.
 - **Installer reports that omarchy-shell is not responding:** run it from an active Omarchy desktop session. Restore the shell, then rerun `./scripts/install.sh` to complete installation.
 - **The UI still shows an older version:** close any open Omabib editor, unlock the desktop if needed, then run `omarchy restart shell`.
@@ -299,6 +318,18 @@ codex mcp remove omabib
 ```
 
 Then remove only the Omabib binary, user service, plugin directory, skill, and its named shortcut if desired. The data directory remains independent of the plugin.
+
+## Publishing a release
+
+The [release workflow](.github/workflows/release.yml) builds on Ubuntu 24.04 x86-64, runs the Rust tests, packages and checks the installation, then publishes assets when a `v*` tag is pushed. The tag must match the versions in both `Cargo.toml` and `plugin/manifest.json`; update `Cargo.lock` alongside a package version change. Commit all code needed by the release before tagging.
+
+Each release includes:
+
+- `omabib-VERSION-linux-x86_64.tar.gz`: binary, QML plugin, helpers, user service, agent skill, and license texts.
+- `omabib-VERSION-source.tar.gz`: the tagged source with vendored Cargo dependencies, including native dependency sources. With the build toolchain installed, it can be built using `./scripts/build.sh --offline`.
+- `SHA256SUMS`: SHA-256 checksums for both archives.
+
+A manual workflow run builds and retains test artifacts without publishing. To package an existing local build, run `python3 scripts/package-release.py --version vVERSION`; add `--source` from a clean checkout to include vendored source. Packaging needs Cargo, Python 3.12 or newer, and network access for uncached dependencies. The release install test uses a temporary home and stubs desktop activation commands; a new release should also be checked in a real Omarchy session.
 
 ## Verification commands
 
