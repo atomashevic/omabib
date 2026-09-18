@@ -24,11 +24,13 @@ For **Omarchy on Linux x86-64**:
 omarchy plugin add https://github.com/atomashevic/omabib.git --enable
 ```
 
-Click the **Omabib** icon in your bar, then choose **Install Omabib**. It downloads the app and opens your library. Bring your papers; no compiler needed.
+Click the **Omabib** icon in your bar, then choose **Install Omabib**. It downloads the app and opens your library.
 
 ## First run
 
-The library starts empty. Open **Add** in the left rail, paste a DOI, arXiv ID, paper URL, or BibTeX entry, review the preview, and choose **Import**. To import an existing bibliography:
+The library starts empty. Open **Add** in the left rail, paste a DOI, arXiv ID, paper URL, or BibTeX entry, review the preview, and choose **Import**. 
+
+To import an existing bibliography:
 
 ```bash
 omabib import /absolute/path/to/references.bib
