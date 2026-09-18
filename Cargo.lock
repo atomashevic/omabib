@@ -2415,6 +2415,7 @@ dependencies = [
  "base64 0.22.1",
  "biblatex",
  "clap",
+ "flate2",
  "libc",
  "mitex",
  "mupdf",

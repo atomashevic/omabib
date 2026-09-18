@@ -33,14 +33,14 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "pull_pdf",
-            "Retrieve a PDF: supply attachment_id to restore an archived Git LFS file, or ref_id plus an explicit HTTPS url to download and attach a PDF. Returns paths, not PDF text.",
+            "Retrieve a PDF: supply attachment_id to download it from the sync storage, or ref_id plus an explicit HTTPS url to download and attach a PDF. Returns paths, not PDF text.",
             json!({"attachment_id":string,"ref_id":string,"url":string,"idempotency_key":string}),
             vec![],
             true,
         ),
         tool(
             "remove_pdf",
-            "Remove an attachment link by attachment_id. Keeps the local file and its Git/LFS history. Repeating removal is safe.",
+            "Remove an attachment link by attachment_id. Keeps the local file. Repeating removal is safe.",
             json!({"attachment_id":string,"idempotency_key":string}),
             vec!["attachment_id"],
             true,
@@ -61,7 +61,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "get_pdf",
-            "Return a locally readable path to a reference's PDF: an existing attachment, one restored from the history archive, or (unless download:false) a freshly downloaded open-access copy, which is attached in the process. Returns a path, not PDF text.",
+            "Return a locally readable path to a reference's PDF: an existing attachment, one downloaded from the sync storage, or (unless download:false) a freshly downloaded open-access copy, which is attached in the process. Returns a path, not PDF text.",
             json!({"ref_id":string,"download":boolean}),
             vec!["ref_id"],
             true,
@@ -103,7 +103,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "delete_reference",
-            "Permanently remove a reviewed reference and its notes, visual clips, project links, attachment links and cached overview. Local PDF files and Git history are kept. Requires an exact citation-key confirmation, current revision/counts from delete_reference_preview, and an idempotency key. Only call when deletion is explicitly authorized.",
+            "Permanently remove a reviewed reference and its notes, visual clips, project links, attachment links and cached overview. Local PDF files are kept. Requires an exact citation-key confirmation, current revision/counts from delete_reference_preview, and an idempotency key. Only call when deletion is explicitly authorized.",
             json!({"id":string,"expected_revision":{"type":"integer","minimum":1},"confirm_citekey":string,"expected_notes":integer,"expected_attachments":integer,"idempotency_key":string}),
             vec![
                 "id",

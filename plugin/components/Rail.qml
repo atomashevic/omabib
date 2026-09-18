@@ -8,9 +8,9 @@ Rectangle {
     required property var theme
     required property var app
 
-    readonly property var sync: app.repoStatus || ({})
-    readonly property bool syncIssue: !!sync.last_error
-    readonly property bool syncPending: !!(sync.pending && sync.pending.any) || (sync.ahead || 0) > 0
+    readonly property var sync: app.syncStatus || ({})
+    readonly property bool syncIssue: ["offline", "auth", "full", "error"].indexOf(sync.state) >= 0
+    readonly property bool syncPending: !sync.configured || (sync.pending || 0) > 0 || (sync.conflicts || 0) > 0
 
     implicitWidth: theme.space(48)
     color: theme.app
@@ -76,17 +76,19 @@ Rectangle {
             onClicked: root.app.edit("quick")
         }
         RailButton {
-            icon: root.syncIssue ? "syncAlert" : "sync"
+            objectName: "railSync"
+            icon: root.sync.state === "offline" ? "cloudOff" : root.syncIssue ? "syncAlert" : "sync"
             tooltip: root.app.syncChipText()
-            busy: root.app.syncBusy
+            busy: root.app.syncWorking || root.sync.state === "syncing"
             dot: root.syncIssue || root.syncPending
             dotColor: root.syncIssue ? root.theme.urgent : root.theme.accentText
             iconColor: root.syncIssue ? root.theme.urgent : root.theme.muted
-            onClicked: root.app.syncHistory()
+            onClicked: root.app.syncButton()
         }
         RailButton {
-            icon: "branch"; tooltip: "History repository"
-            onClicked: root.app.openRepoSettings()
+            objectName: "railSyncSettings"
+            icon: "cloudSync"; tooltip: "Sync settings"
+            onClicked: root.app.openSync()
         }
         RailButton {
             icon: "command"; tooltip: "Actions"; shortcut: "Ctrl+K"

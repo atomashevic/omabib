@@ -88,6 +88,7 @@ pub fn serve(db: PathBuf) -> Result<()> {
         "Another Omabib service is running"
     );
     let lib = Arc::new(Library::open_with_vocabulary(db, false)?);
+    crate::sync::Sync::start(&lib);
     if path.exists() {
         std::fs::remove_file(&path)?;
     }

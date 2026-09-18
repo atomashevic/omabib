@@ -43,9 +43,9 @@ def main():
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
         parser.error('version must be a semantic version, optionally prefixed with v')
     cargo_version = tomllib.loads((ROOT / 'Cargo.toml').read_text())['package']['version']
-    plugin_version = json.loads((ROOT / 'plugin/manifest.json').read_text())['version']
+    plugin_version = json.loads((ROOT / 'manifest.json').read_text())['version']
     if version != cargo_version or version != plugin_version:
-        parser.error('release tag, Cargo.toml, and plugin/manifest.json versions must match')
+        parser.error('release tag, Cargo.toml, and manifest.json versions must match')
     binary = args.binary.resolve()
     header = binary.read_bytes()[:20]
     if header[:6] != b'\x7fELF\x02\x01' or header[18:20] != b'\x3e\x00':
@@ -63,7 +63,7 @@ def main():
         stage = Path(temporary) / name
         copy(binary, stage / 'bin/omabib')
         for file in ('README.md', 'LICENSE', 'API.md', 'packaging/omabib.service',
-                     'scripts/install.sh', 'skills/omabib/SKILL.md'):
+                     'scripts/install.sh', 'scripts/omabib-plugin', 'manifest.json', 'skills/omabib/SKILL.md'):
             copy(ROOT / file, stage / file)
         for helper in HELPERS:
             copy(ROOT / 'scripts' / helper, stage / 'scripts' / helper)

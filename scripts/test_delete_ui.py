@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='omabib-delete-ui-') as dirname:
         keep = call('add_note', dict(ref_id=rid, project_id=project, body='Keep this fixture note', provenance='test'))
         pdf = root / 'fixture.pdf'; pdf.write_bytes(b'%PDF-1.4\n')
         call('attach', dict(ref_id=rid, path=str(pdf), file_type='pdf'))
-        command('omarchy-shell', 'shell', 'summon', 'omabib', json.dumps(dict(socket_path=str(sock), query='delete_ui_fixture', project_id=project, ref_id=rid)))
+        command('omarchy-shell', 'shell', 'summon', 'io.github.atomashevic.omabib', json.dumps(dict(socket_path=str(sock), query='delete_ui_fixture', project_id=project, ref_id=rid)))
         wait(lambda: state()['expanded'] and state()['selected'] == rid)
 
         command('omarchy-shell', 'omabib', 'openDelete')
@@ -110,17 +110,17 @@ with tempfile.TemporaryDirectory(prefix='omabib-delete-ui-') as dirname:
         print('PASS: reference deleted, search cleared, PDF file preserved', flush=True)
     finally:
         try:
-            command('omarchy-shell', 'shell', 'hide', 'omabib')
+            command('omarchy-shell', 'shell', 'hide', 'io.github.atomashevic.omabib')
             payload = dict(socket_path=REAL_SOCKET, query=initial['query'], project_id=initial['project_id'])
             if initial.get('expanded') and initial.get('selected'):
                 payload['ref_id'] = initial['selected']
-            command('omarchy-shell', 'shell', 'summon', 'omabib', json.dumps(payload))
+            command('omarchy-shell', 'shell', 'summon', 'io.github.atomashevic.omabib', json.dumps(payload))
             wait(lambda: not state()['search_pending'] and not state()['error'] and 'delete_ui_fixture' not in state()['results'])
             if initial.get('overview_visible') and initial.get('selected'):
                 command('omarchy-shell', 'omabib', 'loadOverview')
                 wait(lambda: state()['overview_visible'])
             if not initial['opened']:
-                command('omarchy-shell', 'shell', 'hide', 'omabib')
+                command('omarchy-shell', 'shell', 'hide', 'io.github.atomashevic.omabib')
         finally:
             service.terminate(); service.wait(timeout=5)
             if original_window:

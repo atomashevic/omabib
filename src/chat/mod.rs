@@ -292,10 +292,15 @@ impl Chats {
         let line =
             json!({"v":1,"event":"chat","chat_id":chat_id,"seq":seq,"kind":kind,"data":data})
                 .to_string();
+        self.publish(&line);
+    }
+
+    /// Sends one event line to every subscribed window (chat and library events).
+    pub fn publish(&self, line: &str) {
         self.subscribers
             .lock()
             .unwrap()
-            .retain(|(_, send)| send(&line));
+            .retain(|(_, send)| send(line));
     }
 
     fn record(&self, chat_id: &str, kind: &str, data: Value) -> Result<i64> {

@@ -14,7 +14,6 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub struct Library {
     pub path: PathBuf,
     pub(crate) writer: Mutex<Connection>,
-    pub history_lock: Mutex<()>,
     readers: Mutex<Vec<Connection>>,
     pub spell_ready: std::sync::atomic::AtomicBool,
     pub spell: RwLock<SymSpell<UnicodeStringStrategy>>,
@@ -22,6 +21,8 @@ pub struct Library {
     pub pdf: crate::pdf::Pdf,
     /// Claude Code and Codex chats about a reference.
     pub chats: std::sync::Arc<crate::chat::Chats>,
+    /// Two-way sync through a folder or a cloud account.
+    pub sync: std::sync::Arc<crate::sync::Sync>,
 }
 pub struct ReadLease<'a> {
     connection: Option<Connection>,
@@ -272,13 +273,14 @@ impl Library {
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
         crate::chat::migrate(&c)?;
+        crate::sync::migrate(&c)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let chats = crate::chat::Chats::new(&path);
+        let sync = crate::sync::Sync::new(&path, chats.clone());
         let lib = Self {
             path,
             writer: Mutex::new(c),
-            history_lock: Mutex::new(()),
             readers: Mutex::new(Vec::new()),
             spell_ready: std::sync::atomic::AtomicBool::new(false),
             spell: RwLock::new(
@@ -289,6 +291,7 @@ impl Library {
             ),
             pdf: crate::pdf::Pdf::new(crate::pdf::cache_dir()),
             chats,
+            sync,
         };
         if eager {
             lib.load_vocabulary()?;
@@ -341,12 +344,6 @@ impl Library {
             "lookup_metadata" => crate::metadata::lookup(self, a),
             "supplement_metadata" => crate::metadata::supplement(self, a),
             "open_target" => crate::metadata::open_target(self, a),
-            "get_repo_config" => crate::history::config(self),
-            "set_repo_config" => crate::history::save_config(self, a),
-            "sync_repo" => crate::history::sync(self, a),
-            "repo_check" => crate::history::check(a),
-            "repo_setup" => crate::history::setup(self, a),
-            "repo_status" => crate::history::status(self, a),
             "add_pdf" => crate::attachments::add(self, a),
             "pull_pdf" => crate::attachments::pull(self, a),
             "get_note_image" => crate::visual::get(&read_connection(&self.path)?, a),
@@ -363,6 +360,24 @@ impl Library {
             "chat_delete" => self.chats.delete(a),
             "chat_resume_command" => self.chats.resume_command(a),
             "chat_permission_request" => self.chats.request_approval(a),
+            "sync_status" => self.sync.status_json(),
+            "sync_nudge" => {
+                self.sync.nudge();
+                self.sync.status_json()
+            }
+            "sync_providers" => Ok(crate::sync::providers()),
+            "sync_connect" => self.sync.connect(self, a),
+            "sync_connect_cancel" => self.sync.connect_cancel(),
+            "sync_inspect" => self.sync.inspect(self),
+            "sync_start" => self.sync.begin(self, a),
+            "sync_now" => {
+                let s = self.sync.run(self)?;
+                Ok(json!({"already_running":s.already_running,"sent":s.sent,"received":s.received,"from":s.from,"refs":s.refs,"notes":s.notes,"conflicts":s.conflicts}))
+            }
+            "sync_conflicts" => self.sync.conflicts(self),
+            "sync_resolve" => self.sync.resolve(self, a),
+            "sync_download_all" => self.sync.download_all(self),
+            "sync_disconnect" => self.sync.disconnect(self),
             "pdf_open" => crate::pdf::open(self, a),
             "pdf_render" => crate::pdf::render(self, a),
             "pdf_text" => crate::pdf::text(self, a),
@@ -861,7 +876,7 @@ fn attach_within(
     )?;
     Ok(json!({"id":actual_id,"ref_id":ref_id,"path":path,"exists":path.is_file()}))
 }
-fn insert_doc(c: &Connection, rid: &str) -> Result<()> {
+pub(crate) fn insert_doc(c: &Connection, rid: &str) -> Result<()> {
     let (key, title, authors, ab, fields): (String, String, String, String, String) = c.query_row(
         "SELECT citekey,title,authors,abstract,fields FROM refs WHERE id=?",
         [rid],
@@ -1129,14 +1144,24 @@ fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
             params![rid, p],
         )?;
     }
-    c.execute("DELETE FROM docs WHERE note_id=?", [&nid])?;
+    index_note(c, &nid)?;
+    Ok(n)
+}
+/// Replaces a note's search document; its labels are indexed as stored JSON.
+pub(crate) fn index_note(c: &Connection, nid: &str) -> Result<()> {
+    c.execute("DELETE FROM docs WHERE note_id=?", [nid])?;
+    let (rid, project, labels, body): (String, Option<String>, String, String) = c.query_row(
+        "SELECT ref_id,project_id,labels,body FROM notes WHERE id=?",
+        [nid],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
     let (key, title, authors): (String, String, String) = c.query_row(
         "SELECT citekey,title,authors FROM refs WHERE id=?",
-        [rid],
+        [&rid],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    c.execute("INSERT INTO docs(ref_id,note_id,project_id,citekey,title,authors,abstract,keywords,body) VALUES(?,?,?,?,?,?,'',?,?)",params![rid,nid,project,normalize(&key),normalize(&title),normalize(&authors),normalize(&json_field(a,"labels",json!([]))),normalize(body)])?;
-    Ok(n)
+    c.execute("INSERT INTO docs(ref_id,note_id,project_id,citekey,title,authors,abstract,keywords,body) VALUES(?,?,?,?,?,?,'',?,?)",params![rid,nid,project,normalize(&key),normalize(&title),normalize(&authors),normalize(&labels),normalize(&body)])?;
+    Ok(())
 }
 pub fn note(c: &Connection, nid: &str) -> Result<Value> {
     let mut result: Value = c.query_row("SELECT id,ref_id,project_id,body,labels,evidence,provenance,revision,created_at,updated_at FROM notes WHERE id=?",[nid],|r|Ok(json!({"id":r.get::<_,String>(0)?,"ref_id":r.get::<_,String>(1)?,"project_id":r.get::<_,Option<String>>(2)?,"body":r.get::<_,String>(3)?,"labels":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!([])),"evidence":r.get::<_,Option<String>>(5)?,"provenance":r.get::<_,String>(6)?,"revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?,"updated_at":r.get::<_,String>(9)?})))?;

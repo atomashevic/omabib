@@ -38,7 +38,7 @@ jobs:
           import json, os, tomllib
           from pathlib import Path
           version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
-          assert json.loads(Path('plugin/manifest.json').read_text())['version'] == version
+          assert json.loads(Path('manifest.json').read_text())['version'] == version
           if os.environ['REF_TYPE'] == 'tag':
               assert os.environ['RELEASE_REF'] == f'v{version}', 'Tag must match package version'
           with open(os.environ['GITHUB_ENV'], 'a') as output:
@@ -52,7 +52,9 @@ jobs:
       - name: Package binary, licenses, and vendored source
         run: python3 scripts/package-release.py --version "$RELEASE_TAG" --source
       - name: Verify archive installation without build tools
-        run: python3 scripts/test_release_install.py target/dist/omabib-*-linux-x86_64.tar.gz
+        run: |
+          python3 scripts/test_release_install.py target/dist/omabib-*-linux-x86_64.tar.gz
+          python3 scripts/test_plugin_backend.py target/dist/omabib-*-linux-x86_64.tar.gz
       - name: Verify vendored source resolves offline
         run: |
           source_test_dir=$(mktemp -d)

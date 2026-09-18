@@ -28,7 +28,7 @@ fn deleting_a_reference_removes_its_library_data_but_keeps_pdf_files() {
     let note = lib.call("add_note", &json!({"ref_id":rid,"project_id":project,"body":"A note to remove","provenance":"test"})).unwrap();
     lib.call("update_note", &json!({"id":note["id"],"project_id":project,"expected_revision":1,"body":"Revised note","provenance":"test"})).unwrap();
     let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute("INSERT INTO note_images VALUES(?1,'image/png',1,1,'hash',?2,1,'{}',X'00')",rusqlite::params![note["id"].as_str().unwrap(),pdf.to_str().unwrap()]).unwrap();
+    c.execute("INSERT INTO note_images(note_id,mime_type,width,height,sha256,source_pdf,page,rectangle,data) VALUES(?1,'image/png',1,1,'hash',?2,1,'{}',X'00')",rusqlite::params![note["id"].as_str().unwrap(),pdf.to_str().unwrap()]).unwrap();
     c.execute("INSERT INTO external_summaries(ref_id,source,external_id,source_url,body) VALUES(?1,'alphaXiv','2609.00001','https://www.alphaxiv.org/overview/2609.00001.md','# Report')",[rid]).unwrap();
     drop(c);
     let preview = lib.call("delete_reference_preview", &json!({"id":"DeleteMe"})).unwrap();
@@ -72,7 +72,7 @@ fn deleting_one_note_keeps_its_reference_and_other_notes() {
     lib.call("update_note", &json!({"id":note["id"],"project_id":null,"expected_revision":1,"body":"Revised specific assessment","provenance":"test"})).unwrap();
     let db = dir.path().join("library.db");
     let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute("INSERT INTO note_images VALUES(?1,'image/png',1,1,'hash','/tmp/paper.pdf',1,'{}',X'00')",[note["id"].as_str().unwrap()]).unwrap();
+    c.execute("INSERT INTO note_images(note_id,mime_type,width,height,sha256,source_pdf,page,rectangle,data) VALUES(?1,'image/png',1,1,'hash','/tmp/paper.pdf',1,'{}',X'00')",[note["id"].as_str().unwrap()]).unwrap();
     drop(c);
     let preview = lib.call("delete_note_preview", &json!({"id":note["id"]})).unwrap();
     assert_eq!(preview["ref_id"], rid);

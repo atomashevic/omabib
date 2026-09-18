@@ -65,18 +65,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Save a history snapshot and push it (use --local for a local commit only).
+    /// Sync the library with your other computers now, or set sync up.
     Sync {
-        #[arg(long)]
-        local: bool,
+        #[command(subcommand)]
+        command: Option<SyncCommand>,
         /// Print the raw JSON result instead of a summary.
         #[arg(long)]
         json: bool,
-    },
-    /// Inspect or configure the history repository.
-    Repo {
-        #[command(subcommand)]
-        command: RepoCommand,
     },
     /// Add, retrieve, or unlink PDF attachments.
     Pdf {
@@ -101,47 +96,17 @@ enum Command {
     Schema { tools: Vec<String> },
 }
 #[derive(Subcommand)]
-enum RepoCommand {
-    /// Show the currently configured storage repository.
-    Show,
-    /// Point at an existing, already-LFS-enabled checkout directly. Prefer
-    /// `repo use`, which also checks and can fix prerequisites.
-    Set {
-        path: PathBuf,
-        remote: String,
-        #[arg(long, default_value = "main")]
-        branch: String,
-    },
-    /// Report prerequisites for a candidate storage repository path: tools
-    /// installed, gh login, and (with a path) its Git/LFS state.
-    Check { path: Option<PathBuf> },
-    /// Create a new private GitHub repository and configure it for history.
-    Init {
-        name: String,
-        #[arg(long)]
-        path: Option<PathBuf>,
-        #[arg(long, default_value = "main")]
-        branch: String,
-    },
-    /// Adopt an existing local checkout, configuring Git LFS if it isn't
-    /// already tracking PDFs (pass --fix-lfs to do so automatically).
-    Use {
-        path: PathBuf,
-        #[arg(long)]
-        remote: Option<String>,
-        #[arg(long, default_value = "main")]
-        branch: String,
-        #[arg(long)]
-        fix_lfs: bool,
-    },
-    /// Show sync status: HEAD, ahead/behind, pending changes, last result.
-    Status {
-        /// Fetch from the remote first, to also check what's behind.
-        #[arg(long)]
-        fetch: bool,
-        #[arg(long)]
-        json: bool,
-    },
+enum SyncCommand {
+    /// Show where the library syncs and how it went.
+    Status,
+    /// Connect a place to sync: drive, dropbox or onedrive (browser sign-in),
+    /// `folder PATH`, or `rclone REMOTE` from Omabib's own rclone config.
+    Connect { provider: String, target: Option<String> },
+    /// Start syncing: `new` uploads this library; `join`, `merge` or `replace`
+    /// use the library already there.
+    Start { mode: String },
+    /// Stop syncing this computer; its library stays as it is.
+    Disconnect,
 }
 #[derive(Subcommand)]
 enum PdfCommand {
@@ -219,91 +184,31 @@ fn main() {
         std::process::exit(1);
     }
 }
-fn print_sync_result(r: &Value) {
-    let refs = r["references"].as_i64().unwrap_or(0);
-    let notes = r["notes"].as_i64().unwrap_or(0);
-    let pdfs = r["archived_pdfs"].as_i64().unwrap_or(0);
-    if r.get("ok") == Some(&json!(false)) {
-        eprintln!("Sync: exported and committed locally, but the push failed.");
-        if let Some(commit) = r["commit"].as_str() {
-            eprintln!("  Local commit: {commit}");
-        }
-        if let Some(err) = r["push_error"].as_str() {
-            eprintln!("  {err}");
-        }
-        return;
-    }
-    let committed = r["committed"].as_bool().unwrap_or(r["commit"] != json!("unchanged"));
-    let pushed = r["pushed"].as_bool().unwrap_or(false);
-    eprintln!(
-        "Sync: {refs} references, {notes} notes, {pdfs} archived PDFs.{}{}",
-        if committed {
-            " Committed."
-        } else {
-            " No changes to commit."
-        },
-        if pushed {
-            format!(
-                " Pushed {} commit(s).",
-                r["commits_pushed"].as_i64().unwrap_or(0)
-            )
-        } else {
-            String::new()
-        },
-    );
-    if let Some(missing) = r["missing_pdf_ids"].as_array()
-        && !missing.is_empty()
-    {
-        eprintln!("  {} attachment(s) have no local file to archive.", missing.len());
-    }
-}
-fn print_repo_status(r: &Value) {
-    if r.get("configured") != Some(&json!(true)) {
-        eprintln!("No storage repository configured. Run: omabib repo init NAME, or omabib repo use PATH");
-        return;
-    }
-    eprintln!(
-        "Repository: {} ({}, branch {})",
-        r["repo_path"].as_str().unwrap_or(""),
-        r["remote_url"].as_str().unwrap_or(""),
-        r["branch"].as_str().unwrap_or(""),
-    );
-    eprintln!(
-        "HEAD: {} {} ({})",
-        r["head"]["hash"].as_str().unwrap_or(""),
-        r["head"]["subject"].as_str().unwrap_or(""),
-        r["head"]["date"].as_str().unwrap_or(""),
-    );
-    let ahead = r["ahead"].as_i64().unwrap_or(0);
-    let behind = r["behind"].as_i64().unwrap_or(0);
-    eprintln!(
-        "Ahead {ahead}, behind {behind}. {}",
-        if r["dirty"] == json!(true) {
-            "Local edits present in metadata/notes."
-        } else {
-            "Clean."
-        }
-    );
-    let p = &r["pending"];
-    eprintln!(
-        "Pending since last sync: {} new reference(s), {} edited, {} new note(s), {} edited.",
-        p["new_references"], p["edited_references"], p["new_notes"], p["edited_notes"]
-    );
-    match (r["last_success"].as_str(), r["last_attempt"].as_str()) {
-        (Some(s), _) => eprintln!("Last successful sync: {s}"),
-        (None, Some(a)) => eprintln!("Last sync attempt ({a}) did not succeed."),
-        _ => eprintln!("Never synced."),
-    }
-    if let Some(err) = r["last_error"].as_object() {
+fn print_sync_status(r: &Value) {
+    if r["configured"] != json!(true) {
         eprintln!(
-            "Last error ({}): {}",
-            err.get("kind").and_then(Value::as_str).unwrap_or("unknown"),
-            err.get("message").and_then(Value::as_str).unwrap_or("")
+            "{}",
+            if r["connected"] == json!(true) {
+                "Connected, but not syncing yet. Run: omabib sync start new (or join)"
+            } else {
+                "Sync is not set up. Run: omabib sync connect dropbox|onedrive|drive|folder PATH"
+            }
         );
-        if let Some(hint) = err.get("hint").and_then(Value::as_str) {
-            eprintln!("  {hint}");
-        }
+        return;
     }
+    eprintln!(
+        "Syncing with {}: {}{}",
+        r["where"].as_str().unwrap_or(""),
+        r["state"].as_str().unwrap_or(""),
+        r["message"].as_str().filter(|m| !m.is_empty()).map(|m| format!(" ({m})")).unwrap_or_default()
+    );
+    if let Some(t) = r["last_success"].as_str() {
+        eprintln!("Last synced {t}.");
+    }
+    eprintln!(
+        "{} change(s) waiting, {} to review, {} PDF(s) only in the storage.",
+        r["pending"], r["conflicts"], r["pdfs"]["cloud_only"]
+    );
 }
 fn run() -> Result<()> {
     unsafe {
@@ -351,7 +256,7 @@ fn run() -> Result<()> {
         } => {
             if identifiers.is_empty() && pdf.is_none() {
                 let status = std::process::Command::new("omarchy-shell")
-                    .args(["shell", "summon", "omabib", r#"{"action":"add"}"#])
+                    .args(["shell", "summon", "io.github.atomashevic.omabib", r#"{"action":"add"}"#])
                     .status()?;
                 anyhow::ensure!(status.success(), "Unable to open Omabib");
                 return Ok(());
@@ -500,62 +405,61 @@ fn run() -> Result<()> {
         Command::Lookup { reference } => {
             omabib::transport::request("lookup_metadata", &json!({"id":reference}))?
         }
-        Command::Sync { local, json: as_json } => {
-            let r = omabib::transport::request("sync_repo", &json!({"push":!local}))?;
-            if !as_json {
-                print_sync_result(&r);
-                if r.get("ok") == Some(&json!(false)) {
-                    std::process::exit(1);
+        Command::Sync { command, json: as_json } => {
+            let r = match command {
+                None => omabib::transport::request_with_timeout("sync_now", &json!({}), std::time::Duration::from_secs(3600))?,
+                Some(SyncCommand::Status) => omabib::transport::request("sync_status", &json!({}))?,
+                Some(SyncCommand::Connect { provider, target }) => {
+                    let mut a = json!({"provider":provider});
+                    if provider == "folder" {
+                        a["path"] = json!(std::path::absolute(target.context("Give the folder: omabib sync connect folder PATH")?)?);
+                    } else if provider == "rclone" {
+                        a["remote"] = json!(target.context("Give the remote: omabib sync connect rclone REMOTE")?);
+                    }
+                    let mut r = omabib::transport::request("sync_connect", &a)?;
+                    // A cloud sign-in happens in the browser; wait for it here.
+                    while r["connecting"]["state"].as_str().is_some_and(|s| ["starting", "browser", "finishing"].contains(&s)) {
+                        if let Some(url) = r["connecting"]["url"].as_str() {
+                            eprintln!("Sign in here: {url}");
+                            let _ = std::process::Command::new("xdg-open").arg(url).status();
+                            while r["connecting"]["state"] == "browser" {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                r = omabib::transport::request("sync_status", &json!({}))?;
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        r = omabib::transport::request("sync_status", &json!({}))?;
+                    }
+                    if r["connecting"]["state"] == "error" {
+                        anyhow::bail!("{}", r["connecting"]["message"].as_str().unwrap_or("Connecting failed"));
+                    }
+                    r
+                }
+                Some(SyncCommand::Start { mode }) => omabib::transport::request_with_timeout(
+                    "sync_start",
+                    &json!({"mode":mode}),
+                    std::time::Duration::from_secs(3600),
+                )?,
+                Some(SyncCommand::Disconnect) => omabib::transport::request("sync_disconnect", &json!({}))?,
+            };
+            if as_json {
+                r
+            } else {
+                if r["already_running"] == true {
+                    println!("Sync is already in progress.");
+                } else if r.get("received").is_some() {
+                    eprintln!(
+                        "Synced: sent {} change(s), received {}{}.",
+                        r["sent"],
+                        r["received"],
+                        r["from"].as_array().filter(|f| !f.is_empty()).map(|f| format!(" from {}", f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))).unwrap_or_default()
+                    );
+                } else {
+                    print_sync_status(&r);
                 }
                 return Ok(());
             }
-            r
         }
-        Command::Repo { command } => match command {
-            RepoCommand::Show => omabib::transport::request("get_repo_config", &json!({}))?,
-            RepoCommand::Set {
-                path,
-                remote,
-                branch,
-            } => omabib::transport::request(
-                "set_repo_config",
-                &json!({"repo_path":path,"remote_url":remote,"branch":branch}),
-            )?,
-            RepoCommand::Check { path } => {
-                let mut a = json!({});
-                if let Some(p) = path {
-                    a["repo_path"] = json!(p);
-                }
-                omabib::transport::request("repo_check", &a)?
-            }
-            RepoCommand::Init { name, path, branch } => {
-                let mut a = json!({"mode":"create_github","name":name,"branch":branch});
-                if let Some(p) = path {
-                    a["repo_path"] = json!(p);
-                }
-                omabib::transport::request("repo_setup", &a)?
-            }
-            RepoCommand::Use {
-                path,
-                remote,
-                branch,
-                fix_lfs,
-            } => {
-                let mut a = json!({"mode":"local","repo_path":path,"branch":branch,"fix_lfs":fix_lfs});
-                if let Some(r) = remote {
-                    a["remote_url"] = json!(r);
-                }
-                omabib::transport::request("repo_setup", &a)?
-            }
-            RepoCommand::Status { fetch, json: as_json } => {
-                let r = omabib::transport::request("repo_status", &json!({"fetch":fetch}))?;
-                if !as_json {
-                    print_repo_status(&r);
-                    return Ok(());
-                }
-                r
-            }
-        },
         Command::Pdf { command } => match command {
             PdfCommand::Add { reference, path } => {
                 omabib::transport::request("add_pdf", &json!({"ref_id":reference,"path":path}))?
@@ -593,7 +497,10 @@ fn run() -> Result<()> {
                     &json!({"id":reference,"include_metadata":false}),
                 )?;
                 omabib::transport::request("get_pdf", &json!({"ref_id":r["id"]}))?;
-                shell(&["omabib", "openPdf", r["id"].as_str().context("Reference without id")?])?;
+                shell(&[
+                    "shell", "summon", "io.github.atomashevic.omabib",
+                    &json!({"action": "pdf", "ref_id": r["id"].as_str().context("Reference without id")?}).to_string(),
+                ])?;
                 focus_omabib();
                 return Ok(());
             }
@@ -603,10 +510,10 @@ fn run() -> Result<()> {
         // background, or hide it when it already has focus.
         Command::Open => {
             match omabib_window() {
-                Some((_, true)) => shell(&["shell", "hide", "omabib"])?,
+                Some((_, true)) => shell(&["shell", "hide", "io.github.atomashevic.omabib"])?,
                 Some(_) => focus_omabib(),
                 None => {
-                    shell(&["shell", "summon", "omabib", "{}"])?;
+                    shell(&["shell", "summon", "io.github.atomashevic.omabib", "{}"])?;
                     focus_omabib();
                 }
             }
@@ -642,7 +549,7 @@ fn run() -> Result<()> {
             json!({"tools":found})
         }
         Command::Schema { .. } => {
-            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","get_repo_config","set_repo_config","sync_repo","repo_check","repo_setup","repo_status","identify_pdf","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
+            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","sync_status","sync_providers","sync_connect","sync_connect_cancel","sync_inspect","sync_start","sync_now","sync_conflicts","sync_resolve","sync_download_all","sync_disconnect","sync_nudge","identify_pdf","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
         }
     };
     println!("{}", serde_json::to_string_pretty(&result)?);

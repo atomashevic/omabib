@@ -16,77 +16,15 @@ Free and open source. Search your library, read papers, capture ideas, and put y
 
 [Install](#install) · [First run](#first-run) · [AI setup](#optional-ai-setup) · [Sync](#sync) · [Update](#update) · [Troubleshooting](#troubleshooting)
 
-## Requirements
-
-- **Omarchy with its Quickshell plugin system** and systemd user services. Other desktop shells are not currently supported by the installer.
-- **Linux x86-64** for the prebuilt archive, with the standard Omarchy runtime libraries (including glibc and fontconfig), Bash, and Python 3.
-- An internet connection to download the release and retrieve online metadata/PDFs.
-
-Prebuilt installation does not require Rust, Cargo, clang, or make. Other architectures require a [source build](#build-from-source).
-
-AI features additionally require a supported agent installed and signed in: Codex CLI or Claude Code for in-app and terminal chat, or ChatGPT Desktop in Codex mode or Claude Desktop for desktop chat. You can use the bibliography and PDF reader without an AI agent.
-
 ## Install
 
-Run these commands from a terminal in your Omarchy desktop session.
-
-### 1. Download and verify a release
-
-Open [GitHub Releases](https://github.com/atomashevic/omabib/releases) and download `omabib-VERSION-linux-x86_64.tar.gz` and `SHA256SUMS` from the same release. Choose the binary archive, rather than GitHub's automatic source downloads. Prebuilt assets become available when a version tag runs the release workflow.
-
-In the download directory, set `version` to the release number without its `v` prefix:
+For **Omarchy on Linux x86-64**:
 
 ```bash
-version=0.1.0  # replace with the version you downloaded
-archive="omabib-${version}-linux-x86_64.tar.gz"
-grep "  ${archive}\$" SHA256SUMS | sha256sum --check --strict -
+omarchy plugin add https://github.com/atomashevic/omabib.git --enable
 ```
 
-Continue only if verification prints `OK`. Extract and install:
-
-```bash
-tar -xzf "$archive"
-cd "omabib-${version}-linux-x86_64"
-./scripts/install.sh
-```
-
-Run the installer as your normal user inside an active Omarchy desktop session. It checks that the binary runs and the package is complete before installing. It performs no compilation. It installs:
-
-| Component | Default location |
-|---|---|
-| CLI and launch helpers | `~/.local/bin/` |
-| Quickshell plugin | `~/.config/omarchy/plugins/omabib/` |
-| User service | `~/.config/systemd/user/omabib.service` |
-| Omabib skill for Codex | `~/.codex/skills/omabib/` |
-| License texts and dependency notices | `~/.local/share/omabib/licenses/` |
-
-The installer enables and restarts the user service, reloads plugins, and enables Omabib. It leaves keyboard shortcut configuration to you.
-
-### 2. Verify and open
-
-```bash
-systemctl --user is-active omabib.service
-omarchy plugin validate "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/omabib"
-omabib status
-omabib open
-```
-
-The service should report `active`, and `omabib status` should return your library status. If `omabib` is not found, ensure `~/.local/bin` is on your shell's `PATH`; you can also run `~/.local/bin/omabib` directly.
-
-## Build from source
-
-For development, other architectures, or when no prebuilt release is available, install Rust/Cargo (Typst requires Rust 1.92 or newer), Git, clang, and a C/C++ build toolchain. On Omarchy:
-
-```bash
-sudo pacman -S --needed base-devel clang git rust
-
-git clone https://github.com/atomashevic/omabib.git
-cd omabib
-./scripts/build.sh
-./scripts/install.sh
-```
-
-If you manage Rust with rustup, omit `rust` from the package command and use a compatible toolchain. The build uses locked dependencies and compiles MuPDF from source; the first build can take several minutes. The installer uses `target/release/omabib` (or `$CARGO_TARGET_DIR/release/omabib`), and also accepts an explicit binary path: `./scripts/install.sh /path/to/omabib`.
+Click the **Omabib** icon in your bar, then choose **Install Omabib**. It downloads the app and opens your library. Bring your papers; no compiler needed.
 
 ## First run
 
@@ -118,6 +56,8 @@ hyprctl configerrors
 
 ## Optional AI setup
 
+Bring your existing Codex or Claude Code account for in-app and terminal chat, or use ChatGPT Desktop in Codex mode or Claude Desktop. The library, PDF reader, and notes work on their own.
+
 Open **Settings** using the cog at the bottom of the rail. Choose your installed agent under **Terminal chat** and **Desktop chat**. Terminal chat also needs `xdg-terminal-exec` available on `PATH`. In-app chat is available in a paper's **Chat** tab or the PDF reader's side pane.
 
 To expose the library to an independently launched Codex session, register the bundled MCP server:
@@ -132,26 +72,11 @@ For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then resta
 
 ## Update
 
-For prebuilt installations, download the new release archive and its checksums, verify it, and run its `scripts/install.sh` as above. The installer replaces the application files and restarts the service while retaining your library and settings. Close any open Omabib editor first. See [Backup, restore and removal](#backup-restore-and-removal) to back up your library before updating.
-
-For source installations, preserve local changes, then update and rebuild:
-
 ```bash
-git status --short
-git pull --ff-only
-./scripts/build.sh
-./scripts/install.sh
-omabib status
+omarchy plugin update io.github.atomashevic.omabib
 ```
 
-## Troubleshooting
-
-- **Prebuilt binary will not start:** confirm the machine is Linux x86-64 (`uname -sm`) and inspect the error printed by `bin/omabib --version`. The binaries use glibc and system font libraries; they are not static or intended for musl-based distributions.
-- **Build fails (source installations):** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
-- **Service is unavailable:** inspect `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`. After resolving the reported issue, run `systemctl --user restart omabib.service` and `omabib status`.
-- **Installer reports that omarchy-shell is not responding:** run it from an active Omarchy desktop session. Restore the shell, then rerun `./scripts/install.sh` to complete installation.
-- **The UI still shows an older version:** close any open Omabib editor, unlock the desktop if needed, then run `omarchy restart shell`.
-- **An unmanaged plugin already exists:** the installer refuses to overwrite an Omabib plugin directory without its `.omabib-managed` marker. Inspect and back up that directory, then move it aside before rerunning the installer.
+Open Omabib after updating. If the app needs an update too, the setup screen handles it. Your library and settings carry over.
 
 ## Typical uses
 
@@ -309,19 +234,89 @@ omabib restore /absolute/path/library-backup.db --to /absolute/path/restored.db
 
 Backups use SQLite's consistent backup API. Restore validates the backup and only writes a new path. Stop the service before deliberately replacing the active library with a restored file. Do not copy a live database without its WAL; use `backup` instead. Future schema upgrades must take a backup before changing an existing schema. This release creates schema 1 and refuses newer versions.
 
-Removal preserves your library:
+To remove Omabib while keeping your library:
 
 ```bash
-systemctl --user disable --now omabib
-omarchy plugin disable omabib
-codex mcp remove omabib
+python3 ~/.config/omarchy/plugins/io.github.atomashevic.omabib/scripts/omabib-plugin remove-backend
+omarchy plugin remove io.github.atomashevic.omabib
 ```
 
-Then remove only the Omabib binary, user service, plugin directory, skill, and its named shortcut if desired. The data directory remains independent of the plugin.
+Removing only the plugin leaves the background service and CLI available. Agent registrations and your library stay in place; remove any agent registration separately if you no longer use it.
+
+## Build from source
+
+For development, other architectures, or when no prebuilt release is available, install Rust/Cargo (Typst requires Rust 1.92 or newer), Git, clang, and a C/C++ build toolchain. On Omarchy:
+
+```bash
+sudo pacman -S --needed base-devel clang git rust
+
+git clone https://github.com/atomashevic/omabib.git
+cd omabib
+./scripts/build.sh
+./scripts/install.sh
+```
+
+If you already installed the plugin with `omarchy plugin add`, use `./scripts/install.sh --backend-only` after building to keep the Git-managed UI intact.
+
+If you manage Rust with rustup, omit `rust` from the package command and use a compatible toolchain. The build uses locked dependencies and compiles MuPDF from source; the first build can take several minutes. The installer uses `target/release/omabib` (or `$CARGO_TARGET_DIR/release/omabib`), and also accepts an explicit binary path: `./scripts/install.sh /path/to/omabib`.
+
+To update a source checkout, preserve any local changes, then run:
+
+```bash
+git pull --ff-only
+./scripts/build.sh
+./scripts/install.sh
+```
+
+## Troubleshooting
+
+- **`omabib` command not found:** open a new terminal or run `~/.local/bin/omabib open`. Ensure `~/.local/bin` is on your shell's `PATH`.
+- **Prebuilt binary will not start:** confirm the machine is Linux x86-64 (`uname -sm`) and inspect the error printed by `bin/omabib --version`. The binaries use glibc and system font libraries; they are not static or intended for musl-based distributions.
+- **Build fails (source installations):** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
+- **Service is unavailable:** inspect `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`. After resolving the reported issue, run `systemctl --user restart omabib.service` and `omabib status`.
+- **Installer reports that omarchy-shell is not responding:** run it from an active Omarchy desktop session. Restore the shell, then rerun `./scripts/install.sh` to complete installation.
+- **The UI still shows an older version:** close any open Omabib editor, unlock the desktop if needed, then run `omarchy restart shell`.
+- **An unmanaged plugin already exists:** the installer refuses to overwrite an Omabib plugin directory without its `.omabib-managed` marker. Inspect and back up that directory, then move it aside before rerunning the installer.
+
+<details>
+<summary>How plugin setup works, and installing a release archive directly</summary>
+
+Omarchy manages the plugin checkout. On first use, **Install Omabib** downloads the matching version from this repository's GitHub Releases, checks its SHA-256 checksum, and installs the backend and launch helpers in your user account. It enables `omabib.service`, a systemd user service. No administrator access or build tools are needed.
+
+The download happens when you choose Install. If that version has not been released yet, the setup screen explains this and lets you retry later. Plugin updates keep the backend version matched to the UI. Release maintainers must publish matching assets before directing users to an updated plugin version.
+
+Existing installations keep the same library, settings, service name, and `omabib` command. Setup disables the old managed `omabib` plugin to avoid duplicate windows and leaves its files in place. The new plugin ID is `io.github.atomashevic.omabib`.
+
+You can also download `omabib-VERSION-linux-x86_64.tar.gz` from [GitHub Releases](https://github.com/atomashevic/omabib/releases), extract it, and run `./scripts/install.sh`. This installs a standalone plugin copy; update it by installing a newer archive. A Git-managed plugin can use the same archive's `./scripts/install.sh --backend-only` without changing its checkout.
+
+</details>
+
+<details>
+<summary>Installation paths and optional checksum verification</summary>
+
+| Component | Default location |
+|---|---|
+| CLI and launch helpers | `~/.local/bin/` |
+| Quickshell plugin | `~/.config/omarchy/plugins/io.github.atomashevic.omabib/` |
+| User service | `~/.config/systemd/user/omabib.service` |
+| Omabib skill for Codex | `~/.codex/skills/omabib/` |
+| License texts and dependency notices | `~/.local/share/omabib/licenses/` |
+
+The prebuilt app uses Omarchy's standard runtime libraries, Bash, and Python 3. Rust and C/C++ build tools are needed only for source builds.
+
+To verify a downloaded archive, download `SHA256SUMS` from the same release into the same folder, then run:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+A matching archive prints `OK`.
+
+</details>
 
 ## Publishing a release
 
-The [release workflow](.github/workflows/release.yml) builds on Ubuntu 24.04 x86-64, runs the Rust tests, packages and checks the installation, then publishes assets when a `v*` tag is pushed. The tag must match the versions in both `Cargo.toml` and `plugin/manifest.json`; update `Cargo.lock` alongside a package version change. Commit all code needed by the release before tagging.
+The [release workflow](.github/workflows/release.yml) builds on Ubuntu 24.04 x86-64, runs the Rust tests, packages and checks the installation, then publishes assets when a `v*` tag is pushed. The tag must match the versions in both `Cargo.toml` and `manifest.json`; update `Cargo.lock` alongside a package version change. Commit all code needed by the release before tagging.
 
 Each release includes:
 
@@ -337,7 +332,10 @@ A manual workflow run builds and retains test artifacts without publishing. To p
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 python scripts/test_transport.py target/release/omabib
-omarchy plugin validate plugin
+omarchy plugin validate .
+python3 scripts/test_plugin_entry.py
+python3 scripts/test_plugin_lifecycle.py
+python3 scripts/test_plugin_backend.py target/dist/omabib-0.1.0-linux-x86_64.tar.gz
 python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary target/release/omabib
 ```
 

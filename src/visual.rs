@@ -79,7 +79,7 @@ pub fn insert(c: &Connection, a: &Value, note_id: &str, pdf: &crate::pdf::Pdf) -
         "Invalid or oversized clip dimensions"
     );
     c.execute(
-        "INSERT INTO note_images VALUES(?, 'image/png', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO note_images(note_id,mime_type,width,height,sha256,source_pdf,page,rectangle,data) VALUES(?, 'image/png', ?, ?, ?, ?, ?, ?, ?)",
         params![
             note_id,
             width,

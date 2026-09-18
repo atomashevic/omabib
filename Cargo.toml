@@ -17,6 +17,7 @@ unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", features = ["blocking", "json"] }
 sha2 = "0.10"
+flate2 = "1"
 libc = "0.2"
 base64 = "0.22.1"
 mitex = "0.2.4"
@@ -25,8 +26,6 @@ typst-svg = "0.15.1"
 typst-layout = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 mupdf = "0.8.0"
-
-[dev-dependencies]
 tempfile = "3"
 
 [profile.release]

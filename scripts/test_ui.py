@@ -10,13 +10,13 @@ def wait_for(predicate):
   if predicate(s):return s
   time.sleep(.05)
  raise AssertionError(s)
-run('omarchy-shell','shell','summon','omabib',json.dumps({'socket_path':a.socket,'query':'network'}))
+run('omarchy-shell','shell','summon','io.github.atomashevic.omabib',json.dumps({'socket_path':a.socket,'query':'network'}))
 s=wait_for(lambda s:s['opened'] and len(s['results'])==2 and s['query_focused'])
 run('wtype','-k','Tab');s=wait_for(lambda s:s['expanded'] and s['selected'] is not None)
 run('wtype','-M','ctrl','-k','k','-m','ctrl');wait_for(lambda s:s['commands_open'])
 run('wtype','-k','Escape');wait_for(lambda s:not s['commands_open'])
 run('wtype','-k','Escape');wait_for(lambda s:not s['opened'])
-run('omarchy-shell','shell','summon','omabib',json.dumps({'query':'barabasi'}));wait_for(lambda s:s['opened']and len(s['results'])==1)
+run('omarchy-shell','shell','summon','io.github.atomashevic.omabib',json.dumps({'query':'barabasi'}));wait_for(lambda s:s['opened']and len(s['results'])==1)
 run('wtype','-M','ctrl','-k','k','-m','ctrl');wait_for(lambda s:s['commands_open']);run('wtype','2','-k','Return');wait_for(lambda s:not s['opened']);clipboard=run('wl-paste','--no-newline');assert clipboard=='Baraba_si_1999',clipboard
 report={'passed':['Search field focused on open','Real reference search','Tab opens reference detail','Ctrl+K opens actions','Escape closes actions then popup','Action 2 copies the citation key and closes'],'last_ui_state':s,'note':'Keyboard smoke test. response_ms is response/model-update time, not compositor paint latency.'}
 a.report.write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))

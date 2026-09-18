@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='omabib-tabs-ui-') as dirname:
         assert cached['cached'] and cached['body'] == OVERVIEW, cached
         call('create_project', dict(name='Tabs UI'))
 
-        command('omarchy-shell', 'shell', 'summon', 'omabib', json.dumps(dict(socket_path=str(sock), query='', project_id='', ref_id=ids['tabs_arxiv_fixture'])))
+        command('omarchy-shell', 'shell', 'summon', 'io.github.atomashevic.omabib', json.dumps(dict(socket_path=str(sock), query='', project_id='', ref_id=ids['tabs_arxiv_fixture'])))
         wait(lambda: state()['expanded'] and state()['selected'] == ids['tabs_arxiv_fixture'])
         capture('1-overview')
 
@@ -168,11 +168,11 @@ with tempfile.TemporaryDirectory(prefix='omabib-tabs-ui-') as dirname:
         wait(lambda: state()['active_tab'] == 0 and state()['selected'] == ids['tabs_plain_fixture'])
         print('PASS: Ctrl+T and Ctrl+Enter open paper tabs; Alt+0 and Ctrl+PgUp switch tabs', flush=True)
 
-        command('omarchy-shell', 'shell', 'hide', 'omabib')
+        command('omarchy-shell', 'shell', 'hide', 'io.github.atomashevic.omabib')
         wait(lambda: not state()['opened'])
         saved = json.loads(tabs_file.read_text())['libraries'][str(sock)]
         assert [t['citekey'] for t in saved['tabs']] == ['tabs_plain_fixture', 'tabs_arxiv_fixture'] and saved['active'] == 0, saved
-        command('omarchy-shell', 'shell', 'summon', 'omabib', '{}')
+        command('omarchy-shell', 'shell', 'summon', 'io.github.atomashevic.omabib', '{}')
         wait(lambda: state()['opened'] and state()['active_tab'] == 0 and state()['selected'] == ids['tabs_plain_fixture'])
         print('PASS: tabs and the active tab survive closing the popup', flush=True)
 
@@ -184,10 +184,10 @@ with tempfile.TemporaryDirectory(prefix='omabib-tabs-ui-') as dirname:
         print('PASS: Ctrl+W and closeTab close tabs and forget the library entry', flush=True)
     finally:
         try:
-            command('omarchy-shell', 'shell', 'hide', 'omabib')
-            command('omarchy-shell', 'shell', 'summon', 'omabib', json.dumps(dict(socket_path=REAL_SOCKET, query=initial['query'], project_id=initial['project_id'])))
+            command('omarchy-shell', 'shell', 'hide', 'io.github.atomashevic.omabib')
+            command('omarchy-shell', 'shell', 'summon', 'io.github.atomashevic.omabib', json.dumps(dict(socket_path=REAL_SOCKET, query=initial['query'], project_id=initial['project_id'])))
             wait(lambda: not state()['search_pending'] and not state()['error'] and 'tabs_plain_fixture' not in state()['results'])
-            command('omarchy-shell', 'shell', 'hide', 'omabib')
+            command('omarchy-shell', 'shell', 'hide', 'io.github.atomashevic.omabib')
         finally:
             service.terminate(); service.wait(timeout=5)
             if original_window:

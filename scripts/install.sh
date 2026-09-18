@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+backend_only=false
+if [[ ${1:-} == --backend-only ]]; then
+  backend_only=true
+  shift
+fi
 # Installation never compiles. Source checkouts must run scripts/build.sh first.
 if [[ ${1:-} == --help ]]; then
-  echo "Usage: $0 [path/to/prebuilt/omabib]"
+  echo "Usage: $0 [--backend-only] [path/to/prebuilt/omabib]"
   echo "Release archives include bin/omabib; source builds use target/release/omabib."
   exit 0
 fi
 if [[ $# -gt 1 ]]; then
-  echo "Usage: $0 [path/to/prebuilt/omabib]" >&2
+  echo "Usage: $0 [--backend-only] [path/to/prebuilt/omabib]" >&2
   exit 2
 fi
 if [[ $# -eq 1 ]]; then
@@ -30,29 +35,38 @@ for tool in omarchy omarchy-shell systemctl python3; do
 done
 # Check runtime compatibility and package completeness before changing installed files.
 "$binary" --version
-for file in packaging/omabib.service plugin/manifest.json plugin/App.qml plugin/BarWidget.qml \
+for file in packaging/omabib.service manifest.json plugin/App.qml plugin/BarWidget.qml plugin/Entry.qml scripts/omabib-plugin \
   scripts/omabib-close-first scripts/omabib-chatgpt scripts/omabib-codex \
   scripts/omabib-overview scripts/omabib-settings scripts/omabib-claude \
   skills/omabib/SKILL.md LICENSE; do
   [[ -f "$source_dir/$file" ]] || { echo "Package is missing $file" >&2; exit 1; }
 done
 [[ -d "$source_dir/plugin/components" ]] || { echo "Package is missing plugin/components" >&2; exit 1; }
-plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/omabib"
-if [[ -e "$plugin_dir" && ! -f "$plugin_dir/.omabib-managed" ]]; then
+plugin_id="io.github.atomashevic.omabib"
+plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$plugin_id"
+if [[ "$backend_only" == false && -d "$plugin_dir/.git" ]]; then
+  echo "This plugin is managed by Omarchy. Use omarchy plugin update $plugin_id, then open Omabib." >&2
+  echo "To install only a locally built backend, use --backend-only." >&2
+  exit 1
+fi
+if [[ "$backend_only" == false && -e "$plugin_dir" && ! -f "$plugin_dir/.omabib-managed" ]]; then
   echo "Existing unmanaged Omabib plugin at $plugin_dir; inspect it before installing." >&2
   exit 1
 fi
-mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$plugin_dir" "$HOME/.codex/skills/omabib"
+mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.codex/skills/omabib"
 install -m755 "$binary" "$HOME/.local/bin/omabib.new"
 mv "$HOME/.local/bin/omabib.new" "$HOME/.local/bin/omabib"
 install -m644 "$source_dir/packaging/omabib.service" "$HOME/.config/systemd/user/omabib.service"
-install -m644 "$source_dir/plugin/manifest.json" "$source_dir/plugin/App.qml" "$source_dir/plugin/BarWidget.qml" "$plugin_dir/"
-# Replace the UI components as a whole so renamed or removed files don't linger.
-rm -rf "$plugin_dir/components.new"
-cp -r "$source_dir/plugin/components" "$plugin_dir/components.new"
-rm -rf "$plugin_dir/components"
-mv "$plugin_dir/components.new" "$plugin_dir/components"
-touch "$plugin_dir/.omabib-managed"
+if [[ "$backend_only" == false ]]; then
+  mkdir -p "$plugin_dir/scripts"
+  install -m644 "$source_dir/manifest.json" "$plugin_dir/manifest.json"
+  install -m755 "$source_dir/scripts/omabib-plugin" "$plugin_dir/scripts/omabib-plugin"
+  rm -rf "$plugin_dir/plugin.new"
+  cp -r "$source_dir/plugin" "$plugin_dir/plugin.new"
+  rm -rf "$plugin_dir/plugin"
+  mv "$plugin_dir/plugin.new" "$plugin_dir/plugin"
+  touch "$plugin_dir/.omabib-managed"
+fi
 # Older releases still use this helper; newer source trees remove it.
 if [[ -f "$source_dir/scripts/omabib-history" ]]; then
   install -m755 "$source_dir/scripts/omabib-history" "$HOME/.local/bin/omabib-history"
@@ -81,10 +95,26 @@ if [[ -d "$source_dir/licenses" ]]; then
 elif [[ -f "$source_dir/src/mitex/LICENSE" ]]; then
   install -m644 "$source_dir/src/mitex/LICENSE" "$license_dir/MITEX-LICENSE"
 fi
-omarchy plugin validate "$plugin_dir"
+if [[ "$backend_only" == false ]]; then omarchy plugin validate "$plugin_dir"; fi
 systemctl --user daemon-reload
 systemctl --user enable --now omabib.service
 systemctl --user restart omabib.service
-omarchy-shell shell rescanPlugins
-omarchy plugin enable omabib
+# Retire the old managed UI without deleting its files or the library.
+legacy_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/omabib"
+if [[ -f "$legacy_dir/.omabib-managed" ]]; then
+  omarchy plugin disable omabib
+fi
+python3 - "$source_dir/manifest.json" <<'PYTHON'
+import json, os, pathlib, sys
+version = json.loads(pathlib.Path(sys.argv[1]).read_text())["version"]
+state = pathlib.Path(os.environ.get("XDG_STATE_HOME") or pathlib.Path.home() / ".local/state") / "omabib/backend.json"
+state.parent.mkdir(parents=True, exist_ok=True)
+temporary = state.with_suffix(".tmp")
+temporary.write_text(json.dumps({"version": version, "plugin_id": "io.github.atomashevic.omabib"}) + "\n")
+temporary.replace(state)
+PYTHON
+if [[ "$backend_only" == false ]]; then
+  omarchy-shell shell rescanPlugins
+  omarchy plugin enable "$plugin_id"
+fi
 printf '%s\n' 'Installed Omabib. Open with: omabib open' 'Codex registration: codex mcp add omabib -- ~/.local/bin/omabib mcp'

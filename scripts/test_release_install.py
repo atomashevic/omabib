@@ -29,7 +29,7 @@ def main():
         commands.mkdir()
         # A closed PATH makes any accidental compilation fail, even on CI build hosts.
         for name in ('bash', 'dirname', 'mkdir', 'install', 'mv', 'rm', 'cp', 'touch', 'grep', 'python3'):
-            (commands / name).symlink_to(shutil.which(name))
+            (commands / name).symlink_to(sys.executable if name == 'python3' else shutil.which(name))
         log = root / 'commands.log'
         for name in ('omarchy', 'omarchy-shell', 'systemctl'):
             command = commands / name
@@ -52,14 +52,16 @@ def main():
         assert digest(installed) == digest(package / 'bin/omabib')
         for source in (package / 'plugin').rglob('*'):
             if source.is_file():
-                assert digest(source) == digest(home / '.config/omarchy/plugins/omabib' / source.relative_to(package / 'plugin'))
+                assert digest(source) == digest(home / '.config/omarchy/plugins/io.github.atomashevic.omabib/plugin' / source.relative_to(package / 'plugin'))
         for source in (package / 'scripts').glob('omabib-*'):
-            assert digest(source) == digest(home / '.local/bin' / source.name)
+            destination = (home / '.config/omarchy/plugins/io.github.atomashevic.omabib/scripts' / source.name
+                           if source.name == 'omabib-plugin' else home / '.local/bin' / source.name)
+            assert digest(source) == digest(destination)
         assert (home / '.local/share/omabib/licenses/THIRD-PARTY.md').is_file()
         assert (home / '.config/systemd/user/omabib.service').read_bytes() == (package / 'packaging/omabib.service').read_bytes()
         assert (home / '.codex/skills/omabib/SKILL.md').is_file()
         for invocation in ('daemon-reload', 'enable --now omabib.service', 'restart omabib.service',
-                           'shell rescanPlugins', 'plugin enable omabib'):
+                           'shell rescanPlugins', 'plugin enable io.github.atomashevic.omabib'):
             assert invocation in log.read_text(), invocation
         # Run the installed backend itself with an isolated library and real Unix socket.
         with (root / 'service.log').open('w') as service_log:
@@ -82,7 +84,7 @@ def main():
         subprocess.run([str(installer)], env=env, check=True, capture_output=True)
         assert digest(database) == original_db, 'Reinstall changed the library'
         assert settings.read_text() == '{"ai_cli":"claude"}\n'
-        marker = home / '.config/omarchy/plugins/omabib/.omabib-managed'
+        marker = home / '.config/omarchy/plugins/io.github.atomashevic.omabib/.omabib-managed'
         marker.unlink()
         previous_log = log.read_text()
         result = subprocess.run([str(installer)], env=env, capture_output=True, text=True)

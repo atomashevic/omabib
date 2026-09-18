@@ -1,15 +1,12 @@
-use crate::{
-    db::{Library, required, text},
-    history,
-};
+use crate::db::{Library, required, text};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::Duration,
 };
 const MAX_PDF: u64 = 512 * 1024 * 1024;
@@ -54,7 +51,7 @@ pub fn add(lib: &Library, a: &Value) -> Result<Value> {
     }
     lib.call("attach", &args)
 }
-fn temp(lib: &Library) -> Result<PathBuf> {
+pub(crate) fn temp(lib: &Library) -> Result<PathBuf> {
     let dir = lib.path.parent().unwrap().join("pdfs");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join(format!(".{}.part", uuid::Uuid::new_v4())))
@@ -79,7 +76,7 @@ fn sanitize_filename(name: &str) -> String {
 /// rather than its content hash, so a person can find it by browsing.
 /// A same-named file with different bytes gets a short hash suffix instead
 /// of being overwritten.
-fn finish(lib: &Library, path: &Path, citekey: &str) -> Result<(PathBuf, String)> {
+pub(crate) fn finish(lib: &Library, path: &Path, citekey: &str) -> Result<(PathBuf, String)> {
     let hash = inspect(path)?;
     let dir = lib.path.parent().unwrap().join("pdfs");
     std::fs::create_dir_all(&dir)?;
@@ -138,119 +135,41 @@ pub(crate) fn download_and_store(
     }
     result
 }
+/// Download a PDF from an explicit HTTPS `url` for `ref_id` and attach it, or
+/// fetch attachment `attachment_id` from the sync storage.
 pub fn pull(lib: &Library, a: &Value) -> Result<Value> {
-    let temporary = temp(lib)?;
-    let result = (|| {
-        if let Some(url) = a.get("url").and_then(Value::as_str) {
-            ensure!(
-                a.get("attachment_id").is_none(),
-                "Choose a URL or an attachment ID"
-            );
-            let ref_id = required(a, "ref_id")?;
-            let reference = lib.call(
-                "get_reference",
-                &json!({"id":ref_id,"include_metadata":false}),
-            )?;
-            let (path, _) = download_and_store(lib, url, text(&reference, "citekey"))?;
-            let mut args = json!({"ref_id":ref_id,"path":path});
-            if let Some(k) = a.get("idempotency_key") {
-                args["idempotency_key"] = k.clone();
-            }
-            return add(lib, &args);
-        }
-        let _guard = lib
-            .history_lock
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("History operation already running"))?;
-        let id = required(a, "attachment_id")?;
+    if let Some(url) = a.get("url").and_then(Value::as_str) {
         ensure!(
-            uuid::Uuid::parse_str(id).is_ok(),
-            "Attachment ID must be a UUID"
+            a.get("attachment_id").is_none(),
+            "Choose a URL or an attachment ID"
         );
-        let attachment = lib.call("get_attachment", &json!({"id":id}))?;
+        let ref_id = required(a, "ref_id")?;
         let reference = lib.call(
             "get_reference",
-            &json!({"id":attachment["ref_id"],"include_metadata":false}),
+            &json!({"id":ref_id,"include_metadata":false}),
         )?;
-        let (repo, cfg) = history::configured_repo(lib)?;
-        history::git(&repo, &["fetch", "origin", text(&cfg, "branch")])?;
-        let remote_ref = format!("refs/remotes/origin/{}", text(&cfg, "branch"));
-        let metadata = history::git(
-            &repo,
-            &[
-                "show",
-                &format!("{remote_ref}:metadata/attachments/{id}.json"),
-            ],
-        )?;
-        let archived: Value = serde_json::from_str(&metadata)?;
-        ensure!(
-            archived["ref_id"] == attachment["ref_id"],
-            "Archived PDF belongs to a different reference"
-        );
-        let hash = required(&archived, "sha256")?;
-        ensure!(
-            hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
-            "Invalid archived PDF hash"
-        );
-        let pdf = format!("pdfs/{hash}.pdf");
-        ensure!(
-            text(&archived, "repository_path") == pdf,
-            "Invalid archive path"
-        );
-        let pointer = history::git(&repo, &["show", &format!("{remote_ref}:{pdf}")])?;
-        ensure!(
-            pointer.starts_with("version https://git-lfs.github.com/spec/v1\n")
-                && pointer.lines().any(|l| l == format!("oid sha256:{hash}")),
-            "Archive is not the expected LFS pointer"
-        );
-        let size = pointer
-            .lines()
-            .find_map(|l| l.strip_prefix("size "))
-            .context("LFS pointer has no size")?
-            .parse::<u64>()?;
-        ensure!(size <= MAX_PDF, "Archived PDF exceeds 512 MiB");
-        let out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        let mut cmd = history::command("timeout");
-        cmd.args(["120s", "git", "-C"])
-            .arg(&repo)
-            .args([
-                "-c",
-                "lfs.fetchinclude=",
-                "-c",
-                "lfs.fetchexclude=",
-                "lfs",
-                "smudge",
-                &pdf,
-            ])
-            .env_remove("GIT_LFS_SKIP_SMUDGE")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::piped());
-        let mut child = cmd.spawn()?;
-        child.stdin.take().unwrap().write_all(pointer.as_bytes())?;
-        history::checked(child.wait_with_output()?)?;
-        ensure!(
-            std::fs::metadata(&temporary)?.len() == size && inspect(&temporary)? == hash,
-            "Downloaded PDF checksum mismatch"
-        );
-        let (path, hash) = finish(lib, &temporary, text(&reference, "citekey"))?;
-        lib.call(
-            "relink_attachment",
-            &json!({"id":id,"path":path,"fingerprint":hash}),
-        )
-    })();
-    if temporary.exists() {
-        let _ = std::fs::remove_file(&temporary);
+        let (path, _) = download_and_store(lib, url, text(&reference, "citekey"))?;
+        let mut args = json!({"ref_id":ref_id,"path":path});
+        if let Some(k) = a.get("idempotency_key") {
+            args["idempotency_key"] = k.clone();
+        }
+        return add(lib, &args);
     }
-    result
+    let id = required(a, "attachment_id")?;
+    ensure!(
+        uuid::Uuid::parse_str(id).is_ok(),
+        "Attachment ID must be a UUID"
+    );
+    crate::sync::fetch_attachment(lib, id)?
+        .context("This PDF isn't in the sync storage; sync the computer that has it first")?;
+    let mut attachment = lib.call("get_attachment", &json!({"id":id}))?;
+    attachment["exists"] = json!(true);
+    Ok(attachment)
 }
 /// Return a locally readable path to a reference's PDF, in order: an
-/// existing attachment; a missing attachment restored from the history
-/// repository's Git LFS archive; or (unless `download:false`) a freshly
-/// downloaded open-access copy, attached in the process.
+/// existing attachment; one only in the sync storage, downloaded; or (unless
+/// `download:false`) a freshly downloaded open-access copy, attached in the
+/// process.
 pub fn get_pdf(lib: &Library, a: &Value) -> Result<Value> {
     let ref_id = required(a, "ref_id")?;
     let r = lib.call(
@@ -265,10 +184,8 @@ pub fn get_pdf(lib: &Library, a: &Value) -> Result<Value> {
             if p["exists"] == true {
                 return Ok(json!({"path":p["path"],"source":"local","attachment_id":p["id"]}));
             }
-            if let Ok(restored) = pull(lib, &json!({"attachment_id":p["id"]})) {
-                return Ok(
-                    json!({"path":restored["path"],"source":"history","attachment_id":restored["id"]}),
-                );
+            if let Some(path) = crate::sync::fetch_attachment(lib, text(p, "id"))? {
+                return Ok(json!({"path":path,"source":"cloud","attachment_id":p["id"]}));
             }
         }
     }

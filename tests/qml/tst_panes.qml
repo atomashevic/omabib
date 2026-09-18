@@ -29,7 +29,27 @@ Rectangle {
         property var nextCursor: null
         property bool codexBusy: false
         property bool pdfBusy: false
-        property bool syncBusy: false
+        // Sync stand-in.
+        property var syncStatus: ({})
+        property var syncProviders: null
+        property var syncFound: null
+        property var syncConflicts: []
+        property bool syncWorking: false
+        property string syncError: ""
+        function syncButton() { note("syncButton") }
+        function openSync() { note("openSync") }
+        function connectSync(provider, arg) { note("connectSync:" + provider + ":" + arg) }
+        function cancelSyncConnect() { note("cancelSyncConnect") }
+        function startSync(mode) { note("startSync:" + mode) }
+        function stopSync() { note("stopSync") }
+        function syncNow() { note("syncNow") }
+        function reconnectSync() { note("reconnectSync") }
+        function downloadAllPdfs() { note("downloadAllPdfs") }
+        function resolveSyncConflict(id, action) { note("resolve:" + id + ":" + action) }
+        function openReferenceById(id) { note("openReferenceById:" + id) }
+        function installRclone() { note("installRclone") }
+        function openRcloneConfig() { note("openRcloneConfig") }
+        function syncFolderGuess() { return "/home/reader/Sync" }
         property bool metadataBusy: false
         property bool allNotes: false
         property bool includeOtherNotes: false
@@ -66,7 +86,6 @@ Rectangle {
         property bool filtersActive: false
         property string queryText: ""
         property string pdfShortcut: "Ctrl+O"
-        property var repoStatus: Fixture.repo
         property string overviewRefId: "r2"
         property string overviewBody: Fixture.overview
         property string overviewState: "ready"
@@ -204,8 +223,6 @@ Rectangle {
             overflowMenu.openAt(anchor, "right")
         }
         function openCommands() { palette.open() }
-        function openRepoSettings() { note("openRepoSettings") }
-        function syncHistory() { note("syncHistory") }
         function startQuickAdd(text) { note("startQuickAdd:" + text) }
         function searchMore() { note("searchMore") }
         function dismiss() { note("dismiss") }
@@ -253,6 +270,15 @@ Rectangle {
         color: ui.card
         border.width: 1; border.color: ui.border
         SettingsPanel { id: settingsPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
+    }
+    Rectangle {
+        id: syncSheet
+        visible: false
+        anchors.centerIn: parent
+        width: 640; height: Math.min(parent.height - 20, syncPanel.implicitHeight + 40)
+        color: ui.card
+        border.width: 1; border.color: ui.border
+        SyncPanel { id: syncPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
     }
     Rectangle {
         id: editorSheet
@@ -456,7 +482,7 @@ Rectangle {
             tryCompare(palette, "opened", false)
             palette.open()
             tryCompare(palette, "opened", true)
-            keyClick(Qt.Key_H); keyClick(Qt.Key_I); keyClick(Qt.Key_S); keyClick(Qt.Key_T)
+            keyClick(Qt.Key_S); keyClick(Qt.Key_Y); keyClick(Qt.Key_N); keyClick(Qt.Key_C); keyClick(Qt.Key_Space); keyClick(Qt.Key_N); keyClick(Qt.Key_O)
             compare(palette.matches.length, 1)
             compare(palette.matches[0].n, 19)
             shot("7b-palette-filtered")
@@ -841,6 +867,90 @@ Rectangle {
             app.chats = ({})
             app.chatForRef = ({})
             app.chatRevision++
+        }
+        function test_14_sync_panel() {
+            syncSheet.visible = true
+            var providers = [
+                {id: "drive", label: "Google Drive", folder: "My Drive → Omabib", available: false, blocked: "Waiting for Omabib's Google app registration"},
+                {id: "dropbox", label: "Dropbox", folder: "Dropbox → Omabib", available: false},
+                {id: "onedrive", label: "OneDrive", folder: "OneDrive → Omabib", available: false},
+                {id: "folder", label: "A folder on this computer", folder: "Syncthing, Nextcloud or Dropbox's app keeps it in sync", available: true},
+                {id: "rclone", label: "Other (advanced)", folder: "S3, R2, B2, WebDAV or anything rclone reaches", available: false}
+            ]
+            // Choosing where, before rclone is installed.
+            app.syncStatus = {connected: false, configured: false, state: "off"}
+            app.syncProviders = {rclone: {installed: false}, providers: providers}
+            wait(80)
+            verify(find(syncPanel, "syncChoose").visible)
+            verify(find(syncPanel, "syncInstallRclone").visible)
+            shot("14a-sync-choose")
+            mouseClick(find(syncPanel, "syncInstallRclone"))
+            verify(app.calls.indexOf("installRclone") >= 0, app.calls)
+            mouseClick(find(syncPanel, "syncProvider:folder"))
+            wait(50)
+            verify(find(syncPanel, "syncFolder").visible)
+            compare(find(syncPanel, "syncFolder").text, "/home/reader/Sync")
+            shot("14b-sync-folder")
+            // With rclone, the cloud cards work.
+            app.syncProviders = {rclone: {installed: true, version: "v1.75.1", remotes: []}, providers: providers.map(function (p) { return Object.assign({}, p, {available: p.id !== "drive"}) })}
+            wait(50)
+            verify(!find(syncPanel, "syncInstallRclone").visible)
+            mouseClick(find(syncPanel, "syncProvider:dropbox"))
+            verify(app.calls.indexOf("connectSync:dropbox:") >= 0, app.calls)
+            mouseClick(find(syncPanel, "syncProvider:drive"))
+            verify(app.calls.indexOf("connectSync:drive:") < 0, "Drive waits for its Google app")
+
+            // Signing in.
+            app.syncStatus = {connected: false, configured: false, state: "off", connecting: {provider: "dropbox", label: "Dropbox", state: "browser", url: "http://127.0.0.1:53682/auth?state=x"}}
+            wait(50)
+            verify(find(syncPanel, "syncConnecting").visible)
+            shot("14c-sync-connecting")
+            mouseClick(find(syncPanel, "syncCancelConnect"))
+            verify(app.calls.indexOf("cancelSyncConnect") >= 0)
+
+            // Connected: a library is already there.
+            app.syncStatus = {connected: true, configured: false, state: "off", where: "Dropbox → Omabib", provider: {kind: "rclone", provider: "dropbox", label: "Dropbox"}}
+            app.syncFound = {exists: true, counts: {references: 1617, notes: 13, pdfs: 17}, last_device: "laptop-omarchy", last_updated: new Date(Date.now() - 240000).toISOString(), local: {references: 0, notes: 0, pdfs: 0}}
+            wait(50)
+            verify(find(syncPanel, "syncJoin").visible && !find(syncPanel, "syncMerge").visible)
+            shot("14d-sync-join")
+            mouseClick(find(syncPanel, "syncJoin"))
+            verify(app.calls.indexOf("startSync:join") >= 0)
+            app.syncFound = Object.assign({}, app.syncFound, {local: {references: 40, notes: 2, pdfs: 1}})
+            wait(50)
+            verify(find(syncPanel, "syncMerge").visible && find(syncPanel, "syncReplace").visible && !find(syncPanel, "syncJoin").visible)
+            shot("14e-sync-merge")
+            app.syncFound = {exists: false, local: {references: 1617, notes: 13, pdfs: 17}}
+            wait(50)
+            verify(find(syncPanel, "syncStart").visible)
+            shot("14f-sync-new")
+            mouseClick(find(syncPanel, "syncStart"))
+            verify(app.calls.indexOf("startSync:new") >= 0)
+
+            // Syncing, with things to review.
+            app.syncStatus = {connected: true, configured: true, state: "idle", where: "Dropbox → Omabib", provider: {kind: "rclone", provider: "dropbox", label: "Dropbox"},
+                last_success: new Date(Date.now() - 120000).toISOString(), pending: 0, conflicts: 3,
+                devices: [{device: "a", name: "laptop-omarchy", updated: new Date(Date.now() - 120000).toISOString(), me: true}, {device: "b", name: "desktop", updated: new Date(Date.now() - 3600000).toISOString(), me: false}],
+                pdfs: {here: 12, cloud_only: 5}}
+            app.syncConflicts = [
+                {id: "c1", kind: "note_copy", ref_id: "r1", summary: "A note on “Sparse attention” was also edited on desktop"},
+                {id: "c2", kind: "deleted", ref_id: "r2", summary: "“Tidal coupling” was deleted on desktop after you changed it here"},
+                {id: "c3", kind: "duplicate", ref_id: "r3", summary: "“Same paper” may be the same paper as “Same paper” (same DOI)"}
+            ]
+            wait(80)
+            verify(find(syncPanel, "syncStatusPage").visible)
+            verify(find(syncPanel, "syncDownloadAll").visible)
+            shot("14g-sync-status")
+            mouseClick(find(syncPanel, "syncNow"))
+            verify(app.calls.indexOf("syncNow") >= 0)
+            app.syncStatus = Object.assign({}, app.syncStatus, {state: "auth"})
+            wait(50)
+            mouseClick(find(syncPanel, "syncNow"))
+            verify(app.calls.indexOf("reconnectSync") >= 0, "an expired sign-in offers Reconnect")
+            syncSheet.visible = false
+            app.syncStatus = ({})
+            app.syncConflicts = []
+            app.syncFound = null
         }
         function test_8_no_abstract_and_empty() {
             var r = JSON.parse(JSON.stringify(Fixture.ref))

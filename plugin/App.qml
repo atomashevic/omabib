@@ -123,12 +123,15 @@ Item {
     property bool metadataBusy: false
     property int metadataRequest: -1
     property string metadataInfo: ""
-    property var repoSettings: ({})
-    property var repoStatus: ({})
-    property var repoCheck: ({})
-    property bool syncBusy: false
-    property bool repoBusy: false
-    property int syncRequest: -1
+    // Sync through a folder or a cloud account (src/sync): sync_status, the
+    // storage choices, what was found in the chosen place, and conflicts.
+    property var syncStatus: ({})
+    property var syncProviders: null
+    property var syncFound: null
+    property var syncConflicts: []
+    property bool syncWorking: false
+    property string syncError: ""
+    property string syncOpenedUrl: ""
     // Preferences from omabib-settings: {ai_cli, ai_desktop}, plus
     // the installed choices the Settings dialog offers.
     property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
@@ -176,7 +179,7 @@ Item {
     readonly property string queryText: query ? query.text.trim() : ""
     readonly property bool filtersActive: !!(authorFilter && (authorFilter.text || yearFilter.text || typeFilter.text || labelFilter.text))
     readonly property bool overflowOpen: overflowMenu.opened
-    readonly property bool modalOpen: settingsDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || repoDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
+    readonly property bool modalOpen: settingsDialog.opened || syncDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
 
     Theme {
         id: ui
@@ -379,7 +382,7 @@ Item {
         opened = true
         if (socket.connected) refresh()
         else socket.connected = true
-        Qt.callLater(function() { if(payload.action==="add"){closeMenus();commandDialog.close();bibFileDialog.close();metadataDialog.close();previewDialog.close();repoDialog.close();projectDialog.close();if(editorDialog.opened)activeEditor().forceActiveFocus();else edit("quick");}else if(root.inPaperTab){root.focusActiveTab()}else{query.forceActiveFocus(); query.selectAll()} })
+        Qt.callLater(function() { if(payload.action==="add"){closeMenus();commandDialog.close();bibFileDialog.close();metadataDialog.close();previewDialog.close();projectDialog.close();if(editorDialog.opened)activeEditor().forceActiveFocus();else edit("quick");}else if(root.inPaperTab){root.focusActiveTab()}else{query.forceActiveFocus(); query.selectAll()} })
     }
     function close() {
         opened = false
@@ -858,7 +861,7 @@ Item {
     }
     function dismiss() {
         close()
-        if (shell && shell.hide) shell.hide("omabib")
+        if (shell && shell.hide) shell.hide("io.github.atomashevic.omabib")
     }
     // Queue formulas ([{key, tex, display}]) that are not rendered or queued yet.
     function ensureMath(items) {
@@ -897,8 +900,8 @@ Item {
         return id
     }
     function refresh() {
-        rpc("get_repo_config",{},function(r){repoSettings=r})
-        rpc("repo_status",{},function(r){repoStatus=r})
+        // Opening Omabib is a good moment to pick up other computers' changes.
+        rpc("sync_nudge",{},function(r){syncStatus=r;if(r.configured)loadSyncConflicts()})
         rpc("list_projects", {}, function(r) { projects = r.projects; updateProjectName() })
         rpc("status", {}, function(r) { referenceCount = r.references })
         search(false)
@@ -910,13 +913,17 @@ Item {
     }
     function relativeTime(iso) { return Format.relativeTime(iso) }
     function syncChipText() {
-        if(root.syncBusy)return "Syncing…"
-        var s=root.repoStatus
-        if(!s || s.configured!==true)return "Set up sync"
-        if(s.last_error)return "Sync issue: "+s.last_error
-        if(s.pending && s.pending.any)return "Changes pending sync"
-        if(s.behind>0)return s.behind+" behind the remote"
-        return "Synced "+root.relativeTime(s.last_success)
+        var s=root.syncStatus||{}
+        var label=s.provider&&s.provider.label&&s.provider.label!=="Folder"?s.provider.label:"the sync folder"
+        if(!s.configured)return "Set up sync"
+        if(s.state==="syncing"||root.syncWorking)return s.progress?s.progress.what+" "+Math.min(s.progress.total,s.progress.done+1)+"/"+s.progress.total:"Syncing…"
+        if(s.state==="auth")return "Reconnect "+label
+        if(s.state==="offline")return "Offline, will sync later"
+        if(s.state==="full")return label+" is full"
+        if(s.state==="error")return "Sync issue: "+(s.message||"unknown")
+        if(s.conflicts>0)return s.conflicts+(s.conflicts===1?" sync change":" sync changes")+" to review"
+        if(s.pending>0)return "Changes waiting to sync"
+        return s.last_success?"Synced "+root.relativeTime(s.last_success):"Synced"
     }
     function updateProjectName() {
         projectName = "All references"
@@ -1143,49 +1150,110 @@ Item {
         edit("import")
         editor.text=bib
     }
-    function syncHistory() {
-        if(syncBusy)return
-        if(!repoSettings.configured){openRepoSettings();return}
-        syncBusy=true
-        syncRequest=rpc("sync_repo",{push:true},function(r){
-            syncBusy=false
-            flash(r.ok===false?("Saved locally, but the push failed: "+(r.push_error||"")):"History synced · "+r.references+" references")
-            rpc("repo_status",{},function(s){repoStatus=s})
-        })
-        if(syncRequest===-1)syncBusy=false
+    // ---- Sync ----
+    function syncButton() {
+        if(!syncStatus.configured || conflictsWaiting())openSync()
+        else syncNow()
     }
-    function openRepoSettings() {
-        rpc("get_repo_config",{},function(r){repoSettings=r;repoPath.text=r.repo_path||"";repoRemote.text=r.remote_url||"";repoBranch.text=r.branch||"main";repoDialog.open();root.checkRepoPrereqs()})
+    function conflictsWaiting() { return (syncStatus.conflicts||0)>0 }
+    function openSync() {
+        closeMenus()
+        commandDialog.close()
+        settingsDialog.close()
+        syncError=""
+        syncDialog.open()
+        rpc("sync_providers",{},function(r){syncProviders=r})
+        rpc("sync_status",{},function(r){syncStatus=r;if(r.connected&&!r.configured)inspectSync();if(r.configured)loadSyncConflicts()})
     }
-    function checkRepoPrereqs() {
-        var args={}
-        if(repoPath.text)args.repo_path=repoPath.text
-        rpc("repo_check",args,function(r){root.repoCheck=r})
+    function onSyncEvent(status) {
+        var was=syncStatus
+        syncStatus=status
+        var c=status.connecting
+        if(c&&c.state==="browser"&&c.url&&c.url!==syncOpenedUrl){syncOpenedUrl=c.url;openExternal(c.url)}
+        if(status.connected&&!status.configured&&!(was&&was.connected))inspectSync()
+        if(status.configured&&(status.conflicts||0)!==(was.conflicts||0))loadSyncConflicts()
+        if(status.state==="idle"&&status.message&&was.state==="syncing"&&!syncDialog.opened)flash(status.message)
     }
-    // [label, ok, detail] rows for the repository dialog's checklist.
-    function repoChecks() {
-        var c=root.repoCheck
-        if(c===undefined||c.git===undefined)return []
-        var rows=[["git",!!c.git,c.git?"":"missing"],["git-lfs",!!c.git_lfs,c.git_lfs?"":"missing"],["gh",!!c.gh_logged_in,c.gh_logged_in?(c.gh_user||"logged in"):(c.gh?"run gh auth login":"missing")]]
-        if(c.path&&c.path.state==="repo")rows.push(["path",true,"existing repo"+(c.path.lfs_tracked?", LFS tracked":", LFS not tracked yet")+(c.path.dirty?", has local edits":"")])
-        else if(c.path&&c.path.state&&c.path.state!=="unspecified")rows.push(["path",c.path.state==="empty"||c.path.state==="missing",c.path.state.replace(/_/g," ")])
-        return rows
+    function onLibraryChanged(m) {
+        if(m.reload)paperCache={}
+        for(var i=0;i<(m.refs||[]).length;i++)delete paperCache[m.refs[i]]
+        libraryRefresh.restart()
     }
-    function repoCheckSummary() {
-        var rows=repoChecks()
-        if(!rows.length)return "Checking…"
-        return rows.map(function(r){return r[0]+(r[1]?" ✓":" ✗")+(r[2]?" "+r[2]:"")}).join("   ·   ")
+    function syncFolderGuess() {
+        var home=Quickshell.env("HOME")||""
+        return home?home+"/Sync":""
     }
-    function createGithubRepo() {
-        if(!repoNewName.text.trim()){root.error="Name the new repository first";return}
-        var args={mode:"create_github",name:repoNewName.text.trim(),branch:repoBranch.text||"main"}
-        if(repoPath.text)args.repo_path=repoPath.text
-        root.repoBusy=true
-        root.rpc("repo_setup",args,function(r){root.repoBusy=false;root.repoSettings=r;repoDialog.close();root.flash("Created and configured "+repoNewName.text.trim());root.checkRepoPrereqs()})
+    function connectSync(provider, arg) {
+        syncError=""
+        syncFound=null
+        var args={provider:provider}
+        if(provider==="folder")args.path=arg
+        if(provider==="rclone")args.remote=arg
+        rpc("sync_connect",args,function(r){syncStatus=r;if(r.connected&&!r.configured)inspectSync()},function(m){syncError=m})
     }
-    function useLocalRepo() {
-        root.repoBusy=true
-        root.rpc("repo_setup",{mode:"local",repo_path:repoPath.text,remote_url:repoRemote.text,branch:repoBranch.text||"main",fix_lfs:true},function(r){root.repoBusy=false;root.repoSettings=r;repoDialog.close();root.flash("Repository settings saved")})
+    function reconnectSync() {
+        var p=syncStatus.provider||{}
+        if(p.kind==="rclone"&&p.remote==="omabib")connectSync(p.provider,"")
+        else syncNow()
+    }
+    function cancelSyncConnect() { rpc("sync_connect_cancel",{},function(r){syncStatus=r}) }
+    function inspectSync() {
+        syncFound=null
+        rpc("sync_inspect",{},function(r){syncFound=r},function(m){syncError=m})
+    }
+    function startSync(mode) {
+        if(syncWorking)return
+        syncWorking=true
+        syncError=""
+        var id=rpc("sync_start",{mode:mode},function(r){
+            root.syncWorking=false
+            root.syncStatus=r
+            root.flash(mode==="new"?"Your library is syncing":"Library synced from "+(r.where||"the storage"))
+            root.paperCache={}
+            root.refresh()
+        },function(m){root.syncWorking=false;root.syncError=m})
+        if(id<0)syncWorking=false
+    }
+    function syncNow() {
+        if(syncWorking)return
+        if(!syncStatus.configured){openSync();return}
+        syncWorking=true
+        var id=rpc("sync_now",{},function(r){
+            root.syncWorking=false
+            if(r.already_running){root.flash("Sync is already in progress");return}
+            root.flash(r.received?"Synced "+r.received+(r.received===1?" change":" changes")+" from "+r.from.join(", "):"Synced")
+        },function(m){root.syncWorking=false;root.flash(m)})
+        if(id<0)syncWorking=false
+    }
+    function stopSync() {
+        rpc("sync_disconnect",{},function(r){root.syncStatus=r;root.syncFound=null;root.syncConflicts=[];root.flash("This computer no longer syncs")},function(m){root.syncError=m})
+    }
+    function downloadAllPdfs() {
+        if(syncWorking)return
+        syncWorking=true
+        rpc("sync_download_all",{},function(r){root.syncWorking=false;root.flash("Downloaded "+r.downloaded+(r.downloaded===1?" PDF":" PDFs"))},function(m){root.syncWorking=false;root.syncError=m})
+    }
+    function loadSyncConflicts() { rpc("sync_conflicts",{},function(r){syncConflicts=r.conflicts}) }
+    function resolveSyncConflict(id, action) {
+        rpc("sync_resolve",{id:id,action:action},function(r){
+            root.loadSyncConflicts()
+            root.rpc("sync_status",{},function(s){root.syncStatus=s})
+            root.libraryRefresh.restart()
+            if(r.ref_id)root.flash("Restored")
+        },function(m){root.syncError=m})
+    }
+    function installRclone() {
+        Quickshell.execDetached(["xdg-terminal-exec","--title=Install rclone","omarchy-pkg-add","rclone"])
+        rclonePoll.start()
+    }
+    function openRcloneConfig() {
+        var conf=syncProviders&&syncProviders.rclone?syncProviders.rclone.config:""
+        Quickshell.execDetached(["xdg-terminal-exec","--title=rclone setup","rclone","config","--config",conf])
+        rclonePoll.start()
+    }
+    function openReferenceById(id) {
+        syncDialog.close()
+        rpc("get_reference",{id:id,include_metadata:false},function(r){root.openInTab(r,false)})
     }
     function choosePdf() {
         var hit=targetRef();if(!hit)return
@@ -1234,8 +1302,8 @@ Item {
         case 16:edit("project");break
         case 17:if(projectId)rpc("export_bibtex",{project_id:projectId},function(r){copy(r.bibtex)});else flash("Choose a project first");break
         case 18:if(projectId)rpc("export_notes",{project_id:projectId},function(r){copy(r.markdown)});else flash("Choose a project first");break
-        case 19:syncHistory();break
-        case 20:openRepoSettings();break
+        case 19:syncButton();break
+        case 20:openSync();break
         case 21:requestDelete();break
         case 22:openCodex();break
         case 23:openCodex(true);break
@@ -1545,9 +1613,12 @@ Item {
             {section:"Needs attention"},
             {key:"missing_abstract",label:"Missing abstract",icon:"text",selected:attentionView==="missing_abstract"},
             {key:"missing_pdf",label:"Missing PDF",icon:"fileMissing",selected:attentionView==="missing_pdf"},
+        ].concat(conflictsWaiting()?[
+            {key:"__sync",label:"Sync: "+syncStatus.conflicts+" to review",icon:"cloudAlert"}
+        ]:[]).concat([
             {separator:true},
             {key:"",label:"Show everything",icon:"library",selected:attentionView===""}
-        ]
+        ])
         attentionMenu.openAt(anchor,"side")
     }
     function openOverflowMenu(anchor) {
@@ -1656,9 +1727,31 @@ Item {
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,repo_open:repoDialog.opened,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncBusy,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
+    // Changes from other computers refresh the list and open papers, gently.
+    Timer {
+        id: libraryRefresh
+        interval: 400
+        onTriggered: {
+            if(!root.opened || !socket.connected)return
+            root.rpc("status",{},function(r){root.referenceCount=r.references})
+            root.search(false)
+            if(root.inPaperTab)root.loadPaper(root.activeTab)
+            else if(root.selected)root.showDetail()
+        }
+    }
+    // While rclone is being installed or configured, notice when it's ready.
+    Timer {
+        id: rclonePoll
+        interval: 3000
+        repeat: true
+        onTriggered: {
+            if(!syncDialog.opened){stop();return}
+            root.rpc("sync_providers",{},function(r){root.syncProviders=r})
+        }
+    }
     Timer { id: debounce; interval: 12; onTriggered: root.search(false) }
     Timer { interval: 1500; running: !socket.connected; repeat: true; onTriggered: socket.connected=true }
     Timer { id: mathTimer; interval: 60; onTriggered: root.flushMath() }
@@ -1668,16 +1761,17 @@ Item {
         connected: true
         onConnectedChanged: {
             if(connected){root.error="";root.connectionEpoch++;Qt.callLater(root.flushMath);Qt.callLater(root.subscribeChats);if(root.opened)root.refresh()}
-            else {for(var id in root.mathRequests)root.mathQueue=root.mathQueue.concat(root.mathRequests[id]);root.mathRequests=({});root.pending=({});root.rpcErrors=({});root.noteSaving=false;root.metadataBusy=false;root.syncBusy=false;root.pdfBusy=false;root.chatSubscribed=false;root.chatSending=false;root.error="Library service disconnected. Reconnecting…"}
+            else {for(var id in root.mathRequests)root.mathQueue=root.mathQueue.concat(root.mathRequests[id]);root.mathRequests=({});root.pending=({});root.rpcErrors=({});root.noteSaving=false;root.metadataBusy=false;root.pdfBusy=false;root.chatSubscribed=false;root.chatSending=false;root.error="Library service disconnected. Reconnecting…"}
         }
         parser: SplitParser {
             onRead: data => {
                 try {
                     var message=JSON.parse(data)
                     if(message.event==="chat"){root.onChatMessage(message);return}
+                    if(message.event==="sync"){root.onSyncEvent(message.status);return}
+                    if(message.event==="library"){root.onLibraryChanged(message);return}
                     var callback=root.pending[message.id]
                     delete root.pending[message.id]
-                    if(message.id===root.syncRequest)root.syncBusy=false
                     if(message.id===root.metadataRequest)root.metadataBusy=false
                     if(message.id===root.pdfRequest)root.pdfBusy=false
                     if(message.id===root.noteSaveRequest)root.noteSaving=false
@@ -1710,7 +1804,7 @@ Item {
         implicitHeight: 840
         minimumSize: Qt.size(760, 520)
         // Closed from Hyprland (Super+W, a close button): tell the shell, as dev-gallery does.
-        onVisibleChanged: if(!visible && root.opened){root.close();if(root.shell && root.shell.hide)root.shell.hide("omabib")}
+        onVisibleChanged: if(!visible && root.opened){root.close();if(root.shell && root.shell.hide)root.shell.hide("io.github.atomashevic.omabib")}
         Rectangle {
             id: card
             anchors.fill: parent
@@ -1810,7 +1904,7 @@ Item {
             }
 
             MenuPopup { id: projectMenu; theme: ui; menuWidth: ui.space(260); onTriggered: key => { if(key==="__create")root.edit("project");else root.chooseProject(root.projects.findIndex(function(p){return p.id===key})+1) } }
-            MenuPopup { id: attentionMenu; theme: ui; onTriggered: key => root.setAttentionView(key) }
+            MenuPopup { id: attentionMenu; theme: ui; onTriggered: key => key==="__sync" ? root.openSync() : root.setAttentionView(key) }
             MenuPopup {
                 id: overflowMenu
                 theme: ui
@@ -1876,7 +1970,7 @@ Item {
                 }
                 RowLayout {
                     Layout.fillWidth:true;spacing:ui.space(8)
-                    BibButton{variant:"ghost";iconName:"branch";text:"History repository…";onClicked:{settingsDialog.close();root.openRepoSettings()}}
+                    BibButton{variant:"ghost";iconName:"cloudSync";text:"Sync…";onClicked:root.openSync()}
                     Item{Layout.fillWidth:true}
                     BibButton{variant:"primary";text:"Done";onClicked:settingsDialog.close()}
                 }
@@ -2039,30 +2133,22 @@ Item {
             Shortcut {sequence:"Alt+Up";enabled:bibFileDialog.opened;onActivated:bibFileDialog.go(folders.parentFolder.toString())}
         }
         BibDialog {
-            id:repoDialog;title:"History repository";iconName:"branch";anchors.centerIn:parent;width:Math.min(720,window.width-60);modal:true
+            id:syncDialog;title:"Sync";iconName:"cloudSync";anchors.centerIn:parent
+            width:Math.min(640,window.width-60);height:Math.min(syncScroll.contentHeight+ui.space(130),window.height-60);modal:true
+            onClosed:{rclonePoll.stop();root.syncError=""}
             ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(8)
-                Flow {
-                    Layout.fillWidth:true;spacing:ui.space(6)
-                    Repeater {
-                        model:root.repoChecks()
-                        Chip {required property var modelData;theme:ui;icon:modelData[1]?"check":"alert";iconColor:modelData[1]?ui.accentText:ui.urgent;text:modelData[0]+(modelData[2]?" · "+modelData[2]:"")}
-                    }
-                    BibLabel {visible:root.repoChecks().length===0;text:"Checking git, git-lfs and gh…";color:ui.dim}
+                anchors.fill:parent;spacing:ui.space(10)
+                ScrollView {
+                    id:syncScroll
+                    Layout.fillWidth:true;Layout.fillHeight:true
+                    contentWidth:availableWidth
+                    SyncPanel {objectName:"syncPanel";width:syncScroll.availableWidth;theme:ui;app:root}
                 }
-                SectionLabel {theme:ui;text:"Checkout";Layout.topMargin:ui.space(6)}
-                BibLabel{text:"Path: an existing checkout, or where to create a new one";color:ui.muted}
-                RowLayout{Layout.fillWidth:true;spacing:ui.space(6);BibField{id:repoPath;Layout.fillWidth:true;placeholderText:"/absolute/path/to/history";onEditingFinished:root.checkRepoPrereqs()}BibButton{text:"Check";iconName:"refresh";onClicked:root.checkRepoPrereqs()}}
-                BibLabel{text:"Branch";color:ui.muted}
-                BibField{id:repoBranch;Layout.fillWidth:true;text:"main"}
-                BibLabel{text:root.error;visible:text!=="";color:ui.urgent;Layout.fillWidth:true}
-                SectionLabel {theme:ui;text:"New private GitHub repository";Layout.topMargin:ui.space(8)}
-                RowLayout{Layout.fillWidth:true;spacing:ui.space(6);BibField{id:repoNewName;Layout.fillWidth:true;placeholderText:"omabib-history"}BibButton{variant:"primary";iconName:"plus";text:root.repoBusy?"Working…":"Create";enabled:!root.repoBusy&&root.repoCheck.gh_logged_in===true;onClicked:root.createGithubRepo()}}
-                SectionLabel {theme:ui;text:"Or use an existing checkout";Layout.topMargin:ui.space(8)}
-                BibLabel{text:"Remote URL (origin), blank keeps the checkout's own";color:ui.muted}
-                BibField{id:repoRemote;Layout.fillWidth:true;placeholderText:"https://github.com/owner/repository.git"}
-                BibLabel{text:"Sync exports the local library and pushes it. Git LFS is set up automatically when it isn't tracking PDFs yet. Remote metadata is never merged into SQLite.";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
-                RowLayout {Layout.fillWidth:true;Layout.topMargin:ui.space(6);spacing:ui.space(8);Item{Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";onClicked:repoDialog.close()}BibButton{variant:"primary";text:root.repoBusy?"Working…":"Use this checkout";enabled:!root.repoBusy;onClicked:root.useLocalRepo()}}
+                RowLayout {
+                    Layout.fillWidth:true;spacing:ui.space(8)
+                    Item{Layout.fillWidth:true}
+                    BibButton{variant:"primary";text:"Done";onClicked:syncDialog.close()}
+                }
             }
         }
         BibDialog {

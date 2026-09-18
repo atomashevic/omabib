@@ -59,7 +59,7 @@ ScrollPane {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: row.modelData.exists ? Format.dirname(row.modelData.path, root.app.homeDir) : "Missing on this computer · restore it from the history archive"
+                        text: row.modelData.exists ? Format.dirname(row.modelData.path, root.app.homeDir) : "Not on this computer · Open PDF downloads it from sync"
                         color: row.modelData.exists ? root.theme.muted : root.theme.accentText
                         font.family: root.theme.mono
                         font.pixelSize: root.theme.small
@@ -83,7 +83,7 @@ ScrollPane {
         Item { Layout.fillWidth: true }
         Text {
             visible: root.attachments.length > 0
-            text: "Removing a link keeps the file and its history"
+            text: "Removing a link keeps the file"
             color: root.theme.dim
             font.family: root.theme.mono
             font.pixelSize: root.theme.small

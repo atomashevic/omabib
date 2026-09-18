@@ -7,8 +7,8 @@ def state():return json.loads(run('omarchy-shell','omabib','state'))
 def sample(q, opening=False):
  start=time.perf_counter()
  if opening:
-  run('omarchy-shell','shell','hide','omabib')
-  run('omarchy-shell','shell','summon','omabib',json.dumps({'socket_path':a.socket,'query':q}))
+  run('omarchy-shell','shell','hide','io.github.atomashevic.omabib')
+  run('omarchy-shell','shell','summon','io.github.atomashevic.omabib',json.dumps({'socket_path':a.socket,'query':q}))
  else:run('omarchy-shell','omabib','setQuery',q)
  for _ in range(100):
   s=state()
@@ -25,4 +25,4 @@ try:
  def p95(xs):return sorted(xs)[int((len(xs)-1)*.95)]
  report={'ordinary_frame_p95_ms':p95(ordinary),'typo_frame_p95_ms':p95(typo),'warm_window_frame_p95_ms':p95(opening),'command_to_observed_ready_p95_ms':p95(observed),'query_samples':len(ordinary)+len(typo),'opening_samples':len(opening),'measurement':'QQuickWindow.frameSwapped; query changes supplied through the normal QML property path, not a physical keyboard. Wall observation includes CLI/poll overhead.'}
  a.report.write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
-finally:run('omarchy-shell','shell','hide','omabib')
+finally:run('omarchy-shell','shell','hide','io.github.atomashevic.omabib')

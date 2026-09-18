@@ -61,14 +61,9 @@ with tempfile.TemporaryDirectory(prefix='omabib-project-ui-') as dirname:
         assert overview['available'] and not overview['cached'] and overview['body'].startswith('# Research Report:')
         again=call('get_alphaxiv_overview',{'id':ids['fixture_town']})
         assert again['cached'] and again['body']==overview['body']
-        snapshot=runpy.run_path(str(Path(__file__).with_name('history_snapshot.py')))
-        archive=directory/'history';archive.mkdir()
-        snapshot['snapshot'].__globals__['REPO']=archive
-        snapshot['snapshot'](db)
-        assert overview['body'] in (archive/'metadata'/'alphaxiv'/(ids['fixture_town']+'.md')).read_text()
-        print('PASS: first-party AlphaXiv overview fetched, cached, and exported',flush=True)
+        print('PASS: first-party AlphaXiv overview fetched and cached',flush=True)
 
-        command('omarchy-shell','shell','summon','omabib',json.dumps({'socket_path':str(sock),'query':'Project beta paper','project_id':''}))
+        command('omarchy-shell','shell','summon','io.github.atomashevic.omabib',json.dumps({'socket_path':str(sock),'query':'Project beta paper','project_id':''}))
         wait(lambda:state()['results']==['fixture_beta'] and state()['project_select_index']==0)
         command('wtype','-k','Tab')
         wait(lambda:state()['expanded'] and state()['selected']==ids['fixture_beta'])
@@ -117,10 +112,10 @@ with tempfile.TemporaryDirectory(prefix='omabib-project-ui-') as dirname:
             command('grim','-g',geometry,screenshot)
         print('PASS: installed popup displays the cached AlphaXiv AI Overview',flush=True)
     finally:
-        command('omarchy-shell','shell','hide','omabib')
-        command('omarchy-shell','shell','summon','omabib',json.dumps({'socket_path':REAL_SOCKET,'query':initial['query'],'project_id':initial['project_id']}))
+        command('omarchy-shell','shell','hide','io.github.atomashevic.omabib')
+        command('omarchy-shell','shell','summon','io.github.atomashevic.omabib',json.dumps({'socket_path':REAL_SOCKET,'query':initial['query'],'project_id':initial['project_id']}))
         wait(lambda:not state()['search_pending'] and not state()['error'] and 'fixture_town' not in state()['results'])
-        command('omarchy-shell','shell','hide','omabib')
+        command('omarchy-shell','shell','hide','io.github.atomashevic.omabib')
         service.terminate();service.wait(timeout=5)
         if original_window:
             command('hyprctl','dispatch',f'hl.dsp.focus({{ window = "address:{original_window}" }})')

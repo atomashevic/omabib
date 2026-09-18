@@ -79,7 +79,16 @@ var GLYPHS = {
   history: 0xF02DA,       // history — earlier chats
   steps: 0xF0756,         // format-list-checks — show the agent's steps
   brain: 0xF09D1,         // brain — the chat model
-  speedometer: 0xF04C5    // speedometer — reasoning effort
+  speedometer: 0xF04C5,   // speedometer — reasoning effort
+  googleDrive: 0xF02B6,   // google-drive
+  dropbox: 0xF01E3,       // dropbox
+  onedrive: 0xF03CA,      // microsoft-onedrive
+  folderSync: 0xF0D0C,    // folder-sync-outline — a synced folder
+  cloudSync: 0xF12D6,     // cloud-sync-outline — sync
+  cloudOff: 0xF0164,      // cloud-off-outline — offline
+  cloudAlert: 0xF09E0,    // cloud-alert — sync needs attention
+  laptop: 0xF0322,        // laptop — a computer in the library
+  server: 0xF048D         // server-network — other rclone storage
 }
 
 function has(name) {

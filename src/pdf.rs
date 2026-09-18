@@ -422,7 +422,7 @@ impl Worker {
 }
 
 /// `pdf_open`: the reference's PDF (a given attachment, or the first local one,
-/// restored from history or downloaded) with its page sizes and outline.
+/// downloaded from sync storage or found online) with its page sizes and outline.
 pub fn open(lib: &Library, a: &Value) -> Result<Value> {
     let ref_id = required(a, "ref_id")?;
     let (path, attachment_id, source) = if let Some(attachment) = a["attachment_id"].as_str() {
