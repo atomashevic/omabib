@@ -1,4 +1,4 @@
-# Omabib --- bibliography management optimized for fast agent worfklows
+# Omabib - bibliography management optimized for fast agent worfklows
 
 A fast native Omarchy alternative to Zotero with first-class agent support.
 
