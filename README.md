@@ -1,6 +1,6 @@
-# Omabib
+# Omabib - bibliography management optimized for fast agent worfklows
 
-A native Omarchy bibliography picker with a Rust service, SQLite search, and project-aware research notes.
+A fast native Omarchy alternative to Zotero with first-class agent support.
 
 ## Supported setup
 
