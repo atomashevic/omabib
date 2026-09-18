@@ -1,31 +1,138 @@
-# Omabib - bibliography management optimized for fast agent worfklows
+# Omabib - bibliography management optimized for fast agent workflows
 
 A fast native Omarchy alternative to Zotero with first-class agent support.
 
-## Supported setup
+Free and open source. Search your library, read papers, capture ideas, and put your own agent to work with the references and notes you choose.
 
-Omabib currently supports **Omarchy with its Quickshell plugin system** and **Codex CLI or ChatGPT Desktop in Codex mode** (or Claude Code and Claude Desktop) for reference-aware chats. PDFs open in Omabib's own reader tabs, rendered with MuPDF, so no external PDF viewer is needed. Other desktop shells and ChatGPT modes have not been tested. The ChatGPT button opens a draft in Desktop's Codex mode with **GPT-5.6 Sol Medium** selected. Press Send to start that chat.
+## Why Omabib?
 
-Install Rust/Cargo, clang and make (MuPDF is compiled from source during the build), Git, and Codex CLI. ChatGPT Desktop is optional. Then build and install the plugin and service:
+- **Fast, keyboard-first research.** Search titles, authors, citation keys, abstracts, and notes from a native desktop window, with typo-tolerant search and a command palette.
+- **Bring your own agent.** Use Codex or Claude Code with your existing account. Chat beside the paper, in a terminal, or through supported desktop apps. Omabib itself requires no subscription; agent access uses your provider's account and billing.
+- **First-class agent access.** The built-in MCP server lets agents search references, retrieve PDFs, read notes and figure clips, and save project assessments when asked. Batch retrieval keeps multi-paper workflows efficient.
+- **Read, clip, and ask.** Open PDFs in reader tabs, select a passage to discuss, or clip a figure, table, or equation into a Markdown note with its page reference.
+- **Notes that know the project.** Keep shared bibliographic facts alongside separate project-specific notes, evidence, and assessments.
+- **Your library, locally stored.** References and notes live in SQLite, with BibTeX import and export. Optional sync carries your library across computers through storage you control.
+- **Free software.** Omabib is licensed under AGPL-3.0-or-later. The bibliography, PDF reader, and notes work without an AI account.
+
+[Install](#install) · [First run](#first-run) · [AI setup](#optional-ai-setup) · [Sync](#sync) · [Update](#update) · [Troubleshooting](#troubleshooting)
+
+## Requirements
+
+- **Omarchy with its Quickshell plugin system** and systemd user services. Other desktop shells are not currently supported by the installer.
+- **Rust and Cargo** with a toolchain compatible with the locked dependencies (Typst requires Rust 1.92 or newer).
+- **Git, a C/C++ build toolchain, clang, and make.** MuPDF is compiled from source for the built-in PDF reader; SQLite is bundled.
+- An internet connection for the initial build and online metadata/PDF retrieval.
+
+AI features additionally require a supported agent installed and signed in: Codex CLI or Claude Code for in-app and terminal chat, or ChatGPT Desktop in Codex mode or Claude Desktop for desktop chat. You can use the bibliography and PDF reader without an AI agent.
+
+## Install
+
+Run these commands from a terminal in your Omarchy desktop session.
+
+### 1. Install build dependencies
+
+On Omarchy (Arch Linux):
+
+```bash
+sudo pacman -S --needed base-devel clang git rust
+rustc --version
+cargo --version
+```
+
+If you already manage Rust with rustup, keep that installation and omit `rust` from the package command. Ensure its active toolchain meets the requirement above.
+
+### 2. Clone and install
 
 ```bash
 git clone https://github.com/atomashevic/omabib.git
 cd omabib
 ./scripts/install.sh
-omarchy plugin validate "$HOME/.config/omarchy/plugins/omabib"
-omabib status
 ```
 
-The installer copies the Rust CLI, user service, Quickshell plugin, launch helpers, and Omabib skill into user-owned locations. It enables the user service and plugin. It does not change Hyprland keybindings. After checking that the keys are free or intentionally replacing them, add the following to `~/.config/hypr/bindings.lua`:
+Run the installer as your normal user. It builds with `cargo build --release --locked`; the first build can take several minutes. It installs:
+
+| Component | Default location |
+|---|---|
+| CLI and launch helpers | `~/.local/bin/` |
+| Quickshell plugin | `~/.config/omarchy/plugins/omabib/` |
+| User service | `~/.config/systemd/user/omabib.service` |
+| Omabib skill for Codex | `~/.codex/skills/omabib/` |
+
+The installer enables and restarts the user service, reloads plugins, and enables Omabib. It leaves keyboard shortcut configuration to you.
+
+### 3. Verify and open
+
+```bash
+systemctl --user is-active omabib.service
+omarchy plugin validate "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/omabib"
+omabib status
+omabib open
+```
+
+The service should report `active`, and `omabib status` should return your library status. If `omabib` is not found, ensure `~/.local/bin` is on your shell's `PATH`; you can also run `~/.local/bin/omabib` directly.
+
+## First run
+
+The library starts empty. Open **Add** in the left rail, paste a DOI, arXiv ID, paper URL, or BibTeX entry, review the preview, and choose **Import**. To import an existing bibliography:
+
+```bash
+omabib import /absolute/path/to/references.bib
+```
+
+Search by title, author, citation key, or note text. **Enter** opens a paper's PDF or reference link; **Tab** opens its details, and **Ctrl+K** opens the command palette. Use **Attach PDF** to link a local file, or **Open PDF** to look for an open-access copy. Create a project from the command palette to group papers and keep project-specific notes.
+
+### Optional keyboard shortcuts
+
+Check for existing bindings before adding these to `~/.config/hypr/bindings.lua` on Omarchy installations using Lua configuration:
 
 ```lua
 o.bind("SUPER + B", "Omabib bibliography", "omabib open")
 o.bind("SUPER + ALT + B", "Omabib: add reference", "omabib add")
 ```
 
-Omabib is an ordinary Hyprland window titled "Omabib": Super+B shows and focuses it, focuses it when it is behind another window, and hides it when it already has focus. Super+W closes it like any other window. Earlier versions bound Super+W to `omabib-close-first` and Super+N to `omabib-quick-note`; the first is now a plain window close kept for compatibility, and the second no longer exists, so remove that binding.
+Reload and check the configuration:
 
-Run `hyprctl reload` and `hyprctl configerrors`, then open Omabib with Super+B. If your shell keeps an older cached plugin, run `omarchy restart shell` when no Omabib editor is open. To enable Codex MCP separately, use the private companion repository [omabib-mcp](https://github.com/atomashevic/omabib-mcp), or run `codex mcp add omabib --env "OMABIB_SOCKET=$XDG_RUNTIME_DIR/omabib/socket" -- "$HOME/.local/bin/omabib" mcp`.
+```bash
+hyprctl reload
+hyprctl configerrors
+```
+
+**Super+B** shows and focuses Omabib, or hides it when already focused. **Super+Alt+B** opens the add box. **Super+W** closes the window through the normal desktop binding. You can always launch it with `omabib open` without adding shortcuts.
+
+## Optional AI setup
+
+Open **Settings** using the cog at the bottom of the rail. Choose your installed agent under **Terminal chat** and **Desktop chat**. Terminal chat also needs `xdg-terminal-exec` available on `PATH`. In-app chat is available in a paper's **Chat** tab or the PDF reader's side pane.
+
+To expose the library to an independently launched Codex session, register the bundled MCP server:
+
+```bash
+codex mcp add omabib --env "OMABIB_SOCKET=$XDG_RUNTIME_DIR/omabib/socket" -- "$HOME/.local/bin/omabib" mcp
+```
+
+Restart or reconnect the MCP client after registration or updates. Omabib's own Codex and Claude Code launch helpers supply a per-launch MCP configuration pointing to the current library.
+
+For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then restart Claude Desktop. This merges the MCP entry into its configuration and saves a backup. ChatGPT Desktop opens a prepared draft in Codex mode; press **Send** to start the conversation. See [Chat](#chat) for context sharing, permissions, and saved conversations.
+
+## Update
+
+From your Omabib checkout, review any local changes before updating:
+
+```bash
+git status --short
+git pull --ff-only
+./scripts/install.sh
+omabib status
+```
+
+Commit or otherwise preserve local changes before pulling. The installer updates the application and restarts its service. See [Backup, restore and removal](#backup-restore-and-removal) to back up your library before an update.
+
+## Troubleshooting
+
+- **Build fails:** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
+- **Service is unavailable:** inspect `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`. After resolving the reported issue, run `systemctl --user restart omabib.service` and `omabib status`.
+- **Installer reports that omarchy-shell is not responding:** run it from an active Omarchy desktop session. Restore the shell, then rerun `./scripts/install.sh` to complete installation.
+- **The UI still shows an older version:** close any open Omabib editor, unlock the desktop if needed, then run `omarchy restart shell`.
+- **An unmanaged plugin already exists:** the installer refuses to overwrite an Omabib plugin directory without its `.omabib-managed` marker. Inspect and back up that directory, then move it aside before rerunning the installer.
 
 ## Typical uses
 
@@ -39,7 +146,7 @@ Run `hyprctl reload` and `hyprctl configerrors`, then open Omabib with Super+B. 
 
 Open **Super+B** on the configured desktop, or run `omabib open`. An empty search field shows the newest additions first; **Ctrl+S** switches between date-added and citation-key order. Type a title, author, abstract term, citation key, or note fragment. Enter opens the PDF in a reader tab, or the reference link if there's no PDF. Ctrl+O opens the PDF specifically (downloading an open-access copy first if none is attached); Ctrl+U opens the reference's link/DOI specifically, skipping any attached PDF. Set `OMABIB_PDF_SHORTCUT` in the shell launch environment to change the PDF shortcut from Ctrl+O. Tab opens details. Ctrl+K opens actions. Esc hides the window; Q also hides it while the search field is empty, so searches can still contain q. Opening a link focuses the browser.
 
-The window has three panes. The **rail** on the left switches between all references (A–Z), recently added, projects and **Needs attention** (references missing an abstract or a PDF); below them are Add, Sync (its dot marks pending changes or a sync issue), the history repository and Actions. The **list** shows each result's title, authors and year with badges for PDF, AI overview, notes and a missing abstract; the filter button opens author, year, type and label filters. The **detail pane** has an icon toolbar (Open PDF, Open link, New note, AI summary, Codex, ChatGPT, then **⋯** for Fill metadata, Edit BibTeX, Assign to project, Attach PDF, copy formats, Open PDF in another app and Delete) and five sections: **Overview** (abstract and metadata), **AI summary** (arXiv papers only), **Notes**, **Files** and **BibTeX**. Ctrl+1–5 select a section and Ctrl+Tab cycles through them. Titles, abstracts, notes and the AI summary use a proportional reading font, Noto Sans by default; set `OMABIB_READING_FONT` in the shell launch environment to change it. The abstract and the AI summary are selectable: drag to select across paragraphs and press Ctrl+C, or use their **Copy** buttons (the AI summary's copies the Markdown).
+The window has three panes. The **rail** on the left switches between all references (A–Z), recently added, projects and **Needs attention** (references missing an abstract or a PDF); below them are Add, Sync (sync now; its dot marks changes waiting, something to review or a sync issue), Sync settings and Actions. The **list** shows each result's title, authors and year with badges for PDF, AI overview, notes and a missing abstract; the filter button opens author, year, type and label filters. The **detail pane** has an icon toolbar (Open PDF, Open link, New note, AI summary, Codex, ChatGPT, then **⋯** for Fill metadata, Edit BibTeX, Assign to project, Attach PDF, copy formats, Open PDF in another app and Delete) and five sections: **Overview** (abstract and metadata), **AI summary** (arXiv papers only), **Notes**, **Files** and **BibTeX**. Ctrl+1–5 select a section and Ctrl+Tab cycles through them. Titles, abstracts, notes and the AI summary use a proportional reading font, Noto Sans by default; set `OMABIB_READING_FONT` in the shell launch environment to change it. The abstract and the AI summary are selectable: drag to select across paragraphs and press Ctrl+C, or use their **Copy** buttons (the AI summary's copies the Markdown).
 
 ## Settings
 
@@ -84,9 +191,9 @@ Paste a DOI, an arXiv ID, a paper's URL, several of those separated by spaces/co
 
 For an arXiv paper, the **AI summary** tab checks alphaXiv for a published overview, caches it on first open, and lays the report out for reading: numbered section headings, lists, quotes and tables, with a strip that jumps between sections. Later opens use the local cache. alphaXiv reports open either with a `# Research Report:` title or with a sentence of prose before `### 1. Authors`; both are accepted, and anything served as HTML is rejected. When no overview exists the tab says so and links to the paper on alphaXiv; the reference is unchanged.
 
-**Delete…** in the detail pane's **⋯** menu (or action **21** in Ctrl+K) previews the exact citation key and counts of notes, attachment links, project links, and cached summaries before confirmation. Deletion removes the reference and those library records atomically. PDF files stay on disk, and the history repository is not changed by this action. The MCP tools `delete_reference_preview` and `delete_reference` expose the same reviewed operation; deletion requires the current revision and note/attachment counts from the preview, the exact citation key, and an idempotency key.
+**Delete…** in the detail pane's **⋯** menu (or action **21** in Ctrl+K) previews the exact citation key and counts of notes, attachment links, project links, and cached summaries before confirmation. Deletion removes the reference and those library records atomically. PDF files stay on disk. With sync on, the deletion reaches your other computers. The MCP tools `delete_reference_preview` and `delete_reference` expose the same reviewed operation; deletion requires the current revision and note/attachment counts from the preview, the exact citation key, and an idempotency key.
 
-Notes are Markdown. The note editor previews inline: every block renders except the one being edited, which shows its source; click a block, or move past its first or last line with ↑/↓, to edit it. Enter continues a list, and a second Enter (or Enter on an empty list item) starts a new block. Backspace at the start of a block joins it to the one above. The toolbar inserts headings, emphasis, quotes, lists, code and math; on an empty line code and math become fenced blocks. Inline `$…$` or `\(…\)` and display `$$…$$` or `\[…\]` math is rendered by the service (`render_math`) and previewed under the block while you edit it; `$5 and $10` stays text, and `\$` is a literal dollar. Fenced code blocks show their language. Note cards and the AI summary use the same renderer. Notes are stored as plain Markdown, so search, MCP and history exports see the source.
+Notes are Markdown. The note editor previews inline: every block renders except the one being edited, which shows its source; click a block, or move past its first or last line with ↑/↓, to edit it. Enter continues a list, and a second Enter (or Enter on an empty list item) starts a new block. Backspace at the start of a block joins it to the one above. The toolbar inserts headings, emphasis, quotes, lists, code and math; on an empty line code and math become fenced blocks. Inline `$…$` or `\(…\)` and display `$$…$$` or `\[…\]` math is rendered by the service (`render_math`) and previewed under the block while you edit it; `$5 and $10` stays text, and `\$` is a literal dollar. Fenced code blocks show their language. Note cards and the AI summary use the same renderer. Notes are stored as plain Markdown, so search, MCP and sync use the source.
 
 Each note card in the Notes tab has edit and delete icons. Its confirmation shows the project and a note excerpt. Deleting one note removes its saved image clip and revisions but keeps the reference and its other notes. The MCP tools `delete_note_preview` and `delete_note` provide the same operation with a current note revision, matching reference ID, and idempotency key.
 
@@ -110,19 +217,7 @@ omabib add --dry-run 10.1145/x 10.1145/y                # preview several at onc
 
 Without a PDF or identifier, `omabib add` opens the add box in the Omabib window. `add --no-pdf` skips the automatic download. The JSON operation is `add_reference` (also an MCP tool); `preview_entry` previews without writing, and is what the popup calls before Import. `identify_pdf` reads a PDF's first two pages for a DOI/arXiv ID, or falls back to a Crossref title search using its Title metadata.
 
-## Build and install
-
-Requires Rust, a C compiler, Omarchy's Quickshell shell, and systemd user services. Cargo.lock pins dependencies; SQLite with FTS5 is bundled.
-
-```bash
-cargo build --release --locked
-./scripts/install.sh
-codex mcp add omabib -- "$HOME/.local/bin/omabib" mcp
-```
-
-The installer manages the Omabib binary, plugin, service, skill, and launch helpers. It does not replace existing Hyprland shortcuts, and it removes the old Zathura note helpers (`omabib-quick-note`, `omabib-capture-note`) from `~/.local/bin`. On another machine, inspect available bindings before adding Super+B.
-
-After an update, the plugin normally reloads through `omarchy-shell shell rescanPlugins`. If Quickshell retains cached component code, `omarchy restart shell` loads the new version. Do not restart while the desktop is locked.
+## Data locations
 
 Data is stored at `$XDG_DATA_HOME/omabib/library.db`, defaulting to `~/.local/share/omabib/library.db`. The socket is `$XDG_RUNTIME_DIR/omabib/socket`. `OMABIB_DB` and `OMABIB_SOCKET` override these paths for isolated libraries. The UI uses `OMABIB_SOCKET` from its process environment and also accepts `socket_path` in its summon payload for isolated testing.
 
@@ -211,7 +306,6 @@ Then remove only the Omabib binary, user service, plugin directory, skill, and i
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 python scripts/test_transport.py target/release/omabib
-python scripts/test_history_integration.py target/release/omabib
 omarchy plugin validate plugin
 python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary target/release/omabib
 ```
@@ -220,40 +314,50 @@ python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary tar
 
 The UI components render offscreen without a desktop: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml` loads them against stub `qs.Commons`/`qs.Ui` modules and a stand-in for `App.qml`, and saves screenshots of every tab to `/tmp/omabib-qml-shots` (create it first). The OpenGL backend is needed for the check of theme page colors; without it Qt renders in software, skips shaders, and that check is skipped with a warning. `node scripts/test_overview_text.js [overview.md]` tests the AI summary's Markdown renderer, optionally on a real overview file, and `node scripts/test_markdown.js` tests the note features (source line ranges, math, code blocks), and `node scripts/test_chat_text.js` the chat's tool labels, approval text and page links.
 
-V1 excludes automatic multi-computer metadata merging, embeddings, and remote ChatGPT connectivity. `identify_pdf` reads a PDF's first two pages to recognize an identifier or search by title, but that text is never stored or indexed for search — full-text PDF indexing and annotation remain out of scope.
+V1 excludes automatically merging duplicate references, embeddings, and remote ChatGPT connectivity. `identify_pdf` reads a PDF's first two pages to recognize an identifier or search by title, but that text is never stored or indexed for search — full-text PDF indexing and annotation remain out of scope.
 
-## Git history and PDF archive
+## Sync
 
-The configured private repository is [atomashevic/omabib-history](https://github.com/atomashevic/omabib-history), checked out at `~/.local/share/omabib/history`. It stores structured reference metadata, project relationships, Markdown notes, note revisions, and LFS-managed PDF copies. The live SQLite database stays outside Git.
+Sync keeps the library the same on all your computers, through storage you already have. Open it from the rail (the cloud button), Settings → **Sync…**, or Ctrl+K action **20**.
 
-Run `omabib-history` to save a local snapshot commit, or `omabib-history --push` to also upload it. Snapshots and pushes are explicit, not scheduled. The command copies linked PDFs; PDFs placed directly in the repository can also be committed, but must be linked in Omabib to establish a reference association. There were 1,583 references, no notes and no linked PDFs at repository creation.
+1. **Choose where:** Google Drive, Dropbox, OneDrive, a folder on this computer (kept in sync by Syncthing, Nextcloud or Dropbox's own app), or **Other**, any storage rclone reaches (S3, R2, B2, WebDAV…).
+2. **Sign in:** the cloud choices go through [rclone](https://rclone.org). If it isn't installed, **Install rclone** opens a terminal running `omarchy-pkg-add rclone`. Omabib opens the provider's sign-in page; after **Allow**, the dialog continues by itself. Dropbox's and OneDrive's pages name rclone, the tool Omabib uses to reach them. Google Drive requires your own OAuth desktop client for this source build; see the credential setup below. Its requested access is limited to files created by the app.
+3. **Start or join:** the first computer uploads its library. On the next one, Omabib shows what it found ("1,617 references, 13 notes, 17 PDFs, last synced from laptop 4 minutes ago"). An empty library joins with **Use it**. One with references offers **Merge**, which keeps everything from both, or **Replace this computer's library**. Either way the local database is backed up first to `backups/before-sync-*.db`, and the three newest backups are kept.
 
-## Repository setup
+After that, sync runs in the service:
+- **When:** about 30 seconds after you stop editing, every 5 minutes, when the window opens, and when you press Sync.
+- **Seeing changes:** changes from other computers appear in the open window.
+- **The Sync button:** reads "Synced 2 min ago", "Changes waiting to sync", "Offline, will sync later", "Reconnect Google Drive" or "N sync changes to review".
 
-`omabib repo check [PATH]` reports whether `git`, `git-lfs` and `gh` are installed, whether `gh` is logged in, and — with a path — its state (missing, empty, not a Git repository, or a repository with its LFS/branch/origin/dirty status). Use it, or the **Repo** dialog's live summary, before setting one up.
+**What syncs:**
+- **Records:** references, notes (with their clips), projects and project links, attachments and cached AI overviews.
+- **PDFs:** every PDF is uploaded. Cloud uploads group PDFs and clips into batches of eight with up to four concurrent transfers in one rclone process. Failed batches remain queued for retry. Other computers download one the first time it's opened (**Open PDF**), or all at once with **Download all** in the Sync dialog.
+- **Stays on each computer:** chats, note revision history, and each computer's own file paths.
+- **Storage layout:** a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files you can open from a phone. The library file itself never leaves the computer.
+
+**When edits meet:**
+- **Different fields or records:** everything merges. For the same field, the later edit wins on every computer.
+- **A note edited on two computers:** the later edit wins everywhere. The other computer keeps its version as a second note, and **Needs attention → Sync** offers **Keep both**, **Keep mine** or **Keep theirs**.
+- **Deleted on one computer after you changed it on another:** the deletion wins, and your changes are kept for **Restore**.
+- **The same paper added on two computers before syncing:** both references stay. Only one shows the DOI, the pair is pointed out, and you delete the one you don't need.
+- **Two papers with the same citekey:** one gets a suffix.
+- **Projects with the same name:** they become one.
+
+**Stop syncing this computer** in the Sync dialog leaves its library as it is.
 
 ```bash
-omabib repo init NAME [--path PATH] [--branch main]     # create a new private GitHub repo
-omabib repo use PATH [--remote URL] [--branch main] [--fix-lfs]   # adopt an existing checkout
-omabib repo show
+omabib sync                             # sync now; prints what was sent and received
+omabib sync status
+omabib sync connect dropbox|onedrive|drive   # opens the sign-in page and waits
+omabib sync connect folder ~/Sync
+omabib sync connect rclone REMOTE       # a remote in Omabib's rclone config
+omabib sync start new|join|merge|replace
+omabib sync disconnect
 ```
 
-`repo init` requires `gh` to be installed and logged in (`gh auth login`); it scaffolds the checkout (`.gitattributes`/`.gitignore` for Git LFS, a README, `tools/snapshot.py`), makes the initial commit, and creates the GitHub repository from it. `repo use --fix-lfs` runs `git lfs install --local` and adds the LFS tracking lines itself when the checkout doesn't have them yet, rather than only refusing. Configuration is stored beside the database in `history-config.json`. The desktop **Repo** dialog offers both paths with the same live checks.
+Omabib keeps its own rclone config at `~/.config/omabib/rclone.conf`, apart from yours. Sync replaced the Git history export of earlier versions. An old history checkout and its GitHub repository are left as they were.
 
-## Sync and status
-
-Use the header status chip in the library tab (or action **19**) to sync: export, commit and push the current library. It reads "Set up sync", "✓ Synced 2h ago", "● Changes pending", "↓ N behind" or "⚠ Sync issue" depending on `repo_status`. Action **20** opens repository settings.
-
-Sync preserves local edits and refuses divergent pushes; it never force-pushes or merges remote metadata into SQLite. A push that fails *after* a successful local commit is reported as such (`ok:false, committed:true`) rather than losing the commit — fix what's described and sync again. The operation runs off the search thread. `omabib-history` uses this same repository configuration.
-
-```bash
-omabib sync                  # snapshot, commit, push; readable summary + exit code
-omabib sync --local          # local snapshot commit only
-omabib sync --json           # raw result
-omabib repo status [--fetch] [--json]
-```
-
-`repo_status` (also the JSON operation) reports the current HEAD, how far ahead/behind the remote, local edits, pending changes since the last successful sync, and the last attempt's result or a classified error (`diverged`, `auth`, `network`, `lfs`, `dirty`, `branch`, `origin-changed`, `busy`, `unknown`) with a hint — `diverged`, for instance, points at `git pull --rebase`, since Omabib itself never merges.
+For Google Drive, configure a Google OAuth desktop client and save Google's downloaded JSON as `google-client.json` beside Omabib's `rclone.conf`, with owner-only permissions (`0600`). Omabib reads its `installed.client_id` and `installed.client_secret`; the `OMABIB_GOOGLE_CLIENT_ID` and `OMABIB_GOOGLE_CLIENT_SECRET` environment variables take precedence. Credentials stay outside the source repository.
 
 ## Reading PDFs
 
@@ -296,7 +400,7 @@ Omabib can chat with **Claude Code** or **Codex** about the paper you are lookin
 - **Saving answers:** **Copy** and **Save as note** sit under each turn's final answer (the note editor opens with the answer and, when it cites a page, that page as evidence).
 - **History:** each paper keeps its chats; the history button lists them, starts a new chat (choosing Claude Code or Codex; the default follows Settings → Terminal chat) or deletes one. **Continue in a terminal** resumes the same session with `claude --resume` or `codex resume`, outside Omabib's approval queue.
 
-The service runs the agents, so a reply keeps streaming while the window is hidden. Claude Code keeps one process per chat and is stopped after ten idle minutes (the next message resumes the session); Codex starts one process per turn and resumes its thread. At most three chats run agents at once. Transcripts are stored in the library database (and its backups), not exported by history sync; each chat's context folder is under `$XDG_DATA_HOME/omabib/chats/`. Deleting a reference deletes its chats.
+The service runs the agents, so a reply keeps streaming while the window is hidden. Claude Code keeps one process per chat and is stopped after ten idle minutes (the next message resumes the session); Codex starts one process per turn and resumes its thread. At most three chats run agents at once. Transcripts are stored in the local library database and its backups; they do not sync between computers. Each chat's context folder is under `$XDG_DATA_HOME/omabib/chats/`. Deleting a reference deletes its chats.
 
 ## Visual notes
 
@@ -304,13 +408,13 @@ In a reader tab press **r** (or the crop button) and drag over a figure, table o
 
 The service renders each clip from the PDF itself at 216 dpi, so it stays sharp at any zoom. `add_visual_note` accepts `rect_pt` (x, y, width, height in PDF points from the page's top-left corner) with `source_pdf` and `page`; clips are stored with `"unit":"pt"`. Clips saved by earlier versions from screen captures keep their screen-pixel rectangles and are not outlined on pages.
 
-Clips are stored atomically with their notes in SQLite, included in database backups, and exported as `notes/images/*.png` by history snapshots. Ordinary note/search responses carry compact image metadata. The MCP tool **get_note_image** returns the original PNG as an image content block for reading numbers, math, text, or code. Image-only notes are supported; the source PDF path and page remain attached. One PNG per visual note, up to 8 MiB and 32 million pixels.
+Clips are stored atomically with their notes in SQLite, included in database backups, and synced as PNG files in `Omabib/clips/`. Ordinary note/search responses carry compact image metadata. The MCP tool **get_note_image** returns the original PNG as an image content block for reading numbers, math, text, or code. Image-only notes are supported; the source PDF path and page remain attached. One PNG per visual note, up to 8 MiB and 32 million pixels.
 
 ## PDFs
 
-Open an entry with Tab and choose **Attach PDF…** in the Files tab, or use action **10**, to link an existing local file. Use **Open PDF** (Ctrl+O, action **12**) to have Omabib find one itself — an existing attachment, one restored from the history archive, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it in a reader tab; **Open link** (Ctrl+U, action **11**) opens the reference's own URL/DOI instead, even if a PDF is attached; **Copy PDF path** (action **13**) copies the PDF's path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file and its Git/LFS history.
+Open an entry with Tab and choose **Attach PDF…** in the Files tab, or use action **10**, to link an existing local file. Use **Open PDF** (Ctrl+O, action **12**) to have Omabib find one itself — an existing attachment, one downloaded from the sync storage, or a freshly downloaded open-access copy (the reference's own link, an arXiv direct link, OpenAlex, or Semantic Scholar) — and open it in a reader tab; **Open link** (Ctrl+U, action **11**) opens the reference's own URL/DOI instead, even if a PDF is attached; **Copy PDF path** (action **13**) copies the PDF's path without opening it. Each attachment also has **Open**, **Pull** when its path is missing, and **Remove link**; removing a link keeps the file.
 
-Downloaded and restored PDFs are stored as `pdfs/<citekey>.pdf` (e.g. `pdfs/watts_collective_1998.pdf`), with a short hash suffix only on a genuine name collision — not a content hash, so they're findable by browsing. The history repository keeps its own separate content-addressed naming.
+Downloaded and restored PDFs are stored as `pdfs/<citekey>.pdf` (e.g. `pdfs/watts_collective_1998.pdf`), with a short hash suffix only on a genuine name collision — not a content hash, so they're findable by browsing.
 
 ```bash
 omabib pdf add CITATION_KEY /absolute/path/paper.pdf
@@ -321,7 +425,7 @@ omabib pdf pull --reference CITATION_KEY --url https://example.org/paper.pdf
 omabib pdf remove ATTACHMENT_UUID
 ```
 
-Pulling by attachment ID fetches its archived Git LFS copy and updates that attachment's path while preserving its ID. It requires that attachment to exist in the local library and have been synced previously. Pulling a supplied HTTPS URL downloads and attaches a validated PDF. Downloads/restored files live under the library's `pdfs/` directory; the maximum file size is 512 MiB. Local PDF linking does not upload anything until Sync is requested.
+Pulling by attachment ID downloads it from the sync storage and updates that attachment's path, keeping its ID. Pulling a supplied HTTPS URL downloads and attaches a validated PDF. Downloads/restored files live under the library's `pdfs/` directory; the maximum file size is 512 MiB. With sync on, a linked PDF is uploaded at the next sync.
 
 The MCP tools `add_pdf`, `pull_pdf`, `remove_pdf`, and `get_pdf` expose these operations to agents. Existing MCP clients may need to reconnect after updating the executable to discover them.
 
