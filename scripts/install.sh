@@ -53,7 +53,7 @@ if [[ "$backend_only" == false && -e "$plugin_dir" && ! -f "$plugin_dir/.omabib-
   echo "Existing unmanaged Omabib plugin at $plugin_dir; inspect it before installing." >&2
   exit 1
 fi
-mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.codex/skills/omabib"
+mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "${CODEX_HOME:-$HOME/.codex}/skills/omabib"
 install -m755 "$binary" "$HOME/.local/bin/omabib.new"
 mv "$HOME/.local/bin/omabib.new" "$HOME/.local/bin/omabib"
 install -m644 "$source_dir/packaging/omabib.service" "$HOME/.config/systemd/user/omabib.service"
@@ -86,7 +86,10 @@ install -m755 "$source_dir/scripts/omabib-codex" "$HOME/.local/bin/omabib-codex"
 install -m755 "$source_dir/scripts/omabib-overview" "$HOME/.local/bin/omabib-overview"
 install -m755 "$source_dir/scripts/omabib-settings" "$HOME/.local/bin/omabib-settings"
 install -m755 "$source_dir/scripts/omabib-claude" "$HOME/.local/bin/omabib-claude"
-install -m644 "$source_dir/skills/omabib/SKILL.md" "$HOME/.codex/skills/omabib/SKILL.md"
+install -m644 "$source_dir/skills/omabib/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/omabib/SKILL.md"
+skill_source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omabib/skills/omabib"
+mkdir -p "$skill_source_dir"
+install -m644 "$source_dir/skills/omabib/SKILL.md" "$skill_source_dir/SKILL.md"
 license_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omabib/licenses"
 mkdir -p "$license_dir"
 install -m644 "$source_dir/LICENSE" "$license_dir/OMABIB-LICENSE"
@@ -117,4 +120,4 @@ if [[ "$backend_only" == false ]]; then
   omarchy-shell shell rescanPlugins
   omarchy plugin enable "$plugin_id"
 fi
-printf '%s\n' 'Installed Omabib. Open with: omabib open' 'Codex registration: codex mcp add omabib -- ~/.local/bin/omabib mcp'
+printf '%s\n' 'Installed Omabib. Open with: omabib open' 'Connect Codex from Settings, or run: omabib-settings register-codex'

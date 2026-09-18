@@ -137,6 +137,7 @@ Item {
     property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
     readonly property bool pdfThemed: settings.pdf_colors === "theme"
     property var settingsInfo: null
+    property string settingsError: ""
     property bool settingsBusy: false
     property var settingsQueue: []
     // Paper tabs: opened beside the library tab, sticky until closed, at most
@@ -650,6 +651,7 @@ Item {
     function runSettings(args) {
         if(settingsProcess.running){settingsQueue=settingsQueue.concat([args]);return}
         settingsBusy=true
+        settingsError=""
         settingsProcess.command=["omabib-settings"].concat(args)
         settingsProcess.running=true
     }
@@ -671,13 +673,16 @@ Item {
         settings=next
         runSettings(args)
     }
+    function registerCodex() { runSettings(["register-codex",serviceSocket]) }
     function registerClaudeDesktop() { runSettings(["register-claude-desktop",serviceSocket]) }
     Process {
         id:settingsProcess
+        environment: ({OMABIB_SOCKET: root.serviceSocket})
         stdout:SplitParser {onRead:data=>{
             var r={}
             try{r=JSON.parse(data)}catch(e){r.error="Could not read settings"}
             if(r.error){
+                root.settingsError=r.error
                 root.error=r.error
                 // A refused change leaves the optimistic value showing; reread.
                 if(settingsProcess.command[1]==="set")root.settingsQueue=root.settingsQueue.concat([[]])

@@ -27,7 +27,7 @@ def desktop_context(socket_path, ref_id, project_id, parent=None):
     config = config_dir / 'config.toml'
     config.write_text('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\n\n[mcp_servers.omabib]\nenabled = true\ncommand = ' + json.dumps(binary) + '\nargs = ["mcp"]\n\n[mcp_servers.omabib.env]\nOMABIB_SOCKET = ' + json.dumps(socket_path) + '\n')
     config.chmod(0o600)
-    skill_source = Path.home() / '.codex/skills/omabib/SKILL.md'
+    skill_source = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'omabib/skills/omabib/SKILL.md'
     if not skill_source.is_file():
         skill_source = Path(__file__).resolve().parent.parent / 'skills/omabib/SKILL.md'
     skill_dir = folder.parent / '.agents/skills/omabib'

@@ -62,13 +62,15 @@ Bring your existing Codex or Claude Code account for in-app and terminal chat, o
 
 Open **Settings** using the cog at the bottom of the rail. Choose your installed agent under **Terminal chat** and **Desktop chat**. Terminal chat also needs `xdg-terminal-exec` available on `PATH`. In-app chat is available in a paper's **Chat** tab or the PDF reader's side pane.
 
-To expose the library to an independently launched Codex session, register the bundled MCP server:
+Choose **Connect Codex** in Settings to make the library available in your other Codex sessions. This registers the bundled MCP server and installs the Omabib skill. Reopen existing Codex sessions after connecting.
+
+From a terminal, the same setup is:
 
 ```bash
-codex mcp add omabib --env "OMABIB_SOCKET=$XDG_RUNTIME_DIR/omabib/socket" -- "$HOME/.local/bin/omabib" mcp
+omabib-settings register-codex
 ```
 
-Restart or reconnect the MCP client after registration or updates. Omabib's own Codex and Claude Code launch helpers supply a per-launch MCP configuration pointing to the current library.
+Existing custom connections are preserved. Omabib's own Codex and Claude Code launchers already connect each chat to the current library.
 
 For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then restart Claude Desktop. This merges the MCP entry into its configuration and saves a backup. ChatGPT Desktop opens a prepared draft in Codex mode; press **Send** to start the conversation. See [Chat](#chat) for context sharing, permissions, and saved conversations.
 
@@ -99,6 +101,7 @@ The window has three panes. The **rail** on the left switches between all refere
 The cog at the bottom of the rail (or Ctrl+K action **24**) opens Settings. Changes apply immediately and are saved in `$XDG_CONFIG_HOME/omabib/settings.json`; `omabib-settings` prints or changes them from a terminal (`omabib-settings set ai_cli claude`).
 
 - **PDF pages** chooses **Original colors** or **Omarchy theme colors** for reader tabs (see [Theme colors](#theme-colors)). Ctrl+R in a reader tab, the reader toolbar's half-moon button and action **27** switch it too.
+- **Connect Codex** registers the bundled MCP server for your active library and installs the current skill under `$CODEX_HOME/skills/omabib` (normally `~/.codex/skills/omabib`). A matching connection is reused; a different or disabled connection is left unchanged.
 - **Terminal chat** chooses **Codex CLI** or **Claude Code** for the toolbar's terminal button and action **22**.
 - **Desktop chat** chooses **ChatGPT Desktop** or **Claude Desktop** for the toolbar's chat button and action **23**. Claude Desktop reads the library through Omabib's MCP server, which it loads from its own config: **Add Omabib to Claude Desktop** merges an `omabib` entry into `~/.config/Claude/claude_desktop_config.json`, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`. Restart Claude Desktop afterwards.
 
@@ -166,6 +169,12 @@ Without a PDF or identifier, `omabib add` opens the add box in the Omabib window
 ## Data locations
 
 Data is stored at `$XDG_DATA_HOME/omabib/library.db`, defaulting to `~/.local/share/omabib/library.db`. The socket is `$XDG_RUNTIME_DIR/omabib/socket`. `OMABIB_DB` and `OMABIB_SOCKET` override these paths for isolated libraries. The UI uses `OMABIB_SOCKET` from its process environment and also accepts `socket_path` in its summon payload for isolated testing.
+
+## Migrating from omabib-mcp
+
+MCP setup and agent instructions are now included in Omabib. Update Omabib and choose **Connect Codex** in Settings, or run `omabib-settings register-codex`. A matching connection created by the old companion installer is reused and its skill is refreshed. You can remove the old companion checkout afterwards; your library is stored separately.
+
+The main repository's [`skills/omabib/SKILL.md`](skills/omabib/SKILL.md) is the authoritative agent guide. The companion repository is retired.
 
 ## Project notes and agent access
 

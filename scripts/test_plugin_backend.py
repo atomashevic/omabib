@@ -44,7 +44,7 @@ def main():
             path = commands / name
             path.write_text('#!/bin/bash\necho "$*" >> "$TEST_COMMAND_LOG"\n')
             path.chmod(0o755)
-        env = dict(os.environ, HOME=str(home), PATH=str(commands), XDG_CONFIG_HOME=str(home / '.config'),
+        env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"), PATH=str(commands), XDG_CONFIG_HOME=str(home / '.config'),
                    XDG_DATA_HOME=str(home / '.local/share'), XDG_STATE_HOME=str(home / '.local/state'),
                    TEST_COMMAND_LOG=str(scratch / 'commands.log'))
         helper = plugin / 'scripts/omabib-plugin'

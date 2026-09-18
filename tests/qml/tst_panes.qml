@@ -120,12 +120,15 @@ Rectangle {
         readonly property bool pdfThemed: settings.pdf_colors === "theme"
         function togglePdfColors() { setSetting("pdf_colors", pdfThemed ? "original" : "theme") }
         property bool settingsBusy: false
+        property string settingsError: ""
         property var settingsInfo: ({
             settings: settings, path: "/home/reader/.config/omabib/settings.json", claude_desktop_mcp: false,
+            codex_mcp: {state: "missing", message: "Connect Codex to use your library in any Codex session."},
             clis: [{id: "codex", name: "Codex CLI", available: true}, {id: "claude", name: "Claude Code", available: true}],
             desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: false}]
         })
         function setSetting(key, value) { var next = Object.assign({}, settings); next[key] = value; settings = next; note("setSetting:" + key + "=" + value) }
+        function registerCodex() { note("registerCodex"); settingsInfo = Object.assign({}, settingsInfo, {codex_mcp: {state: "connected", message: "Codex is connected. Reopen existing sessions to load the tools."}}) }
         function registerClaudeDesktop() { note("registerClaudeDesktop") }
         function openSettings() { settingsSheet.visible = true }
 
@@ -405,6 +408,11 @@ Rectangle {
             wait(50)
             mouseClick(find(settingsPanel, "aiDesktop:claude"))
             compare(app.settings.ai_desktop, "claude")
+            var connect = find(settingsPanel, "connectCodex")
+            verify(connect.enabled)
+            mouseClick(connect)
+            compare(app.settingsInfo.codex_mcp.state, "connected")
+            verify(!connect.enabled)
             shot("2f-settings")
             settingsSheet.visible = false
             app.settings = ({ai_cli: "codex", ai_desktop: "chatgpt"})

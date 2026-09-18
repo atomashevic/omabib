@@ -35,7 +35,7 @@ def main():
             command = commands / name
             command.write_text('#!/bin/bash\nprintf "%s\\n" "$0 $*" >> "$TEST_COMMAND_LOG"\n')
             command.chmod(0o755)
-        env = dict(os.environ, HOME=str(home), PATH=str(commands),
+        env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"), PATH=str(commands),
                    XDG_CONFIG_HOME=str(home / '.config'), XDG_DATA_HOME=str(home / '.local/share'),
                    XDG_STATE_HOME=str(home / '.local/state'), XDG_CACHE_HOME=str(home / '.cache'),
                    XDG_RUNTIME_DIR=str(root / 'runtime'), OMABIB_SOCKET=str(root / 'runtime/socket'),
@@ -60,6 +60,7 @@ def main():
         assert (home / '.local/share/omabib/licenses/THIRD-PARTY.md').is_file()
         assert (home / '.config/systemd/user/omabib.service').read_bytes() == (package / 'packaging/omabib.service').read_bytes()
         assert (home / '.codex/skills/omabib/SKILL.md').is_file()
+        assert digest(home / '.local/share/omabib/skills/omabib/SKILL.md') == digest(package / 'skills/omabib/SKILL.md')
         for invocation in ('daemon-reload', 'enable --now omabib.service', 'restart omabib.service',
                            'shell rescanPlugins', 'plugin enable io.github.atomashevic.omabib'):
             assert invocation in log.read_text(), invocation

@@ -61,6 +61,12 @@ ColumnLayout {
         font.pixelSize: root.theme.body
     }
 
+    Hint {
+        visible: !!root.app.settingsError
+        text: root.app.settingsError || ""
+        color: root.theme.urgent
+    }
+
     SectionLabel { theme: root.theme; text: "PDF pages" }
     Choice {
         objectName: "pdfColors:original"
@@ -92,6 +98,38 @@ ColumnLayout {
         }
     }
     Hint { text: "The terminal button in the detail toolbar. Opens a chat with the reference, its notes and PDF, and Omabib's MCP tools." }
+
+    Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: codexRow.implicitHeight + root.theme.space(20)
+        color: root.theme.app
+        border.width: 1
+        border.color: root.theme.line
+        radius: root.theme.radius
+        RowLayout {
+            id: codexRow
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: root.theme.space(12) }
+            spacing: root.theme.space(10)
+            Text {
+                Layout.fillWidth: true
+                text: (root.info.codex_mcp || {}).message || "Connect Codex to use your library in any Codex session."
+                color: root.theme.text
+                font.family: root.theme.mono
+                font.pixelSize: root.theme.small
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+            }
+            TextButton {
+                objectName: "connectCodex"
+                theme: root.theme
+                text: (root.info.codex_mcp || {}).state === "connected" ? "Connected" : "Connect Codex"
+                enabled: ["missing", "error"].indexOf((root.info.codex_mcp || {}).state) !== -1 && !root.app.settingsBusy
+                busy: root.app.settingsBusy
+                fontSize: root.theme.small
+                onClicked: root.app.registerCodex()
+            }
+        }
+    }
 
     SectionLabel { theme: root.theme; text: "Desktop chat"; Layout.topMargin: root.theme.space(10) }
     Repeater {
