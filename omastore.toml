@@ -1,0 +1,7 @@
+kind = "app"
+categories = ["Office", "Science"]
+icon = "omabib.svg"
+
+[linux.x86_64]
+asset = "omabib-{version}-linux-x86_64.tar.gz"
+exec = "omabib-{version}-linux-x86_64/bin/omabib"
