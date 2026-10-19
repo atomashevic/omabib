@@ -19,12 +19,27 @@ Item {
     readonly property string setupScript: decodeURIComponent(String(Qt.resolvedUrl("../scripts/omabib-plugin")).replace(/^file:\/\//, ""))
     readonly property bool busy: setup.running
     readonly property string pluginId: "io.github.atomashevic.omabib"
+    // The standalone app, when it is installed beside the backend. The shell
+    // then hands every request to it and never loads Omabib itself.
+    property string desktop: ""
 
     function open(payloadJson) {
         pendingPayload = payloadJson || "{}"
+        if (desktop !== "") { handOff(pendingPayload); return }
         opened = true
         if (ready && app.item) app.item.open(pendingPayload)
         else if (!busy) runSetup("status")
+    }
+    function handOff(payloadJson) {
+        var payload = {}
+        try { payload = JSON.parse(payloadJson) } catch (e) {}
+        var args = payload.action === "add" ? ["--add"]
+            : payload.action === "pdf" && payload.ref_id ? ["--pdf", String(payload.ref_id)]
+            : payload.query !== undefined ? ["--query", String(payload.query)]
+            : ["--toggle"]
+        Quickshell.execDetached([desktop].concat(args))
+        opened = false
+        Qt.callLater(function () { if (root.shell) root.shell.hide(root.pluginId) })
     }
     function close() {
         opened = false
@@ -50,12 +65,14 @@ Item {
             var result = {}
             try { result = JSON.parse(response) } catch (e) {}
             root.setupError = result.error || (code !== 0 ? (diagnostic || "Setup could not start. Please retry.") : "")
+            root.desktop = result.desktop || ""
             root.ready = result.ready === true
+            if (root.desktop !== "" && root.opened) root.handOff(root.pendingPayload)
         }
     }
     Loader {
         id: app
-        active: root.ready
+        active: root.ready && root.desktop === ""
         source: "App.qml"
         onLoaded: {
             item.shell = root.shell

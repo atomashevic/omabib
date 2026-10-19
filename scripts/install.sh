@@ -56,6 +56,16 @@ fi
 mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "${CODEX_HOME:-$HOME/.codex}/skills/omabib"
 install -m755 "$binary" "$HOME/.local/bin/omabib.new"
 mv "$HOME/.local/bin/omabib.new" "$HOME/.local/bin/omabib"
+# The standalone app, beside the binary in a package or built into
+# build/desktop. Once installed, `omabib open` and the shell plugin show
+# Omabib through it. A running copy quits, so the next open runs this one.
+desktop_binary="$(dirname -- "$binary")/omabib-desktop"
+[[ -x "$desktop_binary" ]] || desktop_binary="$source_dir/build/desktop/omabib-desktop"
+if [[ -x "$desktop_binary" ]]; then
+  "$HOME/.local/bin/omabib-desktop" --quit 2>/dev/null || true
+  install -m755 "$desktop_binary" "$HOME/.local/bin/omabib-desktop.new"
+  mv "$HOME/.local/bin/omabib-desktop.new" "$HOME/.local/bin/omabib-desktop"
+fi
 install -m644 "$source_dir/packaging/omabib.service" "$HOME/.config/systemd/user/omabib.service"
 if [[ "$backend_only" == false ]]; then
   mkdir -p "$plugin_dir/scripts"

@@ -279,6 +279,8 @@ If you already installed the plugin with `omarchy plugin add`, use `./scripts/in
 
 If you manage Rust with rustup, omit `rust` from the package command and use a compatible toolchain. The build uses locked dependencies and compiles MuPDF from source; the first build can take several minutes. The installer uses `target/release/omabib` (or `$CARGO_TARGET_DIR/release/omabib`), and also accepts an explicit binary path: `./scripts/install.sh /path/to/omabib`.
 
+To use the standalone app, build it into `build/desktop` first (see [desktop/README.md](desktop/README.md)), or put `omabib-desktop` beside the binary you install. The installer then installs it too, and Super+B, `omabib open` and the bar icon open Omabib in it instead of the shell.
+
 To update a source checkout, preserve any local changes, then run:
 
 ```bash

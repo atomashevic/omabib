@@ -29,11 +29,13 @@ Item {
  property bool opened: false
  function open(payload) { opened = true }
  function close() { opened = false }
+ Component.onCompleted: console.log("APP LOADED")
 }
 ''')
         (fixture / 'scripts/omabib-plugin').write_text('''import sys, json, pathlib, os
 flag = pathlib.Path(os.environ['HOME']) / 'attempted'
-if sys.argv[1] == 'status': print(json.dumps({'ready':False}))
+if os.environ.get('FAKE_DESKTOP'): print(json.dumps({'ready':True, 'desktop':os.environ['FAKE_DESKTOP']}))
+elif sys.argv[1] == 'status': print(json.dumps({'ready':False}))
 elif not flag.exists():
  flag.touch()
  print(json.dumps({'ready':False, 'error':'Download interrupted. Please try again.'}))
@@ -87,6 +89,39 @@ ShellRoot {
  Timer { interval: 15000; running:true; onTriggered: test.fail("timeout") }
 }
 ''')
+        # With the standalone app installed, the shell hands every request to it.
+        (fixture / 'handoff.qml').write_text('''import QtQuick
+import Quickshell
+import "plugin"
+ShellRoot {
+ id: test
+ property int phase: 0
+ Entry { id: entry; Component.onCompleted: open("{}") }
+ function fail(message) { console.error("TEST FAILED: " + message); Qt.quit() }
+ Timer {
+  interval: 200; running: true; repeat: true
+  onTriggered: {
+   if(entry.busy) return
+   if(test.phase===0) {
+    if(!entry.ready || entry.opened) { test.fail("pending open was not handed off"); return }
+    entry.toggle(JSON.stringify({action:"pdf", ref_id:"ref1"}))
+    entry.open(JSON.stringify({action:"add"}))
+    entry.open(JSON.stringify({query:"polarization"}))
+    if(entry.opened) { test.fail("opened in the shell"); return }
+    test.phase=1
+   } else {
+    console.log("PASS: handoff")
+    Qt.quit()
+   }
+  }
+ }
+ Timer { interval: 15000; running:true; onTriggered: test.fail("timeout") }
+}
+''')
+        calls = fixture / 'home/desktop-calls'
+        app = fixture / 'omabib-desktop'
+        app.write_text(f'#!/bin/sh\necho "$*" >> {calls}\n')
+        app.chmod(0o755)
         env = dict(os.environ, HOME=str(fixture / 'home'), XDG_RUNTIME_DIR=str(fixture / 'runtime'),
                    XDG_CONFIG_HOME=str(fixture / 'home/.config'), XDG_STATE_HOME=str(fixture / 'home/.local/state'),
                    XDG_CACHE_HOME=str(fixture / 'home/.cache'), TEST_SCREENSHOTS=str(output),
@@ -97,6 +132,13 @@ ShellRoot {
                                 env=env, capture_output=True, text=True, timeout=25)
         print(result.stdout + result.stderr)
         assert result.returncode == 0 and 'PASS: setup' in result.stdout + result.stderr
+        env['FAKE_DESKTOP'] = str(app)
+        result = subprocess.run(['quickshell', '--no-color', '-p', str(fixture / 'handoff.qml')],
+                                env=env, capture_output=True, text=True, timeout=25)
+        log = result.stdout + result.stderr
+        print(log)
+        assert result.returncode == 0 and 'PASS: handoff' in log and 'APP LOADED' not in log
+        assert calls.read_text().splitlines() == ['--toggle', '--pdf ref1', '--add', '--query polarization']
 
 
 if __name__ == '__main__':

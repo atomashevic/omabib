@@ -60,6 +60,12 @@ def main():
         original = tree_hash(plugin)
         assert call('install', '--archive', str(archive))['ready']
         assert call('status')['ready']
+        assert call('status')['desktop'] == ''
+        app = home / '.local/bin/omabib-desktop'
+        app.write_text('#!/bin/sh\n')
+        app.chmod(0o755)
+        assert call('status')['desktop'] == str(app)
+        app.unlink()
         assert tree_hash(plugin) == original, 'Backend install dirtied the plugin checkout'
         assert (legacy / 'keep.txt').read_text() == 'old UI backup'
         assert 'plugin disable omabib' in (scratch / 'commands.log').read_text()

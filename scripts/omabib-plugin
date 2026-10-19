@@ -43,7 +43,11 @@ def status():
                  and all((binary.parent / name).is_file() for name in HELPERS))
     except (OSError, ValueError, subprocess.SubprocessError):
         ready = False
-    return {'ready': ready, 'version': version}
+    # The standalone app, installed beside the backend, shows Omabib instead
+    # of the shell.
+    desktop = binary.parent / 'omabib-desktop'
+    return {'ready': ready, 'version': version,
+            'desktop': str(desktop) if ready and os.access(desktop, os.X_OK) else ''}
 
 
 def download(url, destination):
