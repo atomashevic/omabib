@@ -925,6 +925,7 @@ Item {
         if(s.state==="auth")return "Reconnect "+label
         if(s.state==="offline")return "Offline, will sync later"
         if(s.state==="full")return label+" is full"
+        if(s.state==="busy")return label+" is busy, will retry"
         if(s.state==="error")return "Sync issue: "+(s.message||"unknown")
         if(s.conflicts>0)return s.conflicts+(s.conflicts===1?" sync change":" sync changes")+" to review"
         if(s.pending>0)return "Changes waiting to sync"

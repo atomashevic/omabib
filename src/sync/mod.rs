@@ -20,7 +20,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, Weak},
-    time::{Duration, Instant},
+    time::{Duration, SystemTime},
 };
 use store::{FolderStore, RcloneStore, Store, StoreError};
 
@@ -139,13 +139,27 @@ pub fn open_store(provider: &Value) -> Result<Arc<dyn Store>> {
 
 #[derive(Clone, Debug, Default)]
 struct Status {
-    /// "off", "idle", "syncing", "offline", "auth", "full", "error".
+    /// "off", "idle", "syncing", "offline", "auth", "full", "busy", "error".
     state: String,
     message: String,
     progress: Option<Value>,
     devices: Vec<Value>,
-    last_attempt: Option<Instant>,
-    retry_after: Option<Instant>,
+    // Wall-clock times: the monotonic clock stops while the computer sleeps,
+    // which would put the first sync after waking up late.
+    last_attempt: Option<SystemTime>,
+    retry_after: Option<SystemTime>,
+}
+
+/// Why the background thread was woken.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Wake {
+    #[default]
+    Timer,
+    /// The window opened or showed new data: worth a sync unless one just ran,
+    /// local edits are still settling, or the storage asked to wait.
+    Soft,
+    /// Asked for outright, as after settling a conflict.
+    Hard,
 }
 
 pub struct Sync {
@@ -153,7 +167,7 @@ pub struct Sync {
     chats: Arc<crate::chat::Chats>,
     cycle: Mutex<()>,
     status: Mutex<Status>,
-    wake: (Mutex<bool>, Condvar),
+    wake: (Mutex<Wake>, Condvar),
     connect: Mutex<Option<Arc<Connecting>>>,
     started: std::sync::Once,
 }
@@ -168,7 +182,7 @@ impl Sync {
                 state: "idle".into(),
                 ..Default::default()
             }),
-            wake: (Mutex::new(false), Condvar::new()),
+            wake: (Mutex::new(Wake::Timer), Condvar::new()),
             connect: Mutex::new(None),
             started: std::sync::Once::new(),
         })
@@ -196,6 +210,10 @@ pub struct Summary {
 
 const DEBOUNCE: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_secs(300);
+/// The least time between syncs the window asks for.
+const SOFT_GAP: Duration = Duration::from_secs(60);
+/// How often an idle computer rewrites its manifest, so others see it is still syncing.
+const HEARTBEAT: Duration = Duration::from_secs(3600);
 
 impl Sync {
     /// Runs sync in the background for the service: after edits settle, every
@@ -206,7 +224,7 @@ impl Sync {
         lib.sync.started.call_once(|| {
             std::thread::spawn(move || {
                 loop {
-                    let asked = {
+                    let wake = {
                         let (lock, cv) = &sync.wake;
                         let guard = lock.lock().unwrap();
                         let (mut guard, _) =
@@ -214,7 +232,7 @@ impl Sync {
                         std::mem::take(&mut *guard)
                     };
                     let Some(lib) = weak.upgrade() else { return };
-                    if sync.due(&lib, asked).unwrap_or(false) {
+                    if sync.due(&lib, wake).unwrap_or(false) {
                         let _ = sync.run(&lib);
                     }
                 }
@@ -224,41 +242,55 @@ impl Sync {
 
     /// Asks the background thread for a sync now.
     pub fn nudge(&self) {
+        self.wake(Wake::Hard);
+    }
+
+    /// Asks for a sync if the last one was a while ago; for the window, which
+    /// nudges whenever it opens or reloads.
+    pub fn nudge_soft(&self) {
+        self.wake(Wake::Soft);
+    }
+
+    fn wake(&self, why: Wake) {
         let (lock, cv) = &self.wake;
-        *lock.lock().unwrap() = true;
+        let mut wake = lock.lock().unwrap();
+        *wake = (*wake).max(why);
         cv.notify_all();
     }
 
-    fn due(&self, lib: &Library, asked: bool) -> Result<bool> {
+    fn due(&self, lib: &Library, wake: Wake) -> Result<bool> {
         let c = crate::db::read_connection(&lib.path)?;
         if get(&c, "provider")?.is_none() || get(&c, "library")?.is_none() {
             return Ok(false);
         }
         let status = self.status.lock().unwrap().clone();
-        if status.state == "auth" && !asked {
+        if wake == Wake::Hard {
+            return Ok(true);
+        }
+        if status.state == "auth" {
             return Ok(false);
         }
         if let Some(t) = status.retry_after
-            && Instant::now() < t
-            && !asked
+            && SystemTime::now() < t
         {
             return Ok(false);
-        }
-        if asked {
-            return Ok(true);
         }
         let waiting: i64 = c.query_row(
             "SELECT (SELECT count(*) FROM sync_batches)+(SELECT count(*) FROM sync_uploads)",
             [],
             |r| r.get(0),
         )?;
-        let newest: Option<String> =
-            c.query_row("SELECT max(at) FROM sync_outbox", [], |r| r.get(0))?;
-        let settled = newest
-            .and_then(|at| clock::iso_ms(&at))
-            .is_some_and(|ms| clock::now_ms().saturating_sub(ms) >= DEBOUNCE.as_millis() as u64);
-        let stale = status.last_attempt.is_none_or(|t| t.elapsed() >= POLL);
-        Ok(waiting > 0 || settled || stale)
+        let newest: Option<u64> = c
+            .query_row("SELECT max(at) FROM sync_outbox", [], |r| r.get::<_, Option<String>>(0))?
+            .and_then(|at| clock::iso_ms(&at));
+        let settled =
+            newest.is_some_and(|ms| clock::now_ms().saturating_sub(ms) >= DEBOUNCE.as_millis() as u64);
+        let editing = newest.is_some() && !settled;
+        // None when there was no attempt yet, or the clock was set back.
+        let since = status.last_attempt.and_then(|t| t.elapsed().ok());
+        let stale = since.is_none_or(|d| d >= POLL);
+        let soft = wake == Wake::Soft && !editing && since.is_none_or(|d| d >= SOFT_GAP);
+        Ok(waiting > 0 || settled || stale || soft)
     }
 
     fn set_status(&self, state: &str, message: &str) {
@@ -291,10 +323,9 @@ impl Sync {
             }
             Err(_) => bail!("Sync lock is poisoned"),
         };
-        let started = Instant::now();
         {
             let mut s = self.status.lock().unwrap();
-            s.last_attempt = Some(started);
+            s.last_attempt = Some(SystemTime::now());
         }
         self.set_status("syncing", "");
         let result = self.cycle(lib);
@@ -323,12 +354,13 @@ impl Sync {
                     .unwrap_or("error");
                 let wait = match kind {
                     "offline" => Duration::from_secs(60),
+                    "busy" => Duration::from_secs(120),
                     "auth" => Duration::from_secs(3600),
                     _ => Duration::from_secs(300),
                 };
-                self.status.lock().unwrap().retry_after = Some(Instant::now() + wait);
+                self.status.lock().unwrap().retry_after = Some(SystemTime::now() + wait);
                 let state = match kind {
-                    "offline" | "auth" | "full" => kind,
+                    "offline" | "auth" | "full" | "busy" => kind,
                     "missing" => "error",
                     _ => "error",
                 };
@@ -569,9 +601,23 @@ impl Sync {
             set(&w, "uploaded", &seq.to_string())?;
             sent = seq;
         }
-        let manifest = json!({"device":me,"name":hostname(),"seq":sent,"updated":records::now(),
+        // Rewritten when it says something new, or hourly so other computers
+        // see this one is still syncing; not on every idle poll.
+        let mut manifest = json!({"device":me,"name":hostname(),"seq":sent,
             "hlc":get(&c, "hlc")?,"app":format!("omabib {}", env!("CARGO_PKG_VERSION"))});
+        let content = manifest.to_string();
+        let recent = get(&c, "manifest_written")?
+            .and_then(|t| clock::iso_ms(&t))
+            .is_some_and(|ms| clock::now_ms().saturating_sub(ms) < HEARTBEAT.as_millis() as u64);
+        if recent && get(&c, "manifest")?.as_deref() == Some(content.as_str()) {
+            return Ok(());
+        }
+        let now = records::now();
+        manifest["updated"] = json!(now);
         store.write(&format::device_path(me), manifest.to_string().as_bytes())?;
+        let w = lib.writer.lock().unwrap();
+        set(&w, "manifest", &content)?;
+        set(&w, "manifest_written", &now)?;
         Ok(())
     }
 
@@ -1224,6 +1270,58 @@ mod upload_tests {
                 format!("pdf {i}").as_bytes()
             );
         }
+    }
+
+    #[test]
+    fn window_nudges_wait_for_edits_backoff_and_a_recent_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_with_vocabulary(dir.path().join("library.db"), false).unwrap();
+        let sync = &lib.sync;
+        {
+            let c = lib.writer.lock().unwrap();
+            set(&c, "provider", r#"{"kind":"folder","path":"/nowhere"}"#).unwrap();
+            set(&c, "library", "test").unwrap();
+        }
+        let ago = |secs| Some(SystemTime::now() - Duration::from_secs(secs));
+        let attempt = |when| sync.status.lock().unwrap().last_attempt = when;
+        let due = |wake| sync.due(&lib, wake).unwrap();
+
+        attempt(ago(10));
+        assert!(!due(Wake::Timer));
+        assert!(!due(Wake::Soft), "a sync just ran");
+        assert!(due(Wake::Hard));
+        attempt(ago(120));
+        assert!(due(Wake::Soft));
+        assert!(!due(Wake::Timer));
+        attempt(ago(400));
+        assert!(due(Wake::Timer), "the poll interval passed");
+
+        // An edit a moment ago waits for the debounce, even when the window asks.
+        attempt(ago(120));
+        let edit = |at: &str| {
+            let c = lib.writer.lock().unwrap();
+            c.execute("DELETE FROM sync_outbox", []).unwrap();
+            c.execute(
+                &format!("INSERT INTO sync_outbox(kind,key,at) VALUES('note','n',strftime('%Y-%m-%dT%H:%M:%fZ','now','{at}'))"),
+                [],
+            )
+            .unwrap();
+        };
+        edit("-1 seconds");
+        assert!(!due(Wake::Soft));
+        assert!(due(Wake::Hard));
+        edit("-60 seconds");
+        assert!(due(Wake::Timer), "the edits settled");
+        lib.writer.lock().unwrap().execute("DELETE FROM sync_outbox", []).unwrap();
+
+        // The storage's backoff and a lost sign-in hold back all but Hard.
+        sync.status.lock().unwrap().retry_after = Some(SystemTime::now() + Duration::from_secs(60));
+        assert!(!due(Wake::Soft));
+        assert!(due(Wake::Hard));
+        sync.status.lock().unwrap().retry_after = None;
+        sync.status.lock().unwrap().state = "auth".into();
+        assert!(!due(Wake::Soft));
+        assert!(due(Wake::Hard));
     }
 
     #[test]

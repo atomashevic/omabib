@@ -163,8 +163,10 @@ fn blob_name(
         })
         .collect();
     let plain = format!("pdfs/{safe}.pdf");
-    Ok(match used.get(&plain) {
-        Some(other) if other != sha => format!("pdfs/{safe}-{}.pdf", &sha[..sha.len().min(8)]),
+    // Dropbox, OneDrive and macOS folders don't tell names apart by case.
+    let lower = plain.to_lowercase();
+    Ok(match used.iter().find(|(name, _)| name.to_lowercase() == lower) {
+        Some((_, other)) if other != sha => format!("pdfs/{safe}-{}.pdf", &sha[..sha.len().min(8)]),
         _ => plain,
     })
 }
@@ -1023,4 +1025,32 @@ pub fn restore(c: &Connection, detail: &Value) -> Result<Option<String>> {
         }
     }
     Ok(Some(ref_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_names_differ_by_more_than_case() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE refs(id TEXT, citekey TEXT); \
+             INSERT INTO refs VALUES('a','Smith2020'),('b','smith2020');",
+        )
+        .unwrap();
+        let mut used = HashMap::new();
+        let first = blob_name(&c, "a", "1111aaaa", &used).unwrap();
+        assert_eq!(first, "pdfs/Smith2020.pdf");
+        used.insert(first, "1111aaaa".to_string());
+        assert_eq!(
+            blob_name(&c, "b", "2222bbbb", &used).unwrap(),
+            "pdfs/smith2020-2222bbbb.pdf"
+        );
+        // The same file keeps the name it already has.
+        assert_eq!(
+            blob_name(&c, "b", "1111aaaa", &used).unwrap(),
+            "pdfs/Smith2020.pdf"
+        );
+    }
 }

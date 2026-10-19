@@ -19,7 +19,8 @@ pub struct Entry {
 /// A problem reaching the storage, grouped by what the user can do about it.
 #[derive(Debug)]
 pub struct StoreError {
-    /// "auth", "offline", "full", "missing" (rclone not installed) or "error".
+    /// "auth", "offline", "full", "busy" (rate limited), "missing" (rclone not
+    /// installed) or "error".
     pub kind: &'static str,
     pub message: String,
 }
@@ -245,6 +246,18 @@ pub fn classify(stderr: &str) -> &'static str {
     .any(|k| s.contains(k))
     {
         "full"
+    } else if [
+        "too_many_requests",
+        "too_many_write_operations",
+        "ratelimitexceeded",
+        "rate limit exceeded",
+        "too many requests",
+        "error 429",
+    ]
+    .iter()
+    .any(|k| s.contains(k))
+    {
+        "busy"
     } else {
         "error"
     }
@@ -554,6 +567,14 @@ mod tests {
                 "googleapi: Error 403: The user's Drive storage quota has been exceeded., storageQuotaExceeded"
             ),
             "full"
+        );
+        assert_eq!(
+            classify("too_many_write_operations/.. (retry after 2s)"),
+            "busy"
+        );
+        assert_eq!(
+            classify("googleapi: Error 403: Rate Limit Exceeded, rateLimitExceeded"),
+            "busy"
         );
         assert_eq!(classify("something else"), "error");
         assert_eq!(

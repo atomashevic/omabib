@@ -200,6 +200,8 @@ ColumnLayout {
             horizontalAlignment: Text.AlignHCenter
             text: !root.connecting ? "" : root.connecting.provider === "drive"
                 ? "Allow Omabib in the Google page that opened. It can only see the files it creates in your Drive."
+                : root.connecting.provider === "dropbox"
+                ? "Allow Omabib in the Dropbox page that opened. It can only see its own folder, Dropbox → Apps → Omabib."
                 : "Sign in and click Allow in the " + root.connecting.label + " page that opened. The page says rclone: that's the tool Omabib uses to reach " + root.connecting.label + "."
         }
         RowLayout {

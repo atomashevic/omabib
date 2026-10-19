@@ -362,7 +362,7 @@ impl Library {
             "chat_permission_request" => self.chats.request_approval(a),
             "sync_status" => self.sync.status_json(),
             "sync_nudge" => {
-                self.sync.nudge();
+                self.sync.nudge_soft();
                 self.sync.status_json()
             }
             "sync_providers" => Ok(crate::sync::providers()),

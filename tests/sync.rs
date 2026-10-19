@@ -543,3 +543,36 @@ fn two_computers_share_a_library_through_rclone() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("nowhere"), "{err:#}");
 }
+
+#[test]
+fn idle_syncs_leave_the_manifest_alone() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    a.import("@article{one,title={One}}");
+    a.call("sync_start", json!({"mode":"new"}));
+    let device: String = read_connection(&a.lib.path)
+        .unwrap()
+        .query_row("SELECT value FROM sync_state WHERE key='device'", [], |r| r.get(0))
+        .unwrap();
+    let manifest = shared.path().join(format!("Omabib/devices/{device}.json"));
+    let first = std::fs::read(&manifest).unwrap();
+    a.sync();
+    a.sync();
+    assert_eq!(std::fs::read(&manifest).unwrap(), first, "idle syncs rewrote it");
+
+    a.import("@article{two,title={Two}}");
+    a.sync();
+    let edited = std::fs::read(&manifest).unwrap();
+    assert_ne!(edited, first, "a new batch must be announced");
+
+    // An hour after the last write, the heartbeat rewrites it.
+    rusqlite::Connection::open(&a.lib.path)
+        .unwrap()
+        .execute(
+            "UPDATE sync_state SET value='2000-01-01T00:00:00.000Z' WHERE key='manifest_written'",
+            [],
+        )
+        .unwrap();
+    a.sync();
+    assert_ne!(std::fs::read(&manifest).unwrap(), edited);
+}

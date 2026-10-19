@@ -13,36 +13,51 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// Omabib's Google app, registered for the "files Omabib creates" permission.
-/// Environment variables override it (for development builds).
+/// Omabib's own sign-in app at a provider, registered for the narrowest access
+/// sync needs. `OMABIB_<ENV>_CLIENT_ID` and `_CLIENT_SECRET`, or a downloaded
+/// credentials file beside the rclone config, override the built-in values
+/// (for development builds).
+struct App {
+    id: &'static str,
+    secret: &'static str,
+    env: &'static str,
+    file: &'static str,
+    /// rclone signs in to this provider with the secret; there is no PKCE.
+    needs_secret: bool,
+    /// Why the provider is unavailable while the app is not set up.
+    waiting: &'static str,
+}
+
+/// Google: the "files Omabib creates" permission (drive.file).
 const GOOGLE_CLIENT_ID: &str = "";
 const GOOGLE_CLIENT_SECRET: &str = "";
+/// Dropbox: an App Folder app, which only sees Dropbox → Apps → Omabib.
+const DROPBOX_APP_KEY: &str = "p67jtvc00gbcb83";
+const DROPBOX_APP_SECRET: &str = "";
 
-fn google_client() -> Option<(String, String)> {
-    let credentials = rclone_config().parent()?.join("google-client.json");
-    let downloaded: Value = std::fs::read(credentials)
-        .ok()
+/// The app's client id and secret, when this build has them.
+fn credentials(app: &App) -> Option<(String, String)> {
+    let downloaded: Value = rclone_config()
+        .parent()
+        .and_then(|dir| std::fs::read(dir.join(app.file)).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(Value::Null);
-    let id = std::env::var("OMABIB_GOOGLE_CLIENT_ID")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
-            downloaded["installed"]["client_id"]
-                .as_str()
-                .unwrap_or(GOOGLE_CLIENT_ID)
-                .to_string()
-        });
-    let secret = std::env::var("OMABIB_GOOGLE_CLIENT_SECRET")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
-            downloaded["installed"]["client_secret"]
-                .as_str()
-                .unwrap_or(GOOGLE_CLIENT_SECRET)
-                .to_string()
-        });
-    (!id.is_empty()).then_some((id, secret))
+    let value = |field: &str, suffix: &str, built_in: &str| {
+        std::env::var(format!("OMABIB_{}_CLIENT_{suffix}", app.env))
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                // Google's download nests them under "installed".
+                downloaded["installed"][field]
+                    .as_str()
+                    .or(downloaded[field].as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| built_in.to_string())
+    };
+    let id = value("client_id", "ID", app.id);
+    let secret = value("client_secret", "SECRET", app.secret);
+    (!id.is_empty() && (!app.needs_secret || !secret.is_empty())).then_some((id, secret))
 }
 
 struct Provider {
@@ -50,6 +65,10 @@ struct Provider {
     label: &'static str,
     rclone_type: &'static str,
     folder: &'static str,
+    /// Omabib's own app; without one rclone signs in with its shared app.
+    app: Option<App>,
+    /// Extra rclone settings for the connection.
+    params: &'static [&'static str],
 }
 
 const PROVIDERS: [Provider; 3] = [
@@ -58,18 +77,38 @@ const PROVIDERS: [Provider; 3] = [
         label: "Google Drive",
         rclone_type: "drive",
         folder: "My Drive → Omabib",
+        app: Some(App {
+            id: GOOGLE_CLIENT_ID,
+            secret: GOOGLE_CLIENT_SECRET,
+            env: "GOOGLE",
+            file: "google-client.json",
+            needs_secret: false,
+            waiting: "Waiting for Omabib's Google app registration",
+        }),
+        params: &["scope", "drive.file"],
     },
     Provider {
         id: "dropbox",
         label: "Dropbox",
         rclone_type: "dropbox",
-        folder: "Dropbox → Omabib",
+        folder: "Dropbox → Apps → Omabib",
+        app: Some(App {
+            id: DROPBOX_APP_KEY,
+            secret: DROPBOX_APP_SECRET,
+            env: "DROPBOX",
+            file: "dropbox-client.json",
+            needs_secret: true,
+            waiting: "Waiting for Omabib's Dropbox app secret",
+        }),
+        params: &[],
     },
     Provider {
         id: "onedrive",
         label: "OneDrive",
         rclone_type: "onedrive",
         folder: "OneDrive → Omabib",
+        app: None,
+        params: &[],
     },
 ];
 
@@ -91,8 +130,11 @@ pub fn providers() -> Value {
     let mut list: Vec<Value> = PROVIDERS
         .iter()
         .map(|p| {
-            let blocked = (p.id == "drive" && google_client().is_none())
-                .then_some("Waiting for Omabib's Google app registration");
+            let blocked = p
+                .app
+                .as_ref()
+                .filter(|app| credentials(app).is_none())
+                .map(|app| app.waiting);
             json!({"id":p.id,"label":p.label,"folder":p.folder,"needs_rclone":true,
                 "available": version.is_some() && blocked.is_none(), "blocked": blocked})
         })
@@ -218,11 +260,10 @@ pub fn start(sync: Arc<Sync>, provider: &str) -> Result<Arc<Connecting>> {
         .find(|p| p.id == provider)
         .with_context(|| format!("Unknown storage {provider}"))?;
     rclone_binary().context("Install rclone first")?;
-    let mut params: Vec<String> = Vec::new();
-    if p.id == "drive" {
-        let (id, secret) = google_client()
-            .context("Google Drive needs Omabib's Google app, which isn't registered yet")?;
-        params.extend(["scope".into(), "drive.file".into(), "client_id".into(), id]);
+    let mut params: Vec<String> = p.params.iter().map(|v| v.to_string()).collect();
+    if let Some(app) = &p.app {
+        let (id, secret) = credentials(app).context(app.waiting)?;
+        params.extend(["client_id".into(), id]);
         if !secret.is_empty() {
             params.extend(["client_secret".into(), secret]);
         }
