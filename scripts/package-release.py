@@ -81,9 +81,10 @@ def main():
             shutil.copytree(args.app / 'licenses', stage / 'licenses', dirs_exist_ok=True)
         if args.platform == 'macos-arm64':
             # The bundle's frameworks are links into themselves; keep them so.
+            # macdeployqt rewrites and re-signs it, so compare versions, not bytes.
             bundled = args.app / 'Omabib.app/Contents/MacOS/omabib'
-            if bundled.read_bytes() != binary.read_bytes():
-                parser.error('Omabib.app holds a different omabib than --binary')
+            if run(str(bundled), '--version').strip() != f'omabib {version}':
+                parser.error('Omabib.app holds a different omabib version')
             shutil.copytree(args.app / 'Omabib.app', stage / 'Omabib.app', symlinks=True)
         else:
             copy(binary, stage / 'bin/omabib')

@@ -37,6 +37,31 @@ printf 'import QtQuick.Controls.Fusion\nimport QtQuick.Controls.Fusion.impl\nimp
   > "$work/qml/Styles.qml"
 "$qt/bin/macdeployqt" "$app" -qmldir="$source_dir/plugin" -qmldir="$source_dir/desktop" -qmldir="$work/qml" \
   -executable="$contents/MacOS/omabib" -verbose=1
+# macdeployqt copies whole module trees: QtQuick brings every Controls
+# style, particles, dialogs and LocalStorage, which brings QtSql and its
+# database drivers. Omabib uses none of them.
+rm -rf "$contents/PlugIns/sqldrivers"
+for module in LocalStorage Particles VirtualKeyboard Scene2D Scene3D Timeline Dialogs NativeStyle tooling \
+  Controls/Material Controls/Universal Controls/Imagine Controls/FluentWinUI3 Controls/iOS Controls/macOS Controls/Windows; do
+  rm -rf "$contents/Resources/qml/QtQuick/$module"
+done
+# Then the frameworks nothing left in the bundle links to.
+while true; do
+  removed=false
+  for framework in "$contents/Frameworks/"*.framework; do
+    name=$(basename "$framework" .framework)
+    # Counted rather than grep -q, which would end the pipe early.
+    users=$(find "$contents" -type f \( -perm -u+x -o -name '*.dylib' \) ! -path "$framework/*" \
+      -exec otool -L {} + 2>/dev/null | grep -c "/$name.framework/" || true)
+    if [[ $users == 0 ]]; then
+      echo "Unused: $name.framework"
+      rm -rf "$framework"
+      removed=true
+    fi
+  done
+  [[ $removed == true ]] || break
+done
+du -sh "$contents/Frameworks/"* "$contents/PlugIns/"* "$contents/Resources/qml/"*/* 2>/dev/null | sort -rh | head -25
 mkdir -p "$out/licenses/Qt"
 printf 'Omabib.app bundles Qt %s, used under the GNU LGPL version 3.\nIts source is at https://download.qt.io/official_releases/qt/ and https://code.qt.io.\nThe frameworks are unmodified, in Omabib.app/Contents/Frameworks.\n' \
   "$(basename "$(dirname "$qt")")" > "$out/licenses/Qt/NOTICE"
