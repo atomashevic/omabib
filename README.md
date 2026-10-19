@@ -34,13 +34,9 @@ Free and open source. Search your library, read papers, capture ideas, and put y
 
 ## Install
 
-For **Omarchy on Linux x86-64**:
+Prebuilt releases are not published yet, so the plugin's **Install Omabib** button has nothing to download. A standalone app for Linux and macOS, installed with one command, is on the way.
 
-```bash
-omarchy plugin add https://github.com/atomashevic/omabib.git --enable
-```
-
-Click the **Omabib** icon in your bar, then choose **Install Omabib**. It downloads the app and opens your library.
+Until then, Omabib runs on **Omarchy (Linux x86-64)** built from source: follow [Build from source](#build-from-source). The first build takes a few minutes, mostly compiling MuPDF.
 
 ## First run
 
@@ -92,11 +88,7 @@ For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then resta
 
 ## Update
 
-```bash
-omarchy plugin update io.github.atomashevic.omabib
-```
-
-Open Omabib after updating. If the app needs an update too, the setup screen handles it. Your library and settings carry over.
+Pull and rebuild the source checkout as described at the end of [Build from source](#build-from-source). Your library and settings carry over.
 
 ## Typical uses
 
