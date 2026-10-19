@@ -161,7 +161,7 @@ ColumnLayout {
         checked: root.settings.pdf_colors === "theme"
         onChosen: root.app.setSetting("pdf_colors", "theme")
     }
-    Hint { text: "Reader tabs draw the page in the current theme's colors; colored figures and links keep their hue. Ctrl+R in a reader tab switches. Clips saved to notes keep the PDF's own colors." }
+    Hint { text: root.theme.keys("Reader tabs draw the page in the current theme's colors; colored figures and links keep their hue. Ctrl+R in a reader tab switches. Clips saved to notes keep the PDF's own colors.") }
 
     SectionLabel { theme: root.theme; text: "Terminal chat"; Layout.topMargin: root.theme.space(10) }
     Repeater {

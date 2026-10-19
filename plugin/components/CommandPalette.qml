@@ -11,7 +11,7 @@ Popup {
     required property var app
 
     readonly property var actions: [
-        {n: 1, group: "Add", icon: "plus", label: "Add new item", hint: "DOI, arXiv ID, URL or BibTeX", shortcut: "Super+Alt+B"},
+        {n: 1, group: "Add", icon: "plus", label: "Add new item", hint: "DOI, arXiv ID, URL or BibTeX", shortcut: root.theme.omarchyAvailable ? "Super+Alt+B" : ""},
         {n: 6, group: "Add", icon: "braces", label: "Paste BibTeX"},
         {n: 7, group: "Add", icon: "file", label: "Import BibTeX file…"},
         {n: 8, group: "Add", icon: "link", label: "Add DOI"},

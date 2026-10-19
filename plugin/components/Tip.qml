@@ -15,7 +15,7 @@ ToolTip {
     leftPadding: theme.space(9)
     rightPadding: theme.space(9)
     contentItem: Text {
-        text: tip.text
+        text: tip.theme.keys(tip.text)
         color: tip.theme.bright
         font.family: tip.fontFamily
         font.pixelSize: tip.theme.small

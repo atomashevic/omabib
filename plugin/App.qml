@@ -2262,7 +2262,7 @@ Item {
                         }
                         RowLayout {
                             Layout.fillWidth:true;spacing:ui.space(8)
-                            BibLabel{text:"Type to filter · ↑↓ select · ↵ open · Ctrl+L path";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+                            BibLabel{text:ui.keys("Type to filter · ↑↓ select · ↵ open · Ctrl+L path");color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
                             BibButton{variant:"ghost";text:"Cancel";onClicked:bibFileDialog.close()}
                             BibButton{variant:"primary";text:fileList.currentIndex>=0&&bibFileDialog.matches[fileList.currentIndex]&&!bibFileDialog.matches[fileList.currentIndex].isDir?(root.pickerKind==="pdf"?"Attach PDF":"Import file"):"Open folder";enabled:bibFileDialog.matches.length>0;onClicked:bibFileDialog.choose(fileList.currentIndex)}
                         }

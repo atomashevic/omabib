@@ -107,6 +107,12 @@ QtObject {
     readonly property int display: Math.round(28 * scale)
 
     function space(px) { return Style.space(px) }
+    // Shortcuts as the platform writes them. On macOS Qt takes Ctrl in a
+    // shortcut to mean Command, so Ctrl+K is ⌘K.
+    function keys(text) {
+        if (Qt.platform.os !== "osx" || !text) return text
+        return String(text).replace(/Ctrl\+/g, "⌘").replace(/Alt\+/g, "⌥").replace(/Shift\+/g, "⇧")
+    }
     function mix(a, b, t) {
         const x = Qt.color(a), y = Qt.color(b)
         return Qt.rgba(x.r + (y.r - x.r) * t, x.g + (y.g - x.g) * t, x.b + (y.b - x.b) * t, 1)

@@ -18,7 +18,7 @@ Rectangle {
     Text {
         id: label
         anchors.centerIn: parent
-        text: root.text
+        text: root.theme.keys(root.text)
         color: root.onAccent ? root.theme.onAccent : root.theme.text
         font.family: root.theme.mono
         font.pixelSize: root.theme.caption
