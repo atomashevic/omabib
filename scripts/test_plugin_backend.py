@@ -38,7 +38,7 @@ def main():
         (plugin / 'local-note.txt').write_text('keep this')
         commands = scratch / 'commands'
         commands.mkdir()
-        for name in ('bash', 'dirname', 'mkdir', 'install', 'mv', 'rm', 'cp', 'touch', 'grep', 'python3'):
+        for name in ('bash', 'dirname', 'mkdir', 'install', 'mv', 'rm', 'cp', 'touch', 'grep', 'ln', 'uname', 'python3'):
             (commands / name).symlink_to(sys.executable if name == 'python3' else shutil.which(name))
         for name in ('omarchy', 'omarchy-shell', 'systemctl'):
             path = commands / name
