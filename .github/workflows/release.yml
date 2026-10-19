@@ -159,7 +159,7 @@ jobs:
           if-no-files-found: error
       # Last, so a failing test still leaves the app built and tried above.
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --release --locked --no-fail-fast
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'

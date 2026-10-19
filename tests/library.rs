@@ -669,7 +669,8 @@ fn pdf_path_and_search_flags_reflect_attachments_and_abstracts() {
     std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
     l.call("add_pdf", &json!({"ref_id":book,"path":pdf})).unwrap();
     let book_ref = l.call("get_reference", &json!({"id":book})).unwrap();
-    assert_eq!(book_ref["pdf_path"], json!(pdf.to_str().unwrap()));
+    // Stored canonical: on macOS the temporary folder is behind /var -> /private/var.
+    assert_eq!(book_ref["pdf_path"], json!(pdf.canonicalize().unwrap()));
     let book_hit = l.call("search", &json!({"query":"measurement theory"})).unwrap()["results"][0].clone();
     assert_eq!(book_hit["id"], book);
     assert_eq!(book_hit["has_pdf"], true);
@@ -691,7 +692,7 @@ fn get_pdf_returns_existing_local_attachment_without_network() {
     l.call("add_pdf", &json!({"ref_id":book,"path":pdf.clone()})).unwrap();
     let got = l.call("get_pdf", &json!({"ref_id":book})).unwrap();
     assert_eq!(got["source"], "local");
-    assert_eq!(got["path"], json!(pdf.to_str().unwrap()));
+    assert_eq!(got["path"], json!(pdf.canonicalize().unwrap()));
 }
 
 #[test]
@@ -725,7 +726,7 @@ fn add_reference_from_bibtex_attaches_pdf_and_associates_project_atomically() {
     let r = l
         .call("get_reference", &json!({"id":out["id"]}))
         .unwrap();
-    assert_eq!(r["pdf_path"], json!(pdf.to_str().unwrap()));
+    assert_eq!(r["pdf_path"], json!(pdf.canonicalize().unwrap()));
     let ctx = l
         .call("project_context", &json!({"project_id":project["id"]}))
         .unwrap();
