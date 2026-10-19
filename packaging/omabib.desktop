@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Omabib
+GenericName=Bibliography Manager
+Comment=Your papers, notes and agents in one place
+Exec=omabib-desktop
+Icon=omabib
+Terminal=false
+StartupWMClass=omabib
+Categories=Office;Education;Science;
+Keywords=bibliography;references;papers;citations;PDF;BibTeX;

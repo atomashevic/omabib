@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -128,8 +129,13 @@ def remove_backend():
     if not owned:
         raise ValueError('No plugin-managed backend installation was found')
     checked('systemctl', '--user', 'disable', '--now', 'omabib.service')
-    for name in ('omabib', *HELPERS):
+    for name in ('omabib', 'omabib-desktop', *HELPERS):
         (Path.home() / '.local/bin' / name).unlink(missing_ok=True)
+    # The app and its own Qt, from release archives that bundle them.
+    shutil.rmtree(Path.home() / '.local/lib/omabib', ignore_errors=True)
+    data = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+    (data / 'applications/omabib.desktop').unlink(missing_ok=True)
+    (data / 'icons/hicolor/scalable/apps/omabib.svg').unlink(missing_ok=True)
     (Path.home() / '.config/systemd/user/omabib.service').unlink(missing_ok=True)
     checked('systemctl', '--user', 'daemon-reload')
     state_path().unlink()

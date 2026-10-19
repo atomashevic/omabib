@@ -1,6 +1,6 @@
 # Omabib - bibliography management optimized for fast agent workflows
 
-A fast native Omarchy alternative to Zotero with first-class agent support.
+A fast native alternative to Zotero for Linux and macOS, with first-class agent support.
 
 [![Sponsor Omabib](https://img.shields.io/badge/Sponsor-Omabib-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/atomashevic)
 
@@ -34,9 +34,18 @@ Free and open source. Search your library, read papers, capture ideas, and put y
 
 ## Install
 
-Prebuilt releases are not published yet, so the plugin's **Install Omabib** button has nothing to download. A standalone app for Linux and macOS, installed with one command, is on the way.
+On **Linux** (x86-64: Ubuntu 22.04 or newer, Debian 12 or newer, Fedora, Arch, Omarchy and other distributions with glibc 2.35 or newer) and **macOS** (13 or newer, on Apple silicon), run:
 
-Until then, Omabib runs on **Omarchy (Linux x86-64)** built from source: follow [Build from source](#build-from-source). The first build takes a few minutes, mostly compiling MuPDF.
+```bash
+curl -fsSL https://github.com/atomashevic/omabib/releases/latest/download/get.sh | sh
+```
+
+The [script](scripts/get.sh) downloads the release built for your computer, checks it against the release's SHA-256 checksums, and installs it in your home folder. It needs no administrator access or build tools.
+
+- **Linux:** the app, with its own copy of Qt, goes to `~/.local/lib/omabib`, the `omabib` command to `~/.local/bin`, and Omabib appears among your applications. On Omarchy it also adds the shell plugin, whose bar icon opens the app, and the `omabib.service` user service.
+- **macOS:** `Omabib.app` goes to `~/Applications`, and the `omabib` command to `~/.local/bin`. Settings and chat use Python 3; if `python3` asks to install the developer tools, accept, or run `xcode-select --install`. macOS support is new: please [report](https://github.com/atomashevic/omabib/issues) anything that doesn't work.
+
+Then open Omabib from your applications, or run `omabib open`. If `omabib` isn't found, add `~/.local/bin` to your `PATH`. To install a particular release, put `OMABIB_VERSION=v0.1.0` before `sh`. On other systems, [build from source](#build-from-source).
 
 ## First run
 
@@ -52,7 +61,7 @@ Search by title, author, citation key, or note text. **Enter** opens a paper's P
 
 ### Optional keyboard shortcuts
 
-Check for existing bindings before adding these to `~/.config/hypr/bindings.lua` on Omarchy installations using Lua configuration:
+On Omarchy, check for existing bindings before adding these to `~/.config/hypr/bindings.lua` on Omarchy installations using Lua configuration:
 
 ```lua
 o.bind("SUPER + B", "Omabib bibliography", "omabib open")
@@ -72,7 +81,7 @@ hyprctl configerrors
 
 Bring your existing Codex or Claude Code account for in-app and terminal chat, or use ChatGPT Desktop in Codex mode or Claude Desktop. The library, PDF reader, and notes work on their own.
 
-Open **Settings** using the cog at the bottom of the rail. Choose your installed agent under **Terminal chat** and **Desktop chat**. Terminal chat also needs `xdg-terminal-exec` available on `PATH`. In-app chat is available in a paper's **Chat** tab or the PDF reader's side pane.
+Open **Settings** using the cog at the bottom of the rail. Choose your installed agent under **Terminal chat** and **Desktop chat**. Terminal chat opens a terminal through `xdg-terminal-exec` when it is installed, otherwise GNOME Terminal, Konsole, kitty or another common terminal, or Terminal on macOS. In-app chat is available in a paper's **Chat** tab or the PDF reader's side pane.
 
 Choose **Connect Codex** in Settings to make the library available in your other Codex sessions. This registers the bundled MCP server and installs the Omabib skill. Reopen existing Codex sessions after connecting.
 
@@ -88,7 +97,7 @@ For Claude Desktop, use **Add Omabib to Claude Desktop** in Settings, then resta
 
 ## Update
 
-Pull and rebuild the source checkout as described at the end of [Build from source](#build-from-source). Your library and settings carry over.
+Run the [install command](#install) again. For a source checkout, pull and rebuild as described at the end of [Build from source](#build-from-source). Your library and settings carry over.
 
 ## Typical uses
 
@@ -253,7 +262,15 @@ omabib restore /absolute/path/library-backup.db --to /absolute/path/restored.db
 
 Backups use SQLite's consistent backup API. Restore validates the backup and only writes a new path. Stop the service before deliberately replacing the active library with a restored file. Do not copy a live database without its WAL; use `backup` instead. Future schema upgrades must take a backup before changing an existing schema. This release creates schema 1 and refuses newer versions.
 
-To remove Omabib while keeping your library:
+To remove Omabib while keeping your library, quit it, then on Linux:
+
+```bash
+omabib-desktop --quit
+rm -rf ~/.local/lib/omabib ~/.local/share/applications/omabib.desktop ~/.local/share/icons/hicolor/scalable/apps/omabib.svg
+rm -f ~/.local/bin/omabib ~/.local/bin/omabib-desktop ~/.local/bin/omabib-{settings,claude,codex,chatgpt,overview}
+```
+
+On macOS, quit Omabib, move `~/Applications/Omabib.app` to the Bin, and remove the same commands from `~/.local/bin`. On Omarchy, remove the plugin and its service with:
 
 ```bash
 python3 ~/.config/omarchy/plugins/io.github.atomashevic.omabib/scripts/omabib-plugin remove-backend
@@ -292,7 +309,9 @@ git pull --ff-only
 ## Troubleshooting
 
 - **`omabib` command not found:** open a new terminal or run `~/.local/bin/omabib open`. Ensure `~/.local/bin` is on your shell's `PATH`.
-- **Prebuilt binary will not start:** confirm the machine is Linux x86-64 (`uname -sm`) and inspect the error printed by `bin/omabib --version`. The binaries use glibc and system font libraries; they are not static or intended for musl-based distributions.
+- **Prebuilt binary will not start:** confirm the machine is Linux x86-64 or an Apple silicon Mac (`uname -sm`) and inspect the error printed by `omabib --version`. The Linux binaries use glibc 2.35 or newer and the system's font libraries; they are not static or intended for musl-based distributions.
+- **The Linux app will not open:** run `omabib-desktop` in a terminal to see why. `ldd ~/.local/lib/omabib/bin/omabib-desktop | grep 'not found'` lists system libraries the app needs that are missing, such as OpenGL or xkbcommon on a minimal system.
+- **macOS says Omabib can't be opened:** this happens to apps downloaded in a browser rather than by the install command. Run `xattr -dr com.apple.quarantine ~/Applications/Omabib.app`.
 - **Build fails (source installations):** check `rustc --version`, `cargo --version`, `clang --version`, and `make --version`. A first build compiles MuPDF and Typst and can take several minutes.
 - **Service is unavailable:** inspect `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`. After resolving the reported issue, run `systemctl --user restart omabib.service` and `omabib status`.
 - **Installer reports that omarchy-shell is not responding:** run it from an active Omarchy desktop session. Restore the shell, then rerun `./scripts/install.sh` to complete installation.
@@ -308,7 +327,7 @@ The download happens when you choose Install. If that version has not been relea
 
 Existing installations keep the same library, settings, service name, and `omabib` command. Setup disables the old managed `omabib` plugin to avoid duplicate windows and leaves its files in place. The new plugin ID is `io.github.atomashevic.omabib`.
 
-You can also download `omabib-VERSION-linux-x86_64.tar.gz` from [GitHub Releases](https://github.com/atomashevic/omabib/releases), extract it, and run `./scripts/install.sh`. This installs a standalone plugin copy; update it by installing a newer archive. A Git-managed plugin can use the same archive's `./scripts/install.sh --backend-only` without changing its checkout.
+You can also download `omabib-VERSION-linux-x86_64.tar.gz` or `omabib-VERSION-macos-arm64.tar.gz` from [GitHub Releases](https://github.com/atomashevic/omabib/releases), extract it, and run `./scripts/install.sh`, which is what the install command does. On Omarchy this installs a standalone plugin copy; update it by installing a newer archive. A Git-managed plugin can use the same archive's `./scripts/install.sh --backend-only` without changing its checkout.
 
 </details>
 
@@ -318,12 +337,15 @@ You can also download `omabib-VERSION-linux-x86_64.tar.gz` from [GitHub Releases
 | Component | Default location |
 |---|---|
 | CLI and launch helpers | `~/.local/bin/` |
-| Quickshell plugin | `~/.config/omarchy/plugins/io.github.atomashevic.omabib/` |
-| User service | `~/.config/systemd/user/omabib.service` |
+| App and its Qt (Linux) | `~/.local/lib/omabib/` |
+| Launcher entry and icon (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
+| App (macOS) | `~/Applications/Omabib.app` |
+| Quickshell plugin (Omarchy) | `~/.config/omarchy/plugins/io.github.atomashevic.omabib/` |
+| User service (Omarchy) | `~/.config/systemd/user/omabib.service` |
 | Omabib skill for Codex | `~/.codex/skills/omabib/` |
 | License texts and dependency notices | `~/.local/share/omabib/licenses/` |
 
-The prebuilt app uses Omarchy's standard runtime libraries, Bash, and Python 3. Rust and C/C++ build tools are needed only for source builds.
+The prebuilt app bundles Qt, and uses the system's glibc, OpenGL, font libraries, Bash and Python 3. Rust and C/C++ build tools are needed only for source builds.
 
 To verify a downloaded archive, download `SHA256SUMS` from the same release into the same folder, then run:
 
@@ -337,15 +359,17 @@ A matching archive prints `OK`.
 
 ## Publishing a release
 
-The [release workflow](.github/workflows/release.yml) builds on Ubuntu 24.04 x86-64, runs the Rust tests, packages and checks the installation, then publishes assets when a `v*` tag is pushed. The tag must match the versions in both `Cargo.toml` and `manifest.json`; update `Cargo.lock` alongside a package version change. Commit all code needed by the release before tagging.
+The [release workflow](.github/workflows/release.yml) builds Linux on Ubuntu 22.04 x86-64 and macOS on Apple silicon, runs the Rust tests, bundles Qt with the app, installs each archive with `get.sh` on fresh Ubuntu 22.04 and 24.04, Debian 12, Fedora and Arch systems and on macOS, opens the app there, then publishes assets when a `v*` tag is pushed. The tag must match the versions in `Cargo.toml`, `manifest.json` and `desktop/CMakeLists.txt`; update `Cargo.lock` alongside a package version change. Commit all code needed by the release before tagging.
 
 Each release includes:
 
-- `omabib-VERSION-linux-x86_64.tar.gz`: binary, QML plugin, helpers, user service, agent skill, and license texts.
+- `omabib-VERSION-linux-x86_64.tar.gz`: binary, the app with its Qt, QML plugin, helpers, user service, agent skill, and license texts.
+- `omabib-VERSION-macos-arm64.tar.gz`: `Omabib.app`, holding the app, the binary and helpers, with its Qt; agent skill and license texts.
 - `omabib-VERSION-source.tar.gz`: the tagged source with vendored Cargo dependencies, including native dependency sources. With the build toolchain installed, it can be built using `./scripts/build.sh --offline`.
-- `SHA256SUMS`: SHA-256 checksums for both archives.
+- `SHA256SUMS`: SHA-256 checksums for the archives.
+- `get.sh`: the install script, set to install this release.
 
-A manual workflow run builds and retains test artifacts without publishing. To package an existing local build, run `python3 scripts/package-release.py --version vVERSION`; add `--source` from a clean checkout to include vendored source. Packaging needs Cargo, Python 3.12 or newer, and network access for uncached dependencies. The release install test uses a temporary home and stubs desktop activation commands; a new release should also be checked in a real Omarchy session.
+A manual workflow run builds and retains test artifacts, with screenshots of the app on each system, without publishing. To package an existing local build, run `python3 scripts/package-release.py --version vVERSION`, with `--app` and the folder `scripts/bundle-linux-app` or `scripts/bundle-macos-app` made to include the app; add `--source` from a clean checkout to include vendored source. Packaging needs Cargo, Python 3.12 or newer, and network access for uncached dependencies. The release install test uses a temporary home and stubs desktop activation commands; a new release should also be checked in a real Omarchy session.
 
 ## Verification commands
 

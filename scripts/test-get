@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Installs a release the way users do, `get.sh | sh`, from a folder holding
+# the archive and SHA256SUMS. Then checks the CLI, starts the service through
+# it, opens the app and saves a screenshot. CI runs it in fresh Ubuntu, Debian,
+# Fedora and Arch containers and on macOS, each with a throwaway home.
+# Usage: scripts/test-get [--deps] DIST_DIR SCREENSHOT.png
+# --deps first installs, as root, what any desktop already has: OpenGL, fonts,
+# xkbcommon, Python.
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+deps=false
+if [[ ${1:-} == --deps ]]; then
+  deps=true
+  shift
+fi
+dist=$(cd -- "$1" && pwd) shot=$2
+if [[ $deps == true ]]; then
+  if command -v apt-get >/dev/null; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates python3 \
+      libgl1 libegl1 libopengl0 libfontconfig1 fonts-dejavu-core libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+      libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-xcb1 libxcb1 >/dev/null
+  elif command -v dnf >/dev/null; then
+    dnf install -y -q curl python3 tar gzip findutils libglvnd-opengl libglvnd-egl libglvnd-glx fontconfig \
+      dejavu-sans-fonts libxkbcommon dbus-libs glib2 libwayland-client libwayland-cursor libwayland-egl libX11-xcb libxcb
+  elif command -v pacman >/dev/null; then
+    pacman -Syu --noconfirm --needed curl python libglvnd fontconfig ttf-dejavu libxkbcommon dbus glib2 wayland \
+      libx11 libxcb >/dev/null
+  fi
+fi
+version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$source_dir/manifest.json" | head -n 1)
+OMABIB_DOWNLOAD_URL="file://$dist" OMABIB_VERSION="v$version" sh < "$source_dir/scripts/get.sh"
+export PATH="$HOME/.local/bin:$PATH"
+[[ $(omabib --version) == "omabib $version" ]] || { echo "FAIL: omabib --version" >&2; exit 1; }
+# Any command starts the service when nothing answers.
+omabib status >/dev/null
+if [[ $(uname -s) == Linux ]]; then
+  [[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/omabib.desktop" ]] || { echo "FAIL: no launcher entry" >&2; exit 1; }
+  echo "Libraries the bundled Qt plugins load that this system lacks (a desktop has them):"
+  find "$HOME/.local/lib/omabib" -name '*.so*' -exec ldd {} + 2>/dev/null | awk '/not found/ { print "  " $1 }' | sort -u || true
+  export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software
+fi
+log=$(mktemp)
+omabib-desktop > "$log" 2>&1 &
+for _ in $(seq 1 150); do
+  if omabib-desktop ipc state >/dev/null 2>&1; then break; fi
+  sleep 0.2
+done
+sleep 2
+omabib-desktop screenshot "$shot"
+omabib-desktop --quit || true
+echo "App output:"
+cat "$log"
+if grep -E "is not installed|Cannot load library|could not be loaded|Could not find the Qt platform plugin|module \"[^\"]*\" plugin" "$log"; then
+  echo "FAIL: the app is missing part of Qt" >&2
+  exit 1
+fi
+[[ $(wc -c < "$shot") -gt 20000 ]] || { echo "FAIL: screenshot is empty" >&2; exit 1; }
+echo "PASS: get.sh install, CLI, service and app on $(uname -s) $(uname -m)"

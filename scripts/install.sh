@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Installs Omabib for this user from a release archive or a built source
+# checkout. It never compiles and needs no administrator access.
+#   Linux: ~/.local/bin, with the app and its own Qt under ~/.local/lib/omabib
+#          when the archive bundles them. On Omarchy, also the shell plugin
+#          and the systemd user service.
+#   macOS: ~/Applications/Omabib.app, with omabib on ~/.local/bin.
+# Runs on macOS's bash 3.2.
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 backend_only=false
@@ -16,6 +23,69 @@ if [[ $# -gt 1 ]]; then
   echo "Usage: $0 [--backend-only] [path/to/prebuilt/omabib]" >&2
   exit 2
 fi
+helpers=(omabib-chatgpt omabib-codex omabib-overview omabib-settings omabib-claude)
+bin_dir="$HOME/.local/bin"
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+missing() { echo "Package is missing $1" >&2; exit 1; }
+# Installs a file by replacing the old one, never writing through it: an
+# earlier install may have left a link into the app's folder there.
+put() {
+  install -m "$3" "$1" "$2.new"
+  mv "$2.new" "$2"
+}
+# Agent skill and licenses, the same on every system.
+install_shared() {
+  mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/omabib" "$data_dir/omabib/skills/omabib" "$data_dir/omabib/licenses"
+  install -m644 "$source_dir/skills/omabib/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/omabib/SKILL.md"
+  install -m644 "$source_dir/skills/omabib/SKILL.md" "$data_dir/omabib/skills/omabib/SKILL.md"
+  install -m644 "$source_dir/LICENSE" "$data_dir/omabib/licenses/OMABIB-LICENSE"
+  if [[ -d "$source_dir/licenses" ]]; then
+    cp -r "$source_dir/licenses/." "$data_dir/omabib/licenses/"
+  elif [[ -f "$source_dir/src/mitex/LICENSE" ]]; then
+    install -m644 "$source_dir/src/mitex/LICENSE" "$data_dir/omabib/licenses/MITEX-LICENSE"
+  fi
+}
+path_hint() {
+  case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *) echo "Add $bin_dir to your PATH to use the omabib command, for example in ~/.profile or ~/.zprofile:"
+       echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
+}
+
+if [[ $(uname -s) == Darwin ]]; then
+  app="$source_dir/Omabib.app"
+  [[ -x "$app/Contents/MacOS/omabib" && -x "$app/Contents/MacOS/omabib-desktop" ]] || missing Omabib.app
+  for file in skills/omabib/SKILL.md LICENSE; do [[ -f "$source_dir/$file" ]] || missing "$file"; done
+  "$app/Contents/MacOS/omabib" --version
+  target="$HOME/Applications/Omabib.app"
+  # A running copy quits, so the next open runs this one.
+  [[ -x "$target/Contents/MacOS/omabib-desktop" ]] && { "$target/Contents/MacOS/omabib-desktop" --quit 2>/dev/null || true; }
+  mkdir -p "$HOME/Applications" "$bin_dir"
+  rm -rf "$target.new"
+  ditto "$app" "$target.new"
+  rm -rf "$target"
+  mv "$target.new" "$target"
+  xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+  # Small scripts rather than links: run from inside the bundle, the app
+  # finds its Qt frameworks and omabib finds the app beside it.
+  for name in omabib omabib-desktop "${helpers[@]}"; do
+    printf '#!/bin/sh\nexec "%s/Contents/MacOS/%s" "$@"\n' "$target" "$name" > "$bin_dir/$name.new"
+    chmod 755 "$bin_dir/$name.new"
+    mv "$bin_dir/$name.new" "$bin_dir/$name"
+  done
+  install_shared
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$target" 2>/dev/null || true
+  echo "Installed Omabib in ~/Applications. Open it from Spotlight or Launchpad, or run: omabib open"
+  path_hint
+  if ! xcode-select -p >/dev/null 2>&1 && ! [[ -x /opt/homebrew/bin/python3 ]]; then
+    echo "Settings and chat need Python 3. Install it with: xcode-select --install"
+  fi
+  exit 0
+fi
+
 if [[ $# -eq 1 ]]; then
   binary=$1
 elif [[ -f "$source_dir/bin/omabib" ]]; then
@@ -30,20 +100,28 @@ if [[ ! -x "$binary" ]]; then
   echo "Download a release archive, or run ./scripts/build.sh before installing from source." >&2
   exit 1
 fi
-for tool in omarchy omarchy-shell systemctl python3; do
+# On Omarchy, Omabib also installs its shell plugin and systemd service.
+# Elsewhere, any omabib command starts the service when it is needed.
+omarchy=false
+if command -v omarchy >/dev/null && command -v omarchy-shell >/dev/null; then omarchy=true; fi
+required=(python3)
+if [[ $omarchy == true ]]; then required+=(systemctl); fi
+for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null || { echo "Required runtime command missing: $tool" >&2; exit 1; }
 done
 # Check runtime compatibility and package completeness before changing installed files.
 "$binary" --version
-for file in packaging/omabib.service manifest.json plugin/App.qml plugin/BarWidget.qml plugin/Entry.qml scripts/omabib-plugin \
-  scripts/omabib-close-first scripts/omabib-chatgpt scripts/omabib-codex \
-  scripts/omabib-overview scripts/omabib-settings scripts/omabib-claude \
-  skills/omabib/SKILL.md LICENSE; do
-  [[ -f "$source_dir/$file" ]] || { echo "Package is missing $file" >&2; exit 1; }
-done
-[[ -d "$source_dir/plugin/components" ]] || { echo "Package is missing plugin/components" >&2; exit 1; }
+files=(skills/omabib/SKILL.md LICENSE)
+for helper in "${helpers[@]}"; do files+=("scripts/$helper"); done
+if [[ $omarchy == true ]]; then
+  files+=(packaging/omabib.service manifest.json plugin/App.qml plugin/BarWidget.qml plugin/Entry.qml
+          scripts/omabib-plugin scripts/omabib-close-first)
+fi
+for file in "${files[@]}"; do [[ -f "$source_dir/$file" ]] || missing "$file"; done
+if [[ $omarchy == true ]]; then [[ -d "$source_dir/plugin/components" ]] || missing plugin/components; fi
 plugin_id="io.github.atomashevic.omabib"
 plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$plugin_id"
+if [[ $omarchy == false ]]; then backend_only=true; fi
 if [[ "$backend_only" == false && -d "$plugin_dir/.git" ]]; then
   echo "This plugin is managed by Omarchy. Use omarchy plugin update $plugin_id, then open Omabib." >&2
   echo "To install only a locally built backend, use --backend-only." >&2
@@ -53,19 +131,58 @@ if [[ "$backend_only" == false && -e "$plugin_dir" && ! -f "$plugin_dir/.omabib-
   echo "Existing unmanaged Omabib plugin at $plugin_dir; inspect it before installing." >&2
   exit 1
 fi
-mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "${CODEX_HOME:-$HOME/.codex}/skills/omabib"
-install -m755 "$binary" "$HOME/.local/bin/omabib.new"
-mv "$HOME/.local/bin/omabib.new" "$HOME/.local/bin/omabib"
-# The standalone app, beside the binary in a package or built into
-# build/desktop. Once installed, `omabib open` and the shell plugin show
-# Omabib through it. A running copy quits, so the next open runs this one.
+mkdir -p "$bin_dir"
+# The standalone app: in a release archive with its own Qt (bin/, lib/,
+# plugins/, qml/), otherwise beside the binary or built into build/desktop.
+# Once installed, `omabib open` and the shell plugin show Omabib through it.
+# A running copy quits, so the next open runs this one.
+app_dir="$HOME/.local/lib/omabib"
 desktop_binary="$(dirname -- "$binary")/omabib-desktop"
 [[ -x "$desktop_binary" ]] || desktop_binary="$source_dir/build/desktop/omabib-desktop"
-if [[ -x "$desktop_binary" ]]; then
-  "$HOME/.local/bin/omabib-desktop" --quit 2>/dev/null || true
-  install -m755 "$desktop_binary" "$HOME/.local/bin/omabib-desktop.new"
-  mv "$HOME/.local/bin/omabib-desktop.new" "$HOME/.local/bin/omabib-desktop"
+if [[ -x "$desktop_binary" && -x "$bin_dir/omabib-desktop" ]]; then
+  "$bin_dir/omabib-desktop" --quit 2>/dev/null || true
 fi
+if [[ -f "$source_dir/lib/libQt6Core.so.6" && -x "$source_dir/bin/omabib-desktop" ]]; then
+  # The whole app goes to ~/.local/lib/omabib, linked from ~/.local/bin; the
+  # app puts its own folder first on PATH, so the helpers live there too.
+  rm -rf "$app_dir.new" "$app_dir.old"
+  mkdir -p "$app_dir.new"
+  cp -r "$source_dir/bin" "$source_dir/lib" "$source_dir/plugins" "$source_dir/qml" "$app_dir.new/"
+  for helper in "${helpers[@]}"; do install -m755 "$source_dir/scripts/$helper" "$app_dir.new/bin/$helper"; done
+  if [[ -e "$app_dir" ]]; then mv "$app_dir" "$app_dir.old"; fi
+  mv "$app_dir.new" "$app_dir"
+  rm -rf "$app_dir.old"
+  for name in omabib omabib-desktop "${helpers[@]}"; do ln -sfn "$app_dir/bin/$name" "$bin_dir/$name"; done
+else
+  rm -rf "$app_dir"
+  put "$binary" "$bin_dir/omabib" 755
+  if [[ -x "$desktop_binary" ]]; then put "$desktop_binary" "$bin_dir/omabib-desktop" 755; fi
+  for helper in "${helpers[@]}"; do put "$source_dir/scripts/$helper" "$bin_dir/$helper" 755; done
+fi
+# A launcher entry and icon, for app menus and docks.
+if [[ -x "$bin_dir/omabib-desktop" ]]; then
+  entry="$source_dir/share/applications/omabib.desktop"
+  [[ -f "$entry" ]] || entry="$source_dir/packaging/omabib.desktop"
+  icon="$source_dir/share/icons/hicolor/scalable/apps/omabib.svg"
+  [[ -f "$icon" ]] || icon="$source_dir/packaging/omabib.svg"
+  if [[ -f "$entry" && -f "$icon" ]]; then
+    mkdir -p "$data_dir/applications" "$data_dir/icons/hicolor/scalable/apps"
+    install -m644 "$icon" "$data_dir/icons/hicolor/scalable/apps/omabib.svg"
+    while IFS= read -r line; do
+      [[ $line == Exec=* ]] && line="Exec=$bin_dir/omabib-desktop"
+      printf '%s\n' "$line"
+    done < "$entry" > "$data_dir/applications/omabib.desktop"
+    if command -v update-desktop-database >/dev/null; then update-desktop-database -q "$data_dir/applications" || true; fi
+  fi
+fi
+install_shared
+if [[ $omarchy == false ]]; then
+  echo "Installed Omabib. Open it from your applications, or run: omabib open"
+  path_hint
+  exit 0
+fi
+
+mkdir -p "$HOME/.config/systemd/user"
 install -m644 "$source_dir/packaging/omabib.service" "$HOME/.config/systemd/user/omabib.service"
 if [[ "$backend_only" == false ]]; then
   mkdir -p "$plugin_dir/scripts"
@@ -79,35 +196,18 @@ if [[ "$backend_only" == false ]]; then
 fi
 # Older releases still use this helper; newer source trees remove it.
 if [[ -f "$source_dir/scripts/omabib-history" ]]; then
-  install -m755 "$source_dir/scripts/omabib-history" "$HOME/.local/bin/omabib-history"
-elif [[ -f "$HOME/.local/bin/omabib-history" ]] && grep -q "history_snapshot\|sync_repo\|omabib" "$HOME/.local/bin/omabib-history"; then
-  rm -f "$HOME/.local/bin/omabib-history"
+  install -m755 "$source_dir/scripts/omabib-history" "$bin_dir/omabib-history"
+elif [[ -f "$bin_dir/omabib-history" ]] && grep -q "history_snapshot\|sync_repo\|omabib" "$bin_dir/omabib-history"; then
+  rm -f "$bin_dir/omabib-history"
 fi
-install -m755 "$source_dir/scripts/omabib-close-first" "$HOME/.local/bin/omabib-close-first"
+put "$source_dir/scripts/omabib-close-first" "$bin_dir/omabib-close-first" 755
 # Zathura page notes moved into Omabib's reader tabs. Remove the old helpers
 # only when they are Omabib's own.
 for helper in omabib-quick-note omabib-capture-note; do
-  if [[ -f "$HOME/.local/bin/$helper" ]] && grep -q "Zathura" "$HOME/.local/bin/$helper"; then
-    rm -f "$HOME/.local/bin/$helper"
+  if [[ -f "$bin_dir/$helper" ]] && grep -q "Zathura" "$bin_dir/$helper"; then
+    rm -f "$bin_dir/$helper"
   fi
 done
-install -m755 "$source_dir/scripts/omabib-chatgpt" "$HOME/.local/bin/omabib-chatgpt"
-install -m755 "$source_dir/scripts/omabib-codex" "$HOME/.local/bin/omabib-codex"
-install -m755 "$source_dir/scripts/omabib-overview" "$HOME/.local/bin/omabib-overview"
-install -m755 "$source_dir/scripts/omabib-settings" "$HOME/.local/bin/omabib-settings"
-install -m755 "$source_dir/scripts/omabib-claude" "$HOME/.local/bin/omabib-claude"
-install -m644 "$source_dir/skills/omabib/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/omabib/SKILL.md"
-skill_source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omabib/skills/omabib"
-mkdir -p "$skill_source_dir"
-install -m644 "$source_dir/skills/omabib/SKILL.md" "$skill_source_dir/SKILL.md"
-license_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omabib/licenses"
-mkdir -p "$license_dir"
-install -m644 "$source_dir/LICENSE" "$license_dir/OMABIB-LICENSE"
-if [[ -d "$source_dir/licenses" ]]; then
-  cp -r "$source_dir/licenses/." "$license_dir/"
-elif [[ -f "$source_dir/src/mitex/LICENSE" ]]; then
-  install -m644 "$source_dir/src/mitex/LICENSE" "$license_dir/MITEX-LICENSE"
-fi
 if [[ "$backend_only" == false ]]; then omarchy plugin validate "$plugin_dir"; fi
 systemctl --user daemon-reload
 systemctl --user enable --now omabib.service

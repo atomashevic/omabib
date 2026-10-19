@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Make Omabib.app from the built omabib-desktop.app: omabib and the helper
+# scripts beside the app's own binary (main.cpp puts that folder first on
+# PATH), the icon, and Qt through macdeployqt. Signed ad hoc, which Apple
+# silicon requires to run it; a curl download carries no quarantine.
+# Usage: scripts/bundle-macos-app path/to/omabib-desktop.app path/to/omabib QT_PREFIX OUT_DIR
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ $# -ne 4 ]]; then
+  echo "Usage: $0 path/to/omabib-desktop.app path/to/omabib QT_PREFIX OUT_DIR" >&2
+  exit 2
+fi
+built=$1 omabib=$2 qt=$3 out=$4
+app="$out/Omabib.app"
+rm -rf "$app"
+mkdir -p "$out"
+ditto "$built" "$app"
+contents="$app/Contents"
+install -m755 "$omabib" "$contents/MacOS/omabib"
+for helper in omabib-chatgpt omabib-codex omabib-overview omabib-settings omabib-claude; do
+  install -m755 "$source_dir/scripts/$helper" "$contents/MacOS/$helper"
+done
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/omabib.iconset" "$contents/Resources"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" "$source_dir/packaging/macos/omabib.png" --out "$work/omabib.iconset/icon_${size}x${size}.png" >/dev/null
+  double=$((size * 2))
+  sips -z "$double" "$double" "$source_dir/packaging/macos/omabib.png" --out "$work/omabib.iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$work/omabib.iconset" -o "$contents/Resources/omabib.icns"
+
+# The Fusion style is picked at runtime, so macdeployqt is told about it.
+mkdir -p "$work/qml"
+printf 'import QtQuick.Controls.Fusion\nimport QtQuick.Controls.Fusion.impl\nimport QtQuick.Controls.Basic\nimport QtQuick.Controls.impl\nimport QtQuick\nItem {}\n' \
+  > "$work/qml/Styles.qml"
+"$qt/bin/macdeployqt" "$app" -qmldir="$source_dir/plugin" -qmldir="$source_dir/desktop" -qmldir="$work/qml" \
+  -executable="$contents/MacOS/omabib" -verbose=1
+mkdir -p "$out/licenses/Qt"
+printf 'Omabib.app bundles Qt %s, used under the GNU LGPL version 3.\nIts source is at https://download.qt.io/official_releases/qt/ and https://code.qt.io.\nThe frameworks are unmodified, in Omabib.app/Contents/Frameworks.\n' \
+  "$(basename "$(dirname "$qt")")" > "$out/licenses/Qt/NOTICE"
+codesign --force --deep --sign - "$app"
+codesign --verify --deep --strict "$app"
+# Libraries outside the bundle would not be on the user's Mac.
+if otool -L "$contents/MacOS/omabib" "$contents/MacOS/omabib-desktop" | grep -E '/(opt|usr/local)/'; then
+  echo "Omabib.app links libraries outside the system and the bundle" >&2
+  exit 1
+fi
+du -sh "$app" | awk '{ print "Omabib.app: " $1 }'

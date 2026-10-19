@@ -28,7 +28,7 @@ def main():
         commands = root / 'commands'
         commands.mkdir()
         # A closed PATH makes any accidental compilation fail, even on CI build hosts.
-        for name in ('bash', 'dirname', 'mkdir', 'install', 'mv', 'rm', 'cp', 'touch', 'grep', 'python3'):
+        for name in ('bash', 'dirname', 'mkdir', 'install', 'mv', 'rm', 'cp', 'touch', 'grep', 'ln', 'uname', 'python3'):
             (commands / name).symlink_to(sys.executable if name == 'python3' else shutil.which(name))
         log = root / 'commands.log'
         for name in ('omarchy', 'omarchy-shell', 'systemctl'):
@@ -50,6 +50,15 @@ def main():
             subprocess.run([str(installer)], env=env, check=True, capture_output=True, text=True)
         installed = home / '.local/bin/omabib'
         assert digest(installed) == digest(package / 'bin/omabib')
+        if (package / 'lib').is_dir():
+            # The app and its own Qt live together, linked from ~/.local/bin.
+            app = home / '.local/lib/omabib'
+            assert (home / '.local/bin/omabib-desktop').resolve() == app / 'bin/omabib-desktop'
+            for source in (package / 'lib').iterdir():
+                assert digest(source) == digest(app / 'lib' / source.name)
+            entry = (home / '.local/share/applications/omabib.desktop').read_text()
+            assert f'Exec={home}/.local/bin/omabib-desktop\n' in entry
+            assert (home / '.local/share/icons/hicolor/scalable/apps/omabib.svg').is_file()
         for source in (package / 'plugin').rglob('*'):
             if source.is_file():
                 assert digest(source) == digest(home / '.config/omarchy/plugins/io.github.atomashevic.omabib/plugin' / source.relative_to(package / 'plugin'))

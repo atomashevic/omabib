@@ -1,4 +1,4 @@
-name: Release Linux binaries
+name: Release
 
 on:
   push:
@@ -12,45 +12,63 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # The Qt bundled with the app on Linux and macOS.
+  QT_VERSION: '6.10.*'
+
 jobs:
-  release:
+  linux:
+    # Built on Ubuntu 22.04 so the archive runs on glibc 2.35 and newer.
     # Manual runs verify packaging without publishing. Push a version tag to publish.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
-    permissions:
-      contents: write
-    env:
-      CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v4
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config libfontconfig1-dev
+          sudo apt-get install -y build-essential clang libclang-dev cmake ninja-build pkg-config patchelf shellcheck \
+            libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-util1
           rustup toolchain install stable --profile minimal
           rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
       - name: Check release version
         env:
           RELEASE_REF: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
         run: |
           python3 - <<'PY'
-          import json, os, tomllib
+          import json, os, re, tomllib
           from pathlib import Path
           version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
           assert json.loads(Path('manifest.json').read_text())['version'] == version
+          assert re.search(r'project\(omabib-desktop VERSION (\S+)', Path('desktop/CMakeLists.txt').read_text())[1] == version
           if os.environ['REF_TYPE'] == 'tag':
               assert os.environ['RELEASE_REF'] == f'v{version}', 'Tag must match package version'
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'RELEASE_TAG=v{version}\n')
           PY
+      - name: Check install scripts
+        run: |
+          shellcheck -S warning scripts/get.sh scripts/install.sh scripts/test-get scripts/bundle-linux-app scripts/bundle-macos-app
+          dash -n scripts/get.sh
       - name: Build and test
         run: |
           ./scripts/build.sh
           cargo test --release --locked
           target/release/omabib --version
-      - name: Package binary, licenses, and vendored source
-        run: python3 scripts/package-release.py --version "$RELEASE_TAG" --source
+      - name: Build the app with its own Qt
+        run: |
+          cmake -S desktop -B build/desktop -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/desktop
+          scripts/bundle-linux-app build/desktop/omabib-desktop "$QT_ROOT_DIR" target/app
+      - name: Package binary, app, licenses, and vendored source
+        run: python3 scripts/package-release.py --version "$RELEASE_TAG" --app target/app --source
       - name: Verify archive installation without build tools
         run: |
           python3 scripts/test_release_install.py target/dist/omabib-*-linux-x86_64.tar.gz
@@ -68,15 +86,104 @@ jobs:
           name: omabib-linux-x86_64
           path: target/dist/*
           if-no-files-found: error
+
+  linux-install:
+    # The curl install on fresh systems, then the CLI, the service and the app.
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'debian:12', 'fedora:42', 'archlinux:latest']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: omabib-linux-x86_64
+          path: dist
+      - name: Install with get.sh and open the app
+        run: bash scripts/test-get --deps dist screenshot.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-linux-${{ strategy.job-index }}
+          path: screenshot.png
+          if-no-files-found: ignore
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Read release version
+        run: echo "RELEASE_TAG=v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          cargo build --release --locked
+          target/release/omabib --version
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build the app
+        run: |
+          cmake -S desktop -B build/desktop -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          cmake --build build/desktop -j 4
+          scripts/bundle-macos-app build/desktop/omabib-desktop.app target/release/omabib "$QT_ROOT_DIR" target/app
+      - name: Package
+        run: python3 scripts/package-release.py --version "$RELEASE_TAG" --platform macos-arm64 --app target/app
+      - name: Install with get.sh and open the app
+        run: |
+          HOME=$(mktemp -d /tmp/omabib-home.XXXXXX)
+          export HOME
+          scripts/test-get target/dist "$GITHUB_WORKSPACE/screenshot.png"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-macos
+          path: screenshot.png
+          if-no-files-found: ignore
+      - name: Retain verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: omabib-macos-arm64
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [linux, linux-install, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: omabib-*
+          path: dist
+          merge-multiple: true
       - name: Publish tagged release
-        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          cd target/dist
-          sha256sum --check SHA256SUMS
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum -- *.tar.gz > SHA256SUMS
+          # The release's own get.sh installs this release.
+          sed "s/^release=\"\"$/release=\"$RELEASE_TAG\"/" ../scripts/get.sh > get.sh
+          grep -qx "release=\"$RELEASE_TAG\"" get.sh
           release_flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then release_flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS \
+          gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS get.sh \
             --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
             --title "Omabib $RELEASE_TAG" "${release_flags[@]}"

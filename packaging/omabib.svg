@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Omabib's mark, the ring and three spines of OmabibMark.qml, on the accent blue. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f81f7"/>
+      <stop offset="1" stop-color="#0b5cc9"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)"/>
+  <g transform="translate(512 512) scale(26.9) translate(-12 -12)" fill="#fff">
+    <circle cx="12" cy="12" r="9.6" fill="none" stroke="#fff" stroke-width="1.6"/>
+    <rect x="7.4" y="6.6" width="8.4" height="2.9" rx="0.7"/>
+    <rect x="6.2" y="10.6" width="11.6" height="2.9" rx="0.7"/>
+    <rect x="8.2" y="14.6" width="7.8" height="2.9" rx="0.7"/>
+  </g>
+</svg>

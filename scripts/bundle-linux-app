@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Stage omabib-desktop with the Qt it uses, so the release archive runs where
+# the system's Qt is older than 6.5 or missing (Ubuntu 22.04 and 24.04, Debian
+# 12): bin/omabib-desktop and qt.conf, lib/, plugins/, qml/, licenses/Qt/.
+# glibc, libstdc++, OpenGL, fontconfig, X11, Wayland and D-Bus come from the
+# system, as on any desktop.
+# Usage: scripts/bundle-linux-app path/to/omabib-desktop QT_PREFIX OUT_DIR
+# QT_PREFIX is the Qt the app was built with, such as aqtinstall's gcc_64.
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ $# -ne 3 ]]; then
+  echo "Usage: $0 path/to/omabib-desktop QT_PREFIX OUT_DIR" >&2
+  exit 2
+fi
+app=$1 qt=$(cd -- "$2" && pwd) out=$3
+for tool in patchelf ldd python3; do
+  command -v "$tool" >/dev/null || { echo "Bundling needs $tool" >&2; exit 1; }
+done
+rm -rf "$out"
+mkdir -p "$out/bin" "$out/lib" "$out/plugins" "$out/qml" "$out/licenses/Qt"
+install -m755 "$app" "$out/bin/omabib-desktop"
+patchelf --set-rpath '$ORIGIN/../lib' "$out/bin/omabib-desktop"
+printf '[Paths]\nPrefix = ..\nLibraries = lib\nPlugins = plugins\nQmlImports = qml\n' > "$out/bin/qt.conf"
+
+# Platform plugins for Wayland, X11 and offscreen (tests and screenshots),
+# with what they load: shell integrations, input methods, the portal theme
+# main.cpp picks, image formats and TLS.
+plugins() {
+  local dir=$1 pattern
+  shift
+  mkdir -p "$out/plugins/$dir"
+  for pattern in "$@"; do
+    for file in "$qt/plugins/$dir/"$pattern; do
+      if [[ -e $file ]]; then cp "$file" "$out/plugins/$dir/"; fi
+    done
+  done
+}
+plugins platforms 'libqwayland*.so' libqxcb.so libqoffscreen.so
+plugins platformthemes libqxdgdesktopportal.so
+plugins imageformats libqsvg.so libqjpeg.so libqgif.so libqico.so libqwebp.so
+for dir in wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client \
+  xcbglintegrations platforminputcontexts iconengines tls; do
+  if [[ -d "$qt/plugins/$dir" ]]; then plugins "$dir" '*.so'; fi
+done
+find "$out/plugins" -type d -empty -delete
+for platform in 'libqwayland*.so' libqxcb.so; do
+  compgen -G "$out/plugins/platforms/$platform" >/dev/null || { echo "This Qt has no $platform platform plugin" >&2; exit 1; }
+done
+
+# The QML modules the UI imports and what they depend on. The Fusion style is
+# picked at runtime, so the scan is told about it.
+scan=$(mktemp -d)
+trap 'rm -rf "$scan"' EXIT
+printf 'import QtQuick.Controls.Fusion\nimport QtQuick.Controls.Fusion.impl\nimport QtQuick.Controls.Basic\nimport QtQuick.Controls.impl\nimport QtQuick\nItem {}\n' \
+  > "$scan/Styles.qml"
+mapfile -t qml_files < <(find "$source_dir/plugin" "$source_dir/desktop" -name '*.qml')
+"$qt/libexec/qmlimportscanner" -qmlFiles "${qml_files[@]}" "$scan/Styles.qml" -importPath "$qt/qml" > "$scan/imports.json"
+python3 - "$scan/imports.json" "$qt/qml" "$out/qml" <<'PYTHON'
+import json, os, shutil, sys
+imports, qml, out = sys.argv[1:]
+qml = os.path.realpath(qml)
+copied = 0
+for entry in json.load(open(imports)):
+    path = os.path.realpath(entry.get('path') or '/')
+    if entry.get('type') != 'module' or not path.startswith(qml + os.sep):
+        continue
+    target = os.path.join(out, os.path.relpath(path, qml))
+    os.makedirs(target, exist_ok=True)
+    # The module's own files; modules inside it are entries of their own.
+    for name in os.listdir(path):
+        if os.path.isfile(os.path.join(path, name)):
+            shutil.copy2(os.path.join(path, name), target)
+    copied += 1
+print(f'{copied} QML modules')
+PYTHON
+
+# Every library these load from the Qt install (Qt itself and its ICU), plus
+# the xcb helpers Qt's X11 plugin needs, which Wayland-only and minimal
+# systems often lack.
+ldd_all() {
+  find "$@" -type f \( -name omabib-desktop -o -name '*.so*' \) -exec ldd {} + 2>/dev/null || true
+}
+libraries=$(LD_LIBRARY_PATH="$qt/lib" ldd_all "$out/bin" "$out/plugins" "$out/qml" |
+  awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | sort -u)
+for library in $libraries; do
+  case $library in
+    "$qt"/lib/*) cp -L "$library" "$out/lib/" ;;
+    */libxcb-cursor.so.* | */libxcb-icccm.so.* | */libxcb-image.so.* | */libxcb-keysyms.so.* | \
+      */libxcb-render-util.so.* | */libxcb-util.so.* | */libxkbcommon-x11.so.*) cp -L "$library" "$out/lib/" ;;
+  esac
+done
+missing=$(LD_LIBRARY_PATH="$out/lib" ldd_all "$out" | awk '/not found/ { print $1 }' | sort -u)
+if [[ -n $missing ]]; then
+  echo "Libraries still missing:" >&2
+  echo "$missing" >&2
+  exit 1
+fi
+
+# Qt is LGPL-3.0: its licence texts, and where its source is.
+find "$qt/../.." -maxdepth 3 -type f \( -iname 'LICENSE*LGPL*' -o -iname 'LICENSE.GPL*' -o -iname 'LGPL*.txt' \) \
+  -exec cp {} "$out/licenses/Qt/" \; 2>/dev/null || true
+qt_version=$(basename "$(dirname "$qt")")
+printf 'Omabib bundles Qt %s, used under the GNU LGPL version 3.\nIts source is at https://download.qt.io/official_releases/qt/ and https://code.qt.io.\nThe libraries are unmodified and in lib/, where they can be replaced.\n' \
+  "$qt_version" > "$out/licenses/Qt/NOTICE"
+du -sh "$out" | awk '{ print "Bundled app: " $1 }'
