@@ -131,8 +131,6 @@ jobs:
         run: |
           cargo build --release --locked
           target/release/omabib --version
-      - name: Test
-        run: cargo test --release --locked
       - name: Build the app
         run: |
           cmake -S desktop -B build/desktop -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
@@ -157,6 +155,9 @@ jobs:
           name: omabib-macos-arm64
           path: target/dist/*.tar.gz
           if-no-files-found: error
+      # Last, so a failing test still leaves the app built and tried above.
+      - name: Test
+        run: cargo test --release --locked
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'

@@ -397,7 +397,7 @@ while IFS= read -r line; do
     *slow*)
       printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"Thinking"}}}}}}' ;;
     *)
-      echo "LINE $line" >> {log}
+      printf 'LINE %s\n' "$line" >> {log}
       printf '%s\n' '{{"type":"system","subtype":"init","model":"fake-model","session_id":"s","mcp_servers":[{{"name":"omabib","status":"connected"}}]}}'
       printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"Hel"}}}}}}'
       printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"lo"}}}}}}'
