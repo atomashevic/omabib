@@ -135,7 +135,22 @@ int main(int argc, char *argv[]) {
         }
     }
 
+#if defined(Q_OS_LINUX) || defined(Q_OS_FREEBSD)
+    // Omabib draws its own dialogs, so it needs nothing from the GTK platform
+    // theme many sessions set, which costs ~70 ms at start. The portal theme
+    // still reports the light or dark preference; OMABIB_PLATFORM_THEME picks
+    // another. Programs Omabib starts get the session's value back.
+    const bool sessionHasTheme = qEnvironmentVariableIsSet("QT_QPA_PLATFORMTHEME");
+    const QByteArray sessionTheme = qgetenv("QT_QPA_PLATFORMTHEME");
+    qputenv("QT_QPA_PLATFORMTHEME", qEnvironmentVariableIsSet("OMABIB_PLATFORM_THEME")
+                                        ? qgetenv("OMABIB_PLATFORM_THEME")
+                                        : QByteArray("xdgdesktopportal"));
+#endif
     QGuiApplication app(argc, argv);
+#if defined(Q_OS_LINUX) || defined(Q_OS_FREEBSD)
+    if (sessionHasTheme) qputenv("QT_QPA_PLATFORMTHEME", sessionTheme);
+    else qunsetenv("QT_QPA_PLATFORMTHEME");
+#endif
     app.setApplicationName("Omabib");
     app.setApplicationDisplayName("Omabib");
     app.setDesktopFileName("omabib");

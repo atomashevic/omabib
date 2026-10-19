@@ -180,6 +180,17 @@ Item {
     readonly property string queryText: query ? query.text.trim() : ""
     readonly property bool filtersActive: !!(authorFilter && (authorFilter.text || yearFilter.text || typeFilter.text || labelFilter.text))
     readonly property bool overflowOpen: overflowMenu.opened
+    // Fields of the lazily built dialogs and the reader (see LazyPopup); null
+    // until first built. Code that fills them in builds the dialog first.
+    readonly property var editor: editorDialog.item ? editorDialog.item.editorField : null
+    readonly property var noteEditor: editorDialog.item ? editorDialog.item.noteEditorField : null
+    readonly property var labels: editorDialog.item ? editorDialog.item.labelsField : null
+    readonly property var evidence: editorDialog.item ? editorDialog.item.evidenceField : null
+    readonly property var noteScope: editorDialog.item ? editorDialog.item.scopeField : null
+    readonly property var previewBody: previewDialog.item ? previewDialog.item.bodyField : null
+    readonly property var filePath: bibFileDialog.item ? bibFileDialog.item.pathField : null
+    readonly property var fileList: bibFileDialog.item ? bibFileDialog.item.listField : null
+    readonly property var readerPane: readerLoader.item
     readonly property bool modalOpen: settingsDialog.opened || syncDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
 
     Theme {
@@ -233,6 +244,21 @@ Item {
         }
         HoverHandler { cursorShape: Qt.PointingHandCursor }
     }
+    // A popup built the first time it opens, so start-up skips the dialogs
+    // nobody has opened yet. Until then it reports closed; `item` is the popup.
+    // The popup inside keeps the wrapper's id in its own scope, so its code is
+    // unchanged; outside, the id names this wrapper.
+    component LazyPopup: QtObject {
+        required property Item host
+        required property Component popup
+        property var item: null
+        readonly property bool opened: item !== null && item.opened
+        readonly property bool visible: item !== null && item.visible
+        function ensure() { if (!item) item = popup.createObject(host); return item }
+        function open() { ensure().open() }
+        function close() { if (item) item.close() }
+    }
+
     component BibDialog: Dialog {
         id: dialog
         property string iconName: ""
@@ -1097,7 +1123,7 @@ Item {
         editKind = kind
         editingNote = n || null
         if(kind==="note") { noteTargetId=selected?selected.id:""; noteTargetTitle=selected?selected.title:"" }
-        editorDialog.title = kind==="note" ? (n ? "Edit note" : "New note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add to library" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
+        editorDialog.ensure().title = kind==="note" ? (n ? "Edit note" : "New note") : kind==="metadata" ? "Edit BibTeX" : kind==="import" ? "Import BibTeX" : kind==="quick" ? "Add to library" : kind==="doi" ? "Add DOI" : kind==="project" ? "Create project" : "Link existing file"
         if(kind==="note") noteEditor.text = n ? n.body : ""
         else editor.text = kind==="metadata" && selected ? selected.bibtex : kind==="import" ? "@article{key,\n  title = {},\n  author = {},\n  year = {}\n}" : ""
         labels.text = n ? (n.labels || []).join(", ") : ""
@@ -1124,12 +1150,12 @@ Item {
         } else if(editKind==="import") {method="import_bibtex";args={bibtex:body,source:"Omabib UI"}}
         else if(editKind==="quick") {
             noteSaving=true
-            noteSaveRequest=rpc("preview_entry",{input:body},function(r){noteSaving=false;pendingImport=r;previewShowBibtex=false;previewBody.text=root.quickAddPreviewText(r);editorDialog.close();previewDialog.open()})
+            noteSaveRequest=rpc("preview_entry",{input:body},function(r){noteSaving=false;pendingImport=r;previewShowBibtex=false;previewDialog.ensure();previewBody.text=root.quickAddPreviewText(r);editorDialog.close();previewDialog.open()})
             if(noteSaveRequest<0)noteSaving=false
             return
         }
         else if(editKind==="doi") {
-            rpc("preview_doi",{doi:body.trim()},function(r){pendingImport=r;previewShowBibtex=false;previewBody.text=r.bibtex+(r.conflicts&&r.conflicts.length?"\n\nExisting values will be preserved. Conflicts:\n"+JSON.stringify(r.conflicts,null,2):"");editorDialog.close();previewDialog.open()});return
+            rpc("preview_doi",{doi:body.trim()},function(r){pendingImport=r;previewShowBibtex=false;previewDialog.ensure();previewBody.text=r.bibtex+(r.conflicts&&r.conflicts.length?"\n\nExisting values will be preserved. Conflicts:\n"+JSON.stringify(r.conflicts,null,2):"");editorDialog.close();previewDialog.open()});return
         } else if(editKind==="project") {method="create_project";args={name:body.trim()}}
         else {if(!selected)return;method="attach";args={ref_id:selected.id,path:body.trim(),file_type:"pdf"}}
         args.idempotency_key=editToken
@@ -1145,7 +1171,7 @@ Item {
         var renamed=(r.items||[]).filter(function(i){return i.original_key && i.original_key!==i.citekey})
         if ((r.conflicts||[]).length || renamed.length) {
             pendingImport=null
-            previewBody.text="Existing values were preserved. Resolve field conflicts with Edit BibTeX.\n\n"+JSON.stringify({conflicts:r.conflicts||[],repairs:r.repairs||[],duplicates_merged:r.duplicates_merged||0,renamed_keys:renamed.map(function(i){return {original:i.original_key,assigned:i.citekey}})},null,2)
+            previewDialog.ensure();previewBody.text="Existing values were preserved. Resolve field conflicts with Edit BibTeX.\n\n"+JSON.stringify({conflicts:r.conflicts||[],repairs:r.repairs||[],duplicates_merged:r.duplicates_merged||0,renamed_keys:renamed.map(function(i){return {original:i.original_key,assigned:i.citekey}})},null,2)
             previewDialog.open()
         }
     }
@@ -1733,7 +1759,7 @@ Item {
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence.text,note_scope:noteScope.currentIndex,editor_focused:root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath.text,picker_matches:bibFileDialog.matches.map(function(m){return m.name}),picker_index:fileList.currentIndex,picker_focused:filePath.activeFocus,picker_chosen:bibFileDialog.lastChosen,edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence?evidence.text:"",note_scope:noteScope?noteScope.currentIndex:0,editor_focused:!!root.activeEditor()&&root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath?filePath.text:"",picker_matches:bibFileDialog.item?bibFileDialog.item.matches.map(function(m){return m.name}):[],picker_index:fileList?fileList.currentIndex:-1,picker_focused:!!filePath&&filePath.activeFocus,picker_chosen:bibFileDialog.item?bibFileDialog.item.lastChosen:"",edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     // Changes from other computers refresh the list and open papers, gently.
@@ -1880,15 +1906,24 @@ Item {
                                     theme: ui
                                     app: root
                                 }
-                                ReaderPane {
-                                    id: readerPane
-                                    objectName: "readerPane"
+                                // Built the first time a PDF tab shows, then kept.
+                                Loader {
+                                    id: readerLoader
+                                    readonly property bool wanted: root.inPdfTab
+                                    property bool used: false
+                                    onWantedChanged: if (wanted) used = true
+                                    Component.onCompleted: if (wanted) used = true
+                                    active: used
                                     visible: root.inPdfTab
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    theme: ui
-                                    app: root
-                                    tab: root.inPdfTab ? root.activePaper : null
+                                    sourceComponent: ReaderPane {
+                                        objectName: "readerPane"
+                                        visible: root.inPdfTab
+                                        theme: ui
+                                        app: root
+                                        tab: root.inPdfTab ? root.activePaper : null
+                                    }
                                 }
                             }
                         }
@@ -1963,358 +1998,420 @@ Item {
         // In a reader tab Esc first cancels the clip tool, a selection or a search.
         Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen&&!(root.inPdfTab&&readerPane.wantsEscape);onActivated:root.dismiss()}
         Shortcut {sequence:"Q";enabled:root.opened&&(root.inPaperTab||query.text.trim()==="")&&!root.modalOpen&&!(root.inPdfTab&&readerPane.searching);onActivated:root.dismiss()}
-        BibDialog {
-            id:settingsDialog;title:"Settings";iconName:"cog";anchors.centerIn:parent
-            width:Math.min(640,window.width-60);height:Math.min(settingsScroll.contentHeight+ui.space(130),window.height-60);modal:true
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(10)
-                ScrollView {
-                    id:settingsScroll
-                    Layout.fillWidth:true;Layout.fillHeight:true
-                    contentWidth:availableWidth
-                    SettingsPanel {width:settingsScroll.availableWidth;theme:ui;app:root}
-                }
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    BibButton{variant:"ghost";iconName:"cloudSync";text:"Sync…";onClicked:root.openSync()}
-                    Item{Layout.fillWidth:true}
-                    BibButton{variant:"primary";text:"Done";onClicked:settingsDialog.close()}
-                }
-            }
-        }
-        BibDialog {
-            id:deleteDialog;title:"Delete reference";iconName:"trash";anchors.centerIn:parent;width:Math.min(500,window.width-60);modal:true;closePolicy:Popup.CloseOnEscape
-            onClosed:{if(!root.deleteBusy)root.deletePreview=null}
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(12)
-                Text {text:root.deletePreview ? root.deletePreview.title : "";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading;font.weight:Font.DemiBold;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
-                Chip {theme:ui;text:root.deletePreview ? root.deletePreview.citekey : "";bordered:true}
-                BibLabel {text:root.deletePreview ? "This removes the reference with its "+root.deletePreview.note_count+" note(s), "+root.deletePreview.attachment_count+" attachment link(s), "+root.deletePreview.project_count+" project link(s) and "+root.deletePreview.summary_count+" cached summary." : "";Layout.fillWidth:true}
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    Icon {theme:ui;name:"check";size:ui.title;color:ui.accentText}
-                    BibLabel {text:"PDF files stay on disk. There is no in-app undo.";color:ui.muted;Layout.fillWidth:true}
-                }
-                BibLabel {visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
-                RowLayout {Layout.fillWidth:true;Layout.topMargin:ui.space(6);spacing:ui.space(8);Item{Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";enabled:!root.deleteBusy;onClicked:deleteDialog.close()}BibButton{variant:"danger";iconName:"trash";text:root.deleteBusy?"Deleting…":"Delete item";shortcutHint:"^↵";enabled:!root.deleteBusy;onClicked:root.confirmDelete()}}
-            }
-            Shortcut {sequence:"Ctrl+Return";enabled:deleteDialog.opened&&!root.deleteBusy;onActivated:root.confirmDelete()}
-        }
-        BibDialog {
-            id:noteDeleteDialog;title:"Delete note";iconName:"trash";anchors.centerIn:parent;width:Math.min(500,window.width-60);modal:true;closePolicy:Popup.CloseOnEscape
-            onClosed:{if(!root.noteDeleteBusy)root.noteDeletePreview=null}
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(12)
-                RowLayout {
-                    spacing:ui.space(8)
-                    Chip {theme:ui;icon:"folder";text:root.noteDeletePreview ? root.noteDeletePreview.project_name : ""}
-                    Chip {theme:ui;text:root.noteDeletePreview ? root.noteDeletePreview.citekey : ""}
-                }
-                Text {text:root.noteDeletePreview ? (root.noteDeletePreview.excerpt||"Image-only note") : "";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;lineHeight:1.4;wrapMode:Text.Wrap;elide:Text.ElideRight;maximumLineCount:4;Layout.fillWidth:true;textFormat:Text.PlainText}
-                BibLabel {text:root.noteDeletePreview&&root.noteDeletePreview.has_image ? "Its saved image clip and revisions will also be deleted." : "Its revisions will also be deleted.";color:ui.muted;Layout.fillWidth:true}
-                BibLabel {visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
-                RowLayout {Layout.fillWidth:true;Layout.topMargin:ui.space(6);spacing:ui.space(8);Item{Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";enabled:!root.noteDeleteBusy;onClicked:noteDeleteDialog.close()}BibButton{variant:"danger";iconName:"trash";text:root.noteDeleteBusy?"Deleting…":"Delete note";shortcutHint:"^↵";enabled:!root.noteDeleteBusy;onClicked:root.confirmNoteDelete()}}
-            }
-            Shortcut {sequence:"Ctrl+Return";enabled:noteDeleteDialog.opened&&!root.noteDeleteBusy;onActivated:root.confirmNoteDelete()}
-        }
-        BibDialog {
-            id:bibFileDialog
-            title:root.pickerKind==="pdf"?"Attach PDF to reference":"Import BibTeX file"
-            iconName:root.pickerKind==="pdf"?"pdf":"braces"
-            anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(620,window.height-60);modal:true
-            property string basePath: Quickshell.env("HOME")+"/"
-            property string wantedFolder: ""
-            property string fragment: ""
-            property var matches: []
-            property string lastChosen: ""
-            onOpened:{updateMatches();Qt.callLater(function(){filePath.forceActiveFocus();filePath.selectAll()})}
-            function updateMatches() {
-                matches=[]
-                var path=filePath.text
-                if(path==="~" || path.startsWith("~/"))path=Quickshell.env("HOME")+path.slice(1)
-                var slash=path.lastIndexOf("/")
-                var directory=slash<0?basePath:path.slice(0,slash+1)
-                if(!directory.startsWith("/"))directory=basePath+directory
-                wantedFolder=root.fileUrl(directory)
-                fragment=(slash<0?path:path.slice(slash+1)).toLocaleLowerCase()
-                if(folders.folder.toString()!==wantedFolder)folders.folder=wantedFolder
-                filterTimer.restart()
-            }
-            function filterMatches() {
-                if(folders.status!==FolderListModel.Ready)return
-                var words=fragment.split(/\s+/).filter(function(w){return w.length>0})
-                var found=[]
-                for(var i=0;i<folders.count;++i){
-                    var name=folders.get(i,"fileName")
-                    var lower=name.toLocaleLowerCase()
-                    var isDir=folders.get(i,"fileIsDir")
-                    if(!isDir && !(root.pickerKind==="pdf"?lower.endsWith(".pdf"):(lower.endsWith(".bib")||lower.endsWith(".bibtex"))))continue
-                    if(!words.every(function(w){return lower.indexOf(w)>=0}))continue
-                    found.push({name:name,url:folders.get(i,"fileUrl").toString(),isDir:folders.get(i,"fileIsDir")})
-                }
-                var previous=fileList.currentIndex>=0&&matches[fileList.currentIndex]?matches[fileList.currentIndex].url:""
-                matches=found
-                var keep=found.findIndex(function(m){return m.url===previous})
-                fileList.currentIndex=keep>=0?keep:(found.length?0:-1)
-            }
-            function go(url) {
-                basePath=decodeURIComponent(url.slice(7)).replace(/\/+$/,"")+"/"
-                filePath.text=basePath
-                updateMatches()
-                filePath.forceActiveFocus();filePath.cursorPosition=filePath.text.length
-            }
-            function choose(index) {
-                if(index<0 || index>=matches.length)return
-                var item=matches[index]
-                lastChosen=item.name
-                if(item.isDir)go(item.url)
-                else{close();root.acceptFile(item.url)}
-            }
-            function navigate(delta) {
-                if(!matches.length)return
-                fileList.currentIndex=Math.max(0,Math.min(matches.length-1,fileList.currentIndex+delta))
-                fileList.positionViewAtIndex(fileList.currentIndex,ListView.Contain)
-            }
-            Timer {id:filterTimer;interval:20;onTriggered:bibFileDialog.filterMatches()}
-            FolderListModel {
-                id:folders
-                folder:root.fileUrl(Quickshell.env("HOME"))
-                nameFilters:["*"]
-                showDirs:true;showDirsFirst:true;showDotAndDotDot:false;showHidden:false
-                onCountChanged:filterTimer.restart()
-                onStatusChanged:{if(status===FolderListModel.Ready)filterTimer.restart();else bibFileDialog.matches=[]}
-                onFolderChanged:filterTimer.restart()
-            }
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(10)
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(6)
-                    IconButton {theme:ui;icon:"folderUp";size:ui.space(32);tooltip:"Parent folder";shortcut:"Alt+Up";onClicked:bibFileDialog.go(folders.parentFolder.toString())}
-                    BibField {
-                        id:filePath
-                        Layout.fillWidth:true
-                        text:Quickshell.env("HOME")+"/"
-                        placeholderText:"Type part of a folder or filename…"
-                        onTextChanged:bibFileDialog.updateMatches()
-                        onAccepted:bibFileDialog.choose(fileList.currentIndex)
-                        Keys.onPressed:function(event){if((event.modifiers&Qt.ControlModifier)&&event.key===Qt.Key_L){selectAll();event.accepted=true}}
-                        Keys.onDownPressed:bibFileDialog.navigate(1)
-                        Keys.onUpPressed:bibFileDialog.navigate(-1)
-                    }
-                }
-                BibLabel {visible:bibFileDialog.matches.length===0;text:folders.status===FolderListModel.Loading?"Loading folder…":"No matching folders or files";color:ui.dim;Layout.fillWidth:true}
-                ListView {
-                    id:fileList
-                    Layout.fillWidth:true;Layout.fillHeight:true;clip:true
-                    model:bibFileDialog.matches;currentIndex:0
-                    boundsBehavior:Flickable.StopAtBounds
-                    delegate:Rectangle {
-                        id:fileRow
-                        required property int index
-                        required property var modelData
-                        width:ListView.view.width
-                        height:ui.space(30)
-                        color:fileList.currentIndex===index?ui.line:fileMouse.containsMouse?ui.hoverFill:"transparent"
-                        Rectangle {visible:fileList.currentIndex===fileRow.index;anchors{left:parent.left;top:parent.top;bottom:parent.bottom}width:2;color:ui.accent}
-                        RowLayout {
-                            anchors{fill:parent;leftMargin:ui.space(10);rightMargin:ui.space(10)}
-                            spacing:ui.space(10)
-                            Icon {theme:ui;name:fileRow.modelData.isDir?"folder":root.pickerKind==="pdf"?"pdf":"braces";size:ui.title;color:fileRow.modelData.isDir?ui.muted:ui.accentText}
-                            Text {Layout.fillWidth:true;text:fileRow.modelData.name;color:fileList.currentIndex===fileRow.index?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideMiddle;textFormat:Text.PlainText}
-                            Icon {theme:ui;visible:fileRow.modelData.isDir;name:"chevronRight";size:ui.title;color:ui.dim}
+        LazyPopup {
+            id: settingsDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:settingsDialog;title:"Settings";iconName:"cog";anchors.centerIn:parent
+                    width:Math.min(640,window.width-60);height:Math.min(settingsScroll.contentHeight+ui.space(130),window.height-60);modal:true
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(10)
+                        ScrollView {
+                            id:settingsScroll
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            contentWidth:availableWidth
+                            SettingsPanel {width:settingsScroll.availableWidth;theme:ui;app:root}
                         }
-                        MouseArea {id:fileMouse;anchors.fill:parent;hoverEnabled:true;onClicked:{fileList.currentIndex=fileRow.index;bibFileDialog.choose(fileRow.index)}}
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibButton{variant:"ghost";iconName:"cloudSync";text:"Sync…";onClicked:root.openSync()}
+                            Item{Layout.fillWidth:true}
+                            BibButton{variant:"primary";text:"Done";onClicked:settingsDialog.close()}
+                        }
                     }
-                    Keys.onReturnPressed:bibFileDialog.choose(currentIndex)
-                    ScrollBar.vertical:ScrollBar{contentItem:Rectangle{implicitWidth:ui.space(4);color:ui.line}}
-                }
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel{text:"Type to filter · ↑↓ select · ↵ open · Ctrl+L path";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
-                    BibButton{variant:"ghost";text:"Cancel";onClicked:bibFileDialog.close()}
-                    BibButton{variant:"primary";text:fileList.currentIndex>=0&&bibFileDialog.matches[fileList.currentIndex]&&!bibFileDialog.matches[fileList.currentIndex].isDir?(root.pickerKind==="pdf"?"Attach PDF":"Import file"):"Open folder";enabled:bibFileDialog.matches.length>0;onClicked:bibFileDialog.choose(fileList.currentIndex)}
-                }
-            }
-            Shortcut {sequence:"Ctrl+L";enabled:bibFileDialog.opened;onActivated:{filePath.forceActiveFocus();filePath.selectAll()}}
-            Shortcut {sequence:"Alt+Up";enabled:bibFileDialog.opened;onActivated:bibFileDialog.go(folders.parentFolder.toString())}
-        }
-        BibDialog {
-            id:syncDialog;title:"Sync";iconName:"cloudSync";anchors.centerIn:parent
-            width:Math.min(640,window.width-60);height:Math.min(syncScroll.contentHeight+ui.space(130),window.height-60);modal:true
-            onClosed:{rclonePoll.stop();root.syncError=""}
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(10)
-                ScrollView {
-                    id:syncScroll
-                    Layout.fillWidth:true;Layout.fillHeight:true
-                    contentWidth:availableWidth
-                    SyncPanel {objectName:"syncPanel";width:syncScroll.availableWidth;theme:ui;app:root}
-                }
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    Item{Layout.fillWidth:true}
-                    BibButton{variant:"primary";text:"Done";onClicked:syncDialog.close()}
                 }
             }
         }
-        BibDialog {
-            id:projectDialog;title:"Assign to project";iconName:"folder";anchors.centerIn:parent;width:420;height:Math.min(window.height-60,460);modal:true
-            onOpened:projectList.forceActiveFocus()
-            ListView {
-                id:projectList
-                anchors.fill:parent
-                clip:true;model:root.projects;currentIndex:0
-                boundsBehavior:Flickable.StopAtBounds
-                delegate:Rectangle {
-                    id:projectRow
-                    required property var modelData
-                    required property int index
-                    width:ListView.view.width;height:ui.space(34)
-                    color:ListView.isCurrentItem?ui.line:projectMouse.containsMouse?ui.hoverFill:"transparent"
-                    Rectangle {visible:projectRow.ListView.isCurrentItem;anchors{left:parent.left;top:parent.top;bottom:parent.bottom}width:2;color:ui.accent}
-                    RowLayout {
-                        anchors{fill:parent;leftMargin:ui.space(12);rightMargin:ui.space(12)}
-                        spacing:ui.space(10)
-                        Icon {theme:ui;name:"folder";size:ui.title;color:projectRow.ListView.isCurrentItem?ui.accentText:ui.muted}
-                        Text {Layout.fillWidth:true;text:projectRow.modelData.name;color:projectRow.ListView.isCurrentItem?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideRight;textFormat:Text.PlainText}
+        LazyPopup {
+            id: deleteDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:deleteDialog;title:"Delete reference";iconName:"trash";anchors.centerIn:parent;width:Math.min(500,window.width-60);modal:true;closePolicy:Popup.CloseOnEscape
+                    onClosed:{if(!root.deleteBusy)root.deletePreview=null}
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(12)
+                        Text {text:root.deletePreview ? root.deletePreview.title : "";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading;font.weight:Font.DemiBold;wrapMode:Text.Wrap;Layout.fillWidth:true;textFormat:Text.PlainText}
+                        Chip {theme:ui;text:root.deletePreview ? root.deletePreview.citekey : "";bordered:true}
+                        BibLabel {text:root.deletePreview ? "This removes the reference with its "+root.deletePreview.note_count+" note(s), "+root.deletePreview.attachment_count+" attachment link(s), "+root.deletePreview.project_count+" project link(s) and "+root.deletePreview.summary_count+" cached summary." : "";Layout.fillWidth:true}
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            Icon {theme:ui;name:"check";size:ui.title;color:ui.accentText}
+                            BibLabel {text:"PDF files stay on disk. There is no in-app undo.";color:ui.muted;Layout.fillWidth:true}
+                        }
+                        BibLabel {visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
+                        RowLayout {Layout.fillWidth:true;Layout.topMargin:ui.space(6);spacing:ui.space(8);Item{Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";enabled:!root.deleteBusy;onClicked:deleteDialog.close()}BibButton{variant:"danger";iconName:"trash";text:root.deleteBusy?"Deleting…":"Delete item";shortcutHint:"^↵";enabled:!root.deleteBusy;onClicked:root.confirmDelete()}}
                     }
-                    MouseArea {id:projectMouse;anchors.fill:parent;hoverEnabled:true;onClicked:root.assignToProject(projectRow.index)}
+                    Shortcut {sequence:"Ctrl+Return";enabled:deleteDialog.opened&&!root.deleteBusy;onActivated:root.confirmDelete()}
                 }
-                Keys.onReturnPressed:root.assignToProject(currentIndex)
             }
         }
-        BibDialog {
-            id:editorDialog;anchors.centerIn:parent
-            iconName:root.editKind==="note"?(root.editingNote?"pencil":"notePlus"):root.editKind==="metadata"||root.editKind==="import"?"braces":root.editKind==="quick"?"plus":root.editKind==="doi"?"link":root.editKind==="project"?"folderOpen":"pdf"
-            width:Math.min(760,window.width-60)
-            height:Math.min(root.editKind==="quick"||root.editKind==="doi"||root.editKind==="project"?340:640,window.height-60)
-            leftPadding:ui.space(20)
-            rightPadding:ui.space(20)
-            modal:true;closePolicy:Popup.CloseOnEscape
-            onClosed:{if(root.inPdfTab)Qt.callLater(root.focusActiveTab)}
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(8)
-                Text {visible:root.editKind==="note";text:root.noteTargetTitle;color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;font.weight:Font.DemiBold;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText}
-                BibLabel {visible:root.editKind==="quick";text:"Paste a DOI, arXiv ID or URL (several at once work too), or a whole BibTeX entry. Omabib looks up the metadata, abstract and an open-access PDF.";color:ui.muted;Layout.fillWidth:true}
-                RowLayout {
-                    visible:root.editKind==="note"
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel {text:"Scope";color:ui.muted}
-                    BibCombo{id:noteScope;model:["Global · all projects"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
-                }
-                NoteEditor {
-                    id:noteEditor;objectName:"noteEditor"
-                    visible:root.editKind==="note"
-                    Layout.fillWidth:true;Layout.fillHeight:true
-                    theme:ui;app:root
-                    placeholderText:"What matters about this paper for the project?"
-                }
-                ScrollView {
-                    visible:root.editKind!=="note"
-                    Layout.fillWidth:true;Layout.fillHeight:true
-                    BibTextArea{
-                        id:editor;objectName:"editor"
-                        placeholderText:root.editKind==="quick"?"10.1038/…   2609.07987   https://…   @article{…}":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""
+        LazyPopup {
+            id: noteDeleteDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:noteDeleteDialog;title:"Delete note";iconName:"trash";anchors.centerIn:parent;width:Math.min(500,window.width-60);modal:true;closePolicy:Popup.CloseOnEscape
+                    onClosed:{if(!root.noteDeleteBusy)root.noteDeletePreview=null}
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(12)
+                        RowLayout {
+                            spacing:ui.space(8)
+                            Chip {theme:ui;icon:"folder";text:root.noteDeletePreview ? root.noteDeletePreview.project_name : ""}
+                            Chip {theme:ui;text:root.noteDeletePreview ? root.noteDeletePreview.citekey : ""}
+                        }
+                        Text {text:root.noteDeletePreview ? (root.noteDeletePreview.excerpt||"Image-only note") : "";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;lineHeight:1.4;wrapMode:Text.Wrap;elide:Text.ElideRight;maximumLineCount:4;Layout.fillWidth:true;textFormat:Text.PlainText}
+                        BibLabel {text:root.noteDeletePreview&&root.noteDeletePreview.has_image ? "Its saved image clip and revisions will also be deleted." : "Its revisions will also be deleted.";color:ui.muted;Layout.fillWidth:true}
+                        BibLabel {visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
+                        RowLayout {Layout.fillWidth:true;Layout.topMargin:ui.space(6);spacing:ui.space(8);Item{Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";enabled:!root.noteDeleteBusy;onClicked:noteDeleteDialog.close()}BibButton{variant:"danger";iconName:"trash";text:root.noteDeleteBusy?"Deleting…":"Delete note";shortcutHint:"^↵";enabled:!root.noteDeleteBusy;onClicked:root.confirmNoteDelete()}}
                     }
-                }
-                BibField{id:labels;visible:root.editKind==="note";placeholderText:"Labels, separated by commas";Layout.fillWidth:true}
-                BibField{id:evidence;visible:root.editKind==="note";placeholderText:"Evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
-                BibLabel{visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel{text:"";Layout.fillWidth:true}
-                    BibButton{variant:"ghost";text:"Cancel";onClicked:editorDialog.close()}
-                    BibButton{variant:"primary";text:(root.editKind==="doi"||root.editKind==="quick")?(root.noteSaving?"Looking up…":"Preview"):(root.noteSaving?"Saving…":"Save");shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.saveEditor()}
+                    Shortcut {sequence:"Ctrl+Return";enabled:noteDeleteDialog.opened&&!root.noteDeleteBusy;onActivated:root.confirmNoteDelete()}
                 }
             }
-            Shortcut{sequence:"Ctrl+Return";enabled:editorDialog.opened;onActivated:root.saveEditor()}
         }
-        BibDialog {
-            id:metadataDialog;title:"Fill metadata online";iconName:"refresh";anchors.centerIn:parent;width:Math.min(780,window.width-60);height:Math.min(680,window.height-60);modal:true
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(10)
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    Icon {theme:ui;visible:root.metadataBusy;name:"refresh";size:ui.title;color:ui.accentText;RotationAnimation on rotation {running:root.metadataBusy;from:0;to:360;duration:900;loops:Animation.Infinite}}
-                    BibLabel {text:root.metadataBusy?"Looking up metadata…":root.metadataInfo;color:ui.muted;Layout.fillWidth:true}
-                }
-                RowLayout {
-                    Layout.fillWidth:true;spacing:ui.space(6)
-                    BibCombo {
-                        id:metadataCandidates;Layout.fillWidth:true
-                        model:root.metadataLookup?root.metadataLookup.candidates.map(function(c){return (c.fields.title||"Untitled")+" · "+(c.fields.year||"")+" · "+(c.fields.author||"")}):[]
-                        enabled:!root.metadataBusy && count>0
-                        onActivated:root.selectMetadata(currentIndex)
+        LazyPopup {
+            id: bibFileDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    property alias pathField: filePath
+                    property alias listField: fileList
+                    id:bibFileDialog
+                    title:root.pickerKind==="pdf"?"Attach PDF to reference":"Import BibTeX file"
+                    iconName:root.pickerKind==="pdf"?"pdf":"braces"
+                    anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(620,window.height-60);modal:true
+                    property string basePath: Quickshell.env("HOME")+"/"
+                    property string wantedFolder: ""
+                    property string fragment: ""
+                    property var matches: []
+                    property string lastChosen: ""
+                    onOpened:{updateMatches();Qt.callLater(function(){filePath.forceActiveFocus();filePath.selectAll()})}
+                    function updateMatches() {
+                        matches=[]
+                        var path=filePath.text
+                        if(path==="~" || path.startsWith("~/"))path=Quickshell.env("HOME")+path.slice(1)
+                        var slash=path.lastIndexOf("/")
+                        var directory=slash<0?basePath:path.slice(0,slash+1)
+                        if(!directory.startsWith("/"))directory=basePath+directory
+                        wantedFolder=root.fileUrl(directory)
+                        fragment=(slash<0?path:path.slice(slash+1)).toLocaleLowerCase()
+                        if(folders.folder.toString()!==wantedFolder)folders.folder=wantedFolder
+                        filterTimer.restart()
                     }
-                    BibButton {text:"Review match";enabled:!root.metadataBusy && metadataCandidates.count>0;onClicked:root.selectMetadata(metadataCandidates.currentIndex)}
+                    function filterMatches() {
+                        if(folders.status!==FolderListModel.Ready)return
+                        var words=fragment.split(/\s+/).filter(function(w){return w.length>0})
+                        var found=[]
+                        for(var i=0;i<folders.count;++i){
+                            var name=folders.get(i,"fileName")
+                            var lower=name.toLocaleLowerCase()
+                            var isDir=folders.get(i,"fileIsDir")
+                            if(!isDir && !(root.pickerKind==="pdf"?lower.endsWith(".pdf"):(lower.endsWith(".bib")||lower.endsWith(".bibtex"))))continue
+                            if(!words.every(function(w){return lower.indexOf(w)>=0}))continue
+                            found.push({name:name,url:folders.get(i,"fileUrl").toString(),isDir:folders.get(i,"fileIsDir")})
+                        }
+                        var previous=fileList.currentIndex>=0&&matches[fileList.currentIndex]?matches[fileList.currentIndex].url:""
+                        matches=found
+                        var keep=found.findIndex(function(m){return m.url===previous})
+                        fileList.currentIndex=keep>=0?keep:(found.length?0:-1)
+                    }
+                    function go(url) {
+                        basePath=decodeURIComponent(url.slice(7)).replace(/\/+$/,"")+"/"
+                        filePath.text=basePath
+                        updateMatches()
+                        filePath.forceActiveFocus();filePath.cursorPosition=filePath.text.length
+                    }
+                    function choose(index) {
+                        if(index<0 || index>=matches.length)return
+                        var item=matches[index]
+                        lastChosen=item.name
+                        if(item.isDir)go(item.url)
+                        else{close();root.acceptFile(item.url)}
+                    }
+                    function navigate(delta) {
+                        if(!matches.length)return
+                        fileList.currentIndex=Math.max(0,Math.min(matches.length-1,fileList.currentIndex+delta))
+                        fileList.positionViewAtIndex(fileList.currentIndex,ListView.Contain)
+                    }
+                    Timer {id:filterTimer;interval:20;onTriggered:bibFileDialog.filterMatches()}
+                    FolderListModel {
+                        id:folders
+                        folder:root.fileUrl(Quickshell.env("HOME"))
+                        nameFilters:["*"]
+                        showDirs:true;showDirsFirst:true;showDotAndDotDot:false;showHidden:false
+                        onCountChanged:filterTimer.restart()
+                        onStatusChanged:{if(status===FolderListModel.Ready)filterTimer.restart();else bibFileDialog.matches=[]}
+                        onFolderChanged:filterTimer.restart()
+                    }
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(10)
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(6)
+                            IconButton {theme:ui;icon:"folderUp";size:ui.space(32);tooltip:"Parent folder";shortcut:"Alt+Up";onClicked:bibFileDialog.go(folders.parentFolder.toString())}
+                            BibField {
+                                id:filePath
+                                Layout.fillWidth:true
+                                text:Quickshell.env("HOME")+"/"
+                                placeholderText:"Type part of a folder or filename…"
+                                onTextChanged:bibFileDialog.updateMatches()
+                                onAccepted:bibFileDialog.choose(fileList.currentIndex)
+                                Keys.onPressed:function(event){if((event.modifiers&Qt.ControlModifier)&&event.key===Qt.Key_L){selectAll();event.accepted=true}}
+                                Keys.onDownPressed:bibFileDialog.navigate(1)
+                                Keys.onUpPressed:bibFileDialog.navigate(-1)
+                            }
+                        }
+                        BibLabel {visible:bibFileDialog.matches.length===0;text:folders.status===FolderListModel.Loading?"Loading folder…":"No matching folders or files";color:ui.dim;Layout.fillWidth:true}
+                        ListView {
+                            id:fileList
+                            Layout.fillWidth:true;Layout.fillHeight:true;clip:true
+                            model:bibFileDialog.matches;currentIndex:0
+                            boundsBehavior:Flickable.StopAtBounds
+                            delegate:Rectangle {
+                                id:fileRow
+                                required property int index
+                                required property var modelData
+                                width:ListView.view.width
+                                height:ui.space(30)
+                                color:fileList.currentIndex===index?ui.line:fileMouse.containsMouse?ui.hoverFill:"transparent"
+                                Rectangle {visible:fileList.currentIndex===fileRow.index;anchors{left:parent.left;top:parent.top;bottom:parent.bottom}width:2;color:ui.accent}
+                                RowLayout {
+                                    anchors{fill:parent;leftMargin:ui.space(10);rightMargin:ui.space(10)}
+                                    spacing:ui.space(10)
+                                    Icon {theme:ui;name:fileRow.modelData.isDir?"folder":root.pickerKind==="pdf"?"pdf":"braces";size:ui.title;color:fileRow.modelData.isDir?ui.muted:ui.accentText}
+                                    Text {Layout.fillWidth:true;text:fileRow.modelData.name;color:fileList.currentIndex===fileRow.index?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideMiddle;textFormat:Text.PlainText}
+                                    Icon {theme:ui;visible:fileRow.modelData.isDir;name:"chevronRight";size:ui.title;color:ui.dim}
+                                }
+                                MouseArea {id:fileMouse;anchors.fill:parent;hoverEnabled:true;onClicked:{fileList.currentIndex=fileRow.index;bibFileDialog.choose(fileRow.index)}}
+                            }
+                            Keys.onReturnPressed:bibFileDialog.choose(currentIndex)
+                            ScrollBar.vertical:ScrollBar{contentItem:Rectangle{implicitWidth:ui.space(4);color:ui.line}}
+                        }
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibLabel{text:"Type to filter · ↑↓ select · ↵ open · Ctrl+L path";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+                            BibButton{variant:"ghost";text:"Cancel";onClicked:bibFileDialog.close()}
+                            BibButton{variant:"primary";text:fileList.currentIndex>=0&&bibFileDialog.matches[fileList.currentIndex]&&!bibFileDialog.matches[fileList.currentIndex].isDir?(root.pickerKind==="pdf"?"Attach PDF":"Import file"):"Open folder";enabled:bibFileDialog.matches.length>0;onClicked:bibFileDialog.choose(fileList.currentIndex)}
+                        }
+                    }
+                    Shortcut {sequence:"Ctrl+L";enabled:bibFileDialog.opened;onActivated:{filePath.forceActiveFocus();filePath.selectAll()}}
+                    Shortcut {sequence:"Alt+Up";enabled:bibFileDialog.opened;onActivated:bibFileDialog.go(folders.parentFolder.toString())}
                 }
-                ScrollView {
-                    Layout.fillWidth:true;Layout.fillHeight:true;Layout.minimumHeight:0;clip:true
-                    BibTextArea {readOnly:true;text:root.metadataPreviewText()}
-                }
-                RowLayout {Layout.fillWidth:true;spacing:ui.space(8);BibLabel{text:"Existing values are never overwritten";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";onClicked:metadataDialog.close()}BibButton{variant:"primary";text:"Fill missing fields";shortcutHint:"^↵";enabled:root.metadataChoice!==null&&!root.metadataBusy;onClicked:root.applyMetadata()}}
             }
-            Shortcut {sequence:"Ctrl+Return";enabled:metadataDialog.opened&&!root.metadataBusy&&root.metadataChoice!==null;onActivated:root.applyMetadata()}
         }
-        BibDialog {
-            id:previewDialog
-            Shortcut {sequence:"Ctrl+Return";enabled:previewDialog.opened&&root.pendingImport!==null;onActivated:root.importPreview()}
-            title:root.pendingImport?"Add to library":"Import report";iconName:root.pendingImport?"plus":"check"
-            anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(root.previewItem?660:600,window.height-60);modal:true
-            ColumnLayout {
-                anchors.fill:parent;spacing:ui.space(12)
-                ScrollPane {
-                    id:previewCard
-                    visible:root.previewItem!==null
-                    Layout.fillWidth:true;Layout.fillHeight:true
-                    theme:ui;measure:ui.space(2000);sidePadding:0;topPadding:0
-                    readonly property var item: root.previewItem || ({})
-                    readonly property string abstractText: Format.bibField(item.bibtex, "abstract")
-                    readonly property string venueText: Format.bibField(item.bibtex, "journal") || Format.bibField(item.bibtex, "booktitle") || Format.bibField(item.bibtex, "publisher")
-                    RowLayout {
-                        Layout.fillWidth:true;spacing:ui.space(8)
-                        Text {Layout.maximumWidth:previewCard.width*0.6;text:previewCard.item.input||"";color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;elide:Text.ElideMiddle;textFormat:Text.PlainText}
-                        Chip {theme:ui;icon:"check";iconColor:ui.accentText;text:(previewCard.item.recognized==="doi"?"DOI":previewCard.item.recognized==="arxiv"?"arXiv ID":previewCard.item.recognized==="url"?"Web page":String(previewCard.item.recognized||""))+" recognized";bordered:false}
-                        Item {Layout.fillWidth:true}
-                    }
-                    Text {Layout.fillWidth:true;text:previewCard.item.title||previewCard.item.citekey||"";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading+4;font.weight:Font.DemiBold;lineHeight:1.15;wrapMode:Text.Wrap;textFormat:Text.PlainText}
-                    Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:Format.fullAuthors(previewCard.item.authors,10);color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;wrapMode:Text.Wrap;textFormat:Text.PlainText}
-                    Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:[previewCard.venueText,previewCard.item.year].filter(function(s){return !!s}).join("  ·  ");color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;textFormat:Text.PlainText}
-                    Text {Layout.fillWidth:true;visible:previewCard.abstractText!=="";text:previewCard.abstractText;color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;lineHeight:1.5;wrapMode:Text.Wrap;maximumLineCount:6;elide:Text.ElideRight;textFormat:Text.PlainText}
-                    Flow {
-                        Layout.fillWidth:true;spacing:ui.space(6)
-                        Chip {theme:ui;icon:previewCard.item.abstract_source?"text":"alert";iconColor:previewCard.item.abstract_source?ui.accentText:ui.urgent;text:previewCard.item.abstract_source?"abstract · "+previewCard.item.abstract_source:"no abstract found"}
-                        Chip {theme:ui;icon:previewCard.item.pdf_url?"pdf":"fileMissing";iconColor:previewCard.item.pdf_url?ui.accentText:ui.dim;text:previewCard.item.pdf_url?"open PDF · "+Format.host(previewCard.item.pdf_url):"no open-access PDF"}
-                        Chip {theme:ui;icon:"tag";visible:!!previewCard.item.citekey;text:previewCard.item.citekey||""}
-                        Chip {theme:ui;icon:"folder";visible:root.projectId!=="";text:"adds to "+root.projectName}
-                    }
-                    RowLayout {
-                        Layout.fillWidth:true;Layout.topMargin:ui.space(4);spacing:ui.space(6)
-                        Icon {theme:ui;name:root.previewShowBibtex?"chevronDown":"chevronRight";size:ui.title;color:ui.muted}
-                        SectionLabel {theme:ui;text:"BibTeX to import"}
-                        Item {Layout.fillWidth:true}
-                        TapHandler {onTapped:root.previewShowBibtex=!root.previewShowBibtex}
-                        HoverHandler {cursorShape:Qt.PointingHandCursor}
-                    }
-                    Rectangle {
-                        visible:root.previewShowBibtex
-                        Layout.fillWidth:true
-                        implicitHeight:previewBib.implicitHeight+ui.space(24)
-                        color:ui.app;border.width:1;border.color:ui.line;radius:ui.radius
-                        TextEdit {id:previewBib;anchors{left:parent.left;right:parent.right;top:parent.top;margins:ui.space(12)}readOnly:true;selectByMouse:true;wrapMode:TextEdit.WrapAtWordBoundaryOrAnywhere;text:previewCard.item.bibtex||"";color:ui.text;font.family:ui.mono;font.pixelSize:ui.small;textFormat:TextEdit.PlainText;selectionColor:Qt.rgba(ui.accent.r,ui.accent.g,ui.accent.b,0.55)}
-                    }
-                    Repeater {
-                        model:root.pendingImport?(root.pendingImport.warnings||[]).concat(previewCard.item.warnings||[]):[]
-                        BibLabel {required property var modelData;text:"⚠ "+modelData;color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+        LazyPopup {
+            id: syncDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:syncDialog;title:"Sync";iconName:"cloudSync";anchors.centerIn:parent
+                    width:Math.min(640,window.width-60);height:Math.min(syncScroll.contentHeight+ui.space(130),window.height-60);modal:true
+                    onClosed:{rclonePoll.stop();root.syncError=""}
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(10)
+                        ScrollView {
+                            id:syncScroll
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            contentWidth:availableWidth
+                            SyncPanel {objectName:"syncPanel";width:syncScroll.availableWidth;theme:ui;app:root}
+                        }
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            Item{Layout.fillWidth:true}
+                            BibButton{variant:"primary";text:"Done";onClicked:syncDialog.close()}
+                        }
                     }
                 }
-                ScrollView{visible:root.previewItem===null;Layout.fillWidth:true;Layout.fillHeight:true;BibTextArea{id:previewBody;readOnly:true}}
-                RowLayout{
-                    Layout.fillWidth:true;spacing:ui.space(8)
-                    BibLabel{text:root.pendingImport?"Existing values are never overwritten":"";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
-                    BibButton{variant:"ghost";visible:root.pendingImport!==null;iconName:"pencil";text:"Edit BibTeX";onClicked:root.editPreviewBibtex()}
-                    BibButton{variant:"ghost";text:root.pendingImport?"Cancel":"Close";onClicked:previewDialog.close()}
-                    BibButton{variant:"primary";visible:root.pendingImport!==null;iconName:"plus";text:root.noteSaving?"Adding…":"Add to library";shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.importPreview()}
+            }
+        }
+        LazyPopup {
+            id: projectDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:projectDialog;title:"Assign to project";iconName:"folder";anchors.centerIn:parent;width:420;height:Math.min(window.height-60,460);modal:true
+                    onOpened:projectList.forceActiveFocus()
+                    ListView {
+                        id:projectList
+                        anchors.fill:parent
+                        clip:true;model:root.projects;currentIndex:0
+                        boundsBehavior:Flickable.StopAtBounds
+                        delegate:Rectangle {
+                            id:projectRow
+                            required property var modelData
+                            required property int index
+                            width:ListView.view.width;height:ui.space(34)
+                            color:ListView.isCurrentItem?ui.line:projectMouse.containsMouse?ui.hoverFill:"transparent"
+                            Rectangle {visible:projectRow.ListView.isCurrentItem;anchors{left:parent.left;top:parent.top;bottom:parent.bottom}width:2;color:ui.accent}
+                            RowLayout {
+                                anchors{fill:parent;leftMargin:ui.space(12);rightMargin:ui.space(12)}
+                                spacing:ui.space(10)
+                                Icon {theme:ui;name:"folder";size:ui.title;color:projectRow.ListView.isCurrentItem?ui.accentText:ui.muted}
+                                Text {Layout.fillWidth:true;text:projectRow.modelData.name;color:projectRow.ListView.isCurrentItem?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideRight;textFormat:Text.PlainText}
+                            }
+                            MouseArea {id:projectMouse;anchors.fill:parent;hoverEnabled:true;onClicked:root.assignToProject(projectRow.index)}
+                        }
+                        Keys.onReturnPressed:root.assignToProject(currentIndex)
+                    }
+                }
+            }
+        }
+        LazyPopup {
+            id: editorDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    property alias editorField: editor
+                    property alias noteEditorField: noteEditor
+                    property alias labelsField: labels
+                    property alias evidenceField: evidence
+                    property alias scopeField: noteScope
+                    id:editorDialog;anchors.centerIn:parent
+                    iconName:root.editKind==="note"?(root.editingNote?"pencil":"notePlus"):root.editKind==="metadata"||root.editKind==="import"?"braces":root.editKind==="quick"?"plus":root.editKind==="doi"?"link":root.editKind==="project"?"folderOpen":"pdf"
+                    width:Math.min(760,window.width-60)
+                    height:Math.min(root.editKind==="quick"||root.editKind==="doi"||root.editKind==="project"?340:640,window.height-60)
+                    leftPadding:ui.space(20)
+                    rightPadding:ui.space(20)
+                    modal:true;closePolicy:Popup.CloseOnEscape
+                    onClosed:{if(root.inPdfTab)Qt.callLater(root.focusActiveTab)}
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(8)
+                        Text {visible:root.editKind==="note";text:root.noteTargetTitle;color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;font.weight:Font.DemiBold;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText}
+                        BibLabel {visible:root.editKind==="quick";text:"Paste a DOI, arXiv ID or URL (several at once work too), or a whole BibTeX entry. Omabib looks up the metadata, abstract and an open-access PDF.";color:ui.muted;Layout.fillWidth:true}
+                        RowLayout {
+                            visible:root.editKind==="note"
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibLabel {text:"Scope";color:ui.muted}
+                            BibCombo{id:noteScope;model:["Global · all projects"].concat(root.projects.map(function(p){return p.name}));Layout.fillWidth:true}
+                        }
+                        NoteEditor {
+                            id:noteEditor;objectName:"noteEditor"
+                            visible:root.editKind==="note"
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            theme:ui;app:root
+                            placeholderText:"What matters about this paper for the project?"
+                        }
+                        ScrollView {
+                            visible:root.editKind!=="note"
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            BibTextArea{
+                                id:editor;objectName:"editor"
+                                placeholderText:root.editKind==="quick"?"10.1038/…   2609.07987   https://…   @article{…}":root.editKind==="doi"?"10.xxxx/…":root.editKind==="attachment"?"/absolute/path/to/paper.pdf":root.editKind==="project"?"Project name":""
+                            }
+                        }
+                        BibField{id:labels;visible:root.editKind==="note";placeholderText:"Labels, separated by commas";Layout.fillWidth:true}
+                        BibField{id:evidence;visible:root.editKind==="note";placeholderText:"Evidence location, e.g. PDF p. 7, Table 2";Layout.fillWidth:true}
+                        BibLabel{visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibLabel{text:"";Layout.fillWidth:true}
+                            BibButton{variant:"ghost";text:"Cancel";onClicked:editorDialog.close()}
+                            BibButton{variant:"primary";text:(root.editKind==="doi"||root.editKind==="quick")?(root.noteSaving?"Looking up…":"Preview"):(root.noteSaving?"Saving…":"Save");shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.saveEditor()}
+                        }
+                    }
+                    Shortcut{sequence:"Ctrl+Return";enabled:editorDialog.opened;onActivated:root.saveEditor()}
+                }
+            }
+        }
+        LazyPopup {
+            id: metadataDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:metadataDialog;title:"Fill metadata online";iconName:"refresh";anchors.centerIn:parent;width:Math.min(780,window.width-60);height:Math.min(680,window.height-60);modal:true
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(10)
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            Icon {theme:ui;visible:root.metadataBusy;name:"refresh";size:ui.title;color:ui.accentText;RotationAnimation on rotation {running:root.metadataBusy;from:0;to:360;duration:900;loops:Animation.Infinite}}
+                            BibLabel {text:root.metadataBusy?"Looking up metadata…":root.metadataInfo;color:ui.muted;Layout.fillWidth:true}
+                        }
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(6)
+                            BibCombo {
+                                id:metadataCandidates;Layout.fillWidth:true
+                                model:root.metadataLookup?root.metadataLookup.candidates.map(function(c){return (c.fields.title||"Untitled")+" · "+(c.fields.year||"")+" · "+(c.fields.author||"")}):[]
+                                enabled:!root.metadataBusy && count>0
+                                onActivated:root.selectMetadata(currentIndex)
+                            }
+                            BibButton {text:"Review match";enabled:!root.metadataBusy && metadataCandidates.count>0;onClicked:root.selectMetadata(metadataCandidates.currentIndex)}
+                        }
+                        ScrollView {
+                            Layout.fillWidth:true;Layout.fillHeight:true;Layout.minimumHeight:0;clip:true
+                            BibTextArea {readOnly:true;text:root.metadataPreviewText()}
+                        }
+                        RowLayout {Layout.fillWidth:true;spacing:ui.space(8);BibLabel{text:"Existing values are never overwritten";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}BibButton{variant:"ghost";text:"Cancel";onClicked:metadataDialog.close()}BibButton{variant:"primary";text:"Fill missing fields";shortcutHint:"^↵";enabled:root.metadataChoice!==null&&!root.metadataBusy;onClicked:root.applyMetadata()}}
+                    }
+                    Shortcut {sequence:"Ctrl+Return";enabled:metadataDialog.opened&&!root.metadataBusy&&root.metadataChoice!==null;onActivated:root.applyMetadata()}
+                }
+            }
+        }
+        LazyPopup {
+            id: previewDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    property alias bodyField: previewBody
+                    id:previewDialog
+                    Shortcut {sequence:"Ctrl+Return";enabled:previewDialog.opened&&root.pendingImport!==null;onActivated:root.importPreview()}
+                    title:root.pendingImport?"Add to library":"Import report";iconName:root.pendingImport?"plus":"check"
+                    anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(root.previewItem?660:600,window.height-60);modal:true
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(12)
+                        ScrollPane {
+                            id:previewCard
+                            visible:root.previewItem!==null
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            theme:ui;measure:ui.space(2000);sidePadding:0;topPadding:0
+                            readonly property var item: root.previewItem || ({})
+                            readonly property string abstractText: Format.bibField(item.bibtex, "abstract")
+                            readonly property string venueText: Format.bibField(item.bibtex, "journal") || Format.bibField(item.bibtex, "booktitle") || Format.bibField(item.bibtex, "publisher")
+                            RowLayout {
+                                Layout.fillWidth:true;spacing:ui.space(8)
+                                Text {Layout.maximumWidth:previewCard.width*0.6;text:previewCard.item.input||"";color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;elide:Text.ElideMiddle;textFormat:Text.PlainText}
+                                Chip {theme:ui;icon:"check";iconColor:ui.accentText;text:(previewCard.item.recognized==="doi"?"DOI":previewCard.item.recognized==="arxiv"?"arXiv ID":previewCard.item.recognized==="url"?"Web page":String(previewCard.item.recognized||""))+" recognized";bordered:false}
+                                Item {Layout.fillWidth:true}
+                            }
+                            Text {Layout.fillWidth:true;text:previewCard.item.title||previewCard.item.citekey||"";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading+4;font.weight:Font.DemiBold;lineHeight:1.15;wrapMode:Text.Wrap;textFormat:Text.PlainText}
+                            Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:Format.fullAuthors(previewCard.item.authors,10);color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;wrapMode:Text.Wrap;textFormat:Text.PlainText}
+                            Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:[previewCard.venueText,previewCard.item.year].filter(function(s){return !!s}).join("  ·  ");color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;textFormat:Text.PlainText}
+                            Text {Layout.fillWidth:true;visible:previewCard.abstractText!=="";text:previewCard.abstractText;color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;lineHeight:1.5;wrapMode:Text.Wrap;maximumLineCount:6;elide:Text.ElideRight;textFormat:Text.PlainText}
+                            Flow {
+                                Layout.fillWidth:true;spacing:ui.space(6)
+                                Chip {theme:ui;icon:previewCard.item.abstract_source?"text":"alert";iconColor:previewCard.item.abstract_source?ui.accentText:ui.urgent;text:previewCard.item.abstract_source?"abstract · "+previewCard.item.abstract_source:"no abstract found"}
+                                Chip {theme:ui;icon:previewCard.item.pdf_url?"pdf":"fileMissing";iconColor:previewCard.item.pdf_url?ui.accentText:ui.dim;text:previewCard.item.pdf_url?"open PDF · "+Format.host(previewCard.item.pdf_url):"no open-access PDF"}
+                                Chip {theme:ui;icon:"tag";visible:!!previewCard.item.citekey;text:previewCard.item.citekey||""}
+                                Chip {theme:ui;icon:"folder";visible:root.projectId!=="";text:"adds to "+root.projectName}
+                            }
+                            RowLayout {
+                                Layout.fillWidth:true;Layout.topMargin:ui.space(4);spacing:ui.space(6)
+                                Icon {theme:ui;name:root.previewShowBibtex?"chevronDown":"chevronRight";size:ui.title;color:ui.muted}
+                                SectionLabel {theme:ui;text:"BibTeX to import"}
+                                Item {Layout.fillWidth:true}
+                                TapHandler {onTapped:root.previewShowBibtex=!root.previewShowBibtex}
+                                HoverHandler {cursorShape:Qt.PointingHandCursor}
+                            }
+                            Rectangle {
+                                visible:root.previewShowBibtex
+                                Layout.fillWidth:true
+                                implicitHeight:previewBib.implicitHeight+ui.space(24)
+                                color:ui.app;border.width:1;border.color:ui.line;radius:ui.radius
+                                TextEdit {id:previewBib;anchors{left:parent.left;right:parent.right;top:parent.top;margins:ui.space(12)}readOnly:true;selectByMouse:true;wrapMode:TextEdit.WrapAtWordBoundaryOrAnywhere;text:previewCard.item.bibtex||"";color:ui.text;font.family:ui.mono;font.pixelSize:ui.small;textFormat:TextEdit.PlainText;selectionColor:Qt.rgba(ui.accent.r,ui.accent.g,ui.accent.b,0.55)}
+                            }
+                            Repeater {
+                                model:root.pendingImport?(root.pendingImport.warnings||[]).concat(previewCard.item.warnings||[]):[]
+                                BibLabel {required property var modelData;text:"⚠ "+modelData;color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+                            }
+                        }
+                        ScrollView{visible:root.previewItem===null;Layout.fillWidth:true;Layout.fillHeight:true;BibTextArea{id:previewBody;readOnly:true}}
+                        RowLayout{
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibLabel{text:root.pendingImport?"Existing values are never overwritten":"";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+                            BibButton{variant:"ghost";visible:root.pendingImport!==null;iconName:"pencil";text:"Edit BibTeX";onClicked:root.editPreviewBibtex()}
+                            BibButton{variant:"ghost";text:root.pendingImport?"Cancel":"Close";onClicked:previewDialog.close()}
+                            BibButton{variant:"primary";visible:root.pendingImport!==null;iconName:"plus";text:root.noteSaving?"Adding…":"Add to library";shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.importPreview()}
+                        }
+                    }
                 }
             }
         }

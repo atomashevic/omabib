@@ -15,6 +15,16 @@ Rectangle {
 
     color: theme.card
 
+    // A tab built the first time it shows, then kept, so start-up builds only
+    // the tab in view.
+    component LazyTab: Loader {
+        readonly property bool current: StackLayout.isCurrentItem
+        property bool used: false
+        onCurrentChanged: if (current) used = true
+        Component.onCompleted: if (current) used = true
+        active: used
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -193,12 +203,12 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: Math.max(0, root.tabKeys.indexOf(root.app.detailTab))
-            OverviewTab { theme: root.theme; app: root.app }
-            AiSummaryTab { theme: root.theme; app: root.app }
-            NotesTab { theme: root.theme; app: root.app }
-            FilesTab { theme: root.theme; app: root.app }
-            BibtexTab { theme: root.theme; app: root.app }
-            ChatPane { theme: root.theme; app: root.app }
+            LazyTab { sourceComponent: OverviewTab { theme: root.theme; app: root.app } }
+            LazyTab { sourceComponent: AiSummaryTab { theme: root.theme; app: root.app } }
+            LazyTab { sourceComponent: NotesTab { theme: root.theme; app: root.app } }
+            LazyTab { sourceComponent: FilesTab { theme: root.theme; app: root.app } }
+            LazyTab { sourceComponent: BibtexTab { theme: root.theme; app: root.app } }
+            LazyTab { sourceComponent: ChatPane { theme: root.theme; app: root.app } }
         }
     }
 
