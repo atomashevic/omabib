@@ -27,8 +27,11 @@ foreach(file IN LISTS ui_relative ui_shaders_relative)
 endforeach()
 list(TRANSFORM ui_relative PREPEND "${ui_dir}/" OUTPUT_VARIABLE ui_qml)
 list(TRANSFORM ui_shaders_relative PREPEND "${ui_dir}/" OUTPUT_VARIABLE ui_shaders)
-# /ui lies outside the module's own directory, so no qmldir is generated
-# there and App.qml's `import "components"` still finds every file.
+# NO_QMLDIR_TYPES keeps these files out of Omabib.Desktop's types: App.qml
+# reaches them through its relative `import "components"`, and listed as
+# module types they would be looked for under the module's own prefix. It
+# also turns off the extra qmldir files QTP0004 adds, so OLD and NEW build
+# the same resources; NEW only avoids the deprecation warning.
 qt_policy(SET QTP0004 NEW)
 qt_target_qml_sources(omabib-desktop
     PREFIX /ui
