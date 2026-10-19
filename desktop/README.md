@@ -1,7 +1,8 @@
 # omabib-desktop (prototype)
 
 Omabib as an ordinary Qt 6 desktop app, without Omarchy or Quickshell. It runs
-the same `plugin/App.qml` the Omarchy plugin runs, unchanged.
+the same `plugin/App.qml` the Omarchy plugin runs, unchanged, compiled into the
+binary as Qt resources (`qrc:/ui`).
 
 ## Build and run
 
@@ -29,6 +30,13 @@ omabib-desktop --quit
 
 If nothing answers on the service socket, the app starts `omabib serve` itself,
 preferring an `omabib` binary next to its own.
+
+To work on the UI without rebuilding, point `OMABIB_UI_DIR` at a `plugin/`
+folder; the app then loads QML from there instead of its compiled-in copy:
+
+```bash
+OMABIB_UI_DIR=$PWD/plugin build/desktop/omabib-desktop
+```
 
 ## How it works
 

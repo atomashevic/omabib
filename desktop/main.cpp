@@ -151,9 +151,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Could not listen on %s: %s\n", qPrintable(DesktopHost::socketPath()), qPrintable(error));
         return 1;
     }
-    const QString uiDir = qEnvironmentVariableIsEmpty("OMABIB_UI_DIR") ? QStringLiteral(OMABIB_UI_DIR)
-                                                                        : qEnvironmentVariable("OMABIB_UI_DIR");
-    host->setAppUrl(QUrl::fromLocalFile(QDir(uiDir).absoluteFilePath("App.qml")));
+    // The compiled-in UI, or a plugin/ folder to work on it without rebuilding.
+    const QString uiDir = qEnvironmentVariable("OMABIB_UI_DIR");
+    host->setAppUrl(uiDir.isEmpty() ? QUrl("qrc:/ui/App.qml")
+                                    : QUrl::fromLocalFile(QDir(uiDir).absoluteFilePath("App.qml")));
 
     QQmlApplicationEngine engine;
     // The stand-in Quickshell and qs.* modules are compiled in; listing them
