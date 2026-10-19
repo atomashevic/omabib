@@ -88,7 +88,8 @@ static QString serviceSocket() {
 }
 
 // Starts the library service when nothing answers on its socket, preferring
-// an `omabib` installed beside this binary.
+// an `omabib` installed beside this binary. Any omabib command starts the
+// service on demand, detached and logged; the window reconnects once it is up.
 static void ensureService(const QString &socket) {
     QLocalSocket probe;
     probe.connectToServer(socket);
@@ -99,7 +100,11 @@ static void ensureService(const QString &socket) {
         qWarning("The omabib service is not running and the omabib binary was not found");
         return;
     }
-    QProcess::startDetached(omabib, {"serve"});
+    QProcess status;
+    status.setProgram(omabib);
+    status.setArguments({"status"});
+    status.setStandardOutputFile(QProcess::nullDevice());
+    status.startDetached();
 }
 
 static int forward(const Request &request) {

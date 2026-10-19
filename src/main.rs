@@ -136,6 +136,48 @@ enum PdfCommand {
     /// if needed).
     Open { reference: String },
 }
+/// How this computer shows Omabib.
+enum Window {
+    /// The standalone app, `omabib-desktop`.
+    Desktop(PathBuf),
+    /// The Omarchy shell's plugin.
+    Omarchy,
+}
+
+fn on_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// The standalone app when it is installed, beside this binary (a package or
+/// an app bundle) or on PATH; otherwise the Omarchy shell plugin.
+fn window() -> Result<Window> {
+    if let Some(bin) = std::env::var_os("OMABIB_DESKTOP_BIN").filter(|v| !v.is_empty()) {
+        return Ok(Window::Desktop(PathBuf::from(bin)));
+    }
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("omabib-desktop")))
+        .filter(|p| p.is_file());
+    if let Some(bin) = beside.or_else(|| on_path("omabib-desktop")) {
+        return Ok(Window::Desktop(bin));
+    }
+    anyhow::ensure!(
+        on_path("omarchy-shell").is_some(),
+        "Omabib's window is not installed: install the Omabib app (omabib-desktop)"
+    );
+    Ok(Window::Omarchy)
+}
+
+/// Hands a request to the app. Its first launch keeps running as the app, so
+/// it is started detached rather than waited for.
+fn desktop(bin: &std::path::Path, args: &[&str]) -> Result<()> {
+    omabib::transport::spawn_detached(bin, args, "desktop.log")
+}
+
 fn command_output(program: &str, args: &[&str]) -> Option<Vec<u8>> {
     std::process::Command::new(program)
         .args(args)
@@ -255,10 +297,15 @@ fn run() -> Result<()> {
             dry_run,
         } => {
             if identifiers.is_empty() && pdf.is_none() {
-                let status = std::process::Command::new("omarchy-shell")
-                    .args(["shell", "summon", "io.github.atomashevic.omabib", r#"{"action":"add"}"#])
-                    .status()?;
-                anyhow::ensure!(status.success(), "Unable to open Omabib");
+                match window()? {
+                    Window::Desktop(bin) => desktop(&bin, &["--add"])?,
+                    Window::Omarchy => {
+                        let status = std::process::Command::new("omarchy-shell")
+                            .args(["shell", "summon", "io.github.atomashevic.omabib", r#"{"action":"add"}"#])
+                            .status()?;
+                        anyhow::ensure!(status.success(), "Unable to open Omabib");
+                    }
+                }
                 return Ok(());
             }
             if dry_run {
@@ -497,11 +544,17 @@ fn run() -> Result<()> {
                     &json!({"id":reference,"include_metadata":false}),
                 )?;
                 omabib::transport::request("get_pdf", &json!({"ref_id":r["id"]}))?;
-                shell(&[
-                    "shell", "summon", "io.github.atomashevic.omabib",
-                    &json!({"action": "pdf", "ref_id": r["id"].as_str().context("Reference without id")?}).to_string(),
-                ])?;
-                focus_omabib();
+                let id = r["id"].as_str().context("Reference without id")?;
+                match window()? {
+                    Window::Desktop(bin) => desktop(&bin, &["--pdf", id])?,
+                    Window::Omarchy => {
+                        shell(&[
+                            "shell", "summon", "io.github.atomashevic.omabib",
+                            &json!({"action": "pdf", "ref_id": id}).to_string(),
+                        ])?;
+                        focus_omabib();
+                    }
+                }
                 return Ok(());
             }
         },
@@ -509,13 +562,16 @@ fn run() -> Result<()> {
         // Super+B: show and focus the window, focus it if it is in the
         // background, or hide it when it already has focus.
         Command::Open => {
-            match omabib_window() {
-                Some((_, true)) => shell(&["shell", "hide", "io.github.atomashevic.omabib"])?,
-                Some(_) => focus_omabib(),
-                None => {
-                    shell(&["shell", "summon", "io.github.atomashevic.omabib", "{}"])?;
-                    focus_omabib();
-                }
+            match window()? {
+                Window::Desktop(bin) => desktop(&bin, &["--toggle"])?,
+                Window::Omarchy => match omabib_window() {
+                    Some((_, true)) => shell(&["shell", "hide", "io.github.atomashevic.omabib"])?,
+                    Some(_) => focus_omabib(),
+                    None => {
+                        shell(&["shell", "summon", "io.github.atomashevic.omabib", "{}"])?;
+                        focus_omabib();
+                    }
+                },
             }
             return Ok(());
         }

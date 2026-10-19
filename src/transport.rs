@@ -1,18 +1,20 @@
 use crate::db::Library;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
+        process::CommandExt,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 pub fn data_path() -> PathBuf {
     std::env::var_os("OMABIB_DB")
@@ -43,16 +45,7 @@ pub fn request(method: &str, params: &Value) -> Result<Value> {
 }
 /// For calls that wait on the reader, such as a chat approval.
 pub fn request_with_timeout(method: &str, params: &Value, timeout: Duration) -> Result<Value> {
-    let mut stream = UnixStream::connect(socket_path()).map_err(|e| {
-        // A sandbox (such as an agent's read-only one) refuses the connection outright.
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            anyhow::anyhow!(
-                "Omabib's socket is blocked here ({e}); this is likely a sandbox. Use Omabib's MCP tools instead."
-            )
-        } else {
-            anyhow::anyhow!("Omabib service is unavailable. Run: systemctl --user start omabib: {e}")
-        }
-    })?;
+    let mut stream = connect()?;
     stream.set_read_timeout(Some(timeout))?;
     writeln!(
         stream,
@@ -67,6 +60,79 @@ pub fn request_with_timeout(method: &str, params: &Value, timeout: Duration) -> 
     }
     Ok(response["result"].clone())
 }
+/// The service's socket. When nothing listens there, the service is started
+/// first, so the app, the CLI and agents' MCP connections need no system
+/// service; OMABIB_NO_AUTOSTART turns that off.
+fn connect() -> Result<UnixStream> {
+    let path = socket_path();
+    let first = match UnixStream::connect(&path) {
+        Ok(stream) => return Ok(stream),
+        Err(e) => e,
+    };
+    // A sandbox (such as an agent's read-only one) refuses the connection outright.
+    if first.kind() == std::io::ErrorKind::PermissionDenied {
+        bail!(
+            "Omabib's socket is blocked here ({first}); this is likely a sandbox. Use Omabib's MCP tools instead."
+        );
+    }
+    if std::env::var_os("OMABIB_NO_AUTOSTART").is_some_and(|v| !v.is_empty()) {
+        bail!("Omabib service is unavailable ({first}). Start it with: omabib serve");
+    }
+    let exe = std::env::current_exe().context("Could not find the omabib binary")?;
+    spawn_detached(&exe, &["serve"], "service.log")?;
+    // Opening the library takes a moment; a service starting at the same time
+    // elsewhere wins the lock and is the one that answers.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match UnixStream::connect(&path) {
+            Ok(stream) => return Ok(stream),
+            Err(e) if Instant::now() >= deadline => bail!(
+                "Omabib service did not start ({e}). See {}",
+                log_path("service.log").display()
+            ),
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+/// A log in Omabib's state folder, for processes started in the background.
+pub fn log_path(name: &str) -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state"))
+        .join("omabib")
+        .join(name)
+}
+
+/// Starts `program` in its own session, so it outlives this process and its
+/// terminal, appending its output to `log` in the state folder.
+pub fn spawn_detached(program: &Path, args: &[&str], log: &str) -> Result<()> {
+    let log = log_path(log);
+    std::fs::create_dir_all(log.parent().unwrap())?;
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)?;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(out.try_clone()?)
+        .stderr(out);
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Could not start {}", program.display()))?;
+    // Reaped if it exits while this process lives on, as `omabib mcp` does.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 pub fn serve(db: PathBuf) -> Result<()> {
     unsafe {
         libc::umask(0o077);
@@ -87,6 +153,9 @@ pub fn serve(db: PathBuf) -> Result<()> {
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
         "Another Omabib service is running"
     );
+    // Says which process holds it, for stopping the service by hand.
+    lock.set_len(0)?;
+    writeln!(&lock, "{}", std::process::id())?;
     let lib = Arc::new(Library::open_with_vocabulary(db, false)?);
     crate::sync::Sync::start(&lib);
     if path.exists() {
