@@ -63,8 +63,9 @@ def main():
         parser.error('binary version does not match the release version')
     if args.platform == 'macos-arm64' and not (args.app and (args.app / 'Omabib.app').is_dir()):
         parser.error('macOS releases need --app with Omabib.app')
-    if args.source and run('git', 'status', '--porcelain').strip():
-        parser.error('--source requires a clean checkout so source and release files agree')
+    dirty = run('git', 'status', '--porcelain').strip() if args.source else ''
+    if dirty:
+        parser.error(f'--source requires a clean checkout so source and release files agree:\n{dirty}')
     metadata = json.loads(run('cargo', 'metadata', '--locked', '--format-version', '1'))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)

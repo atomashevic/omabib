@@ -37,6 +37,8 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
+      # aqtinstall logs into the checkout, which the source archive needs clean.
+      - run: rm -f aqtinstall.log
       - name: Check release version
         env:
           RELEASE_REF: ${{ github.ref_name }}
