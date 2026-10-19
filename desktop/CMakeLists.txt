@@ -44,4 +44,14 @@ target_link_libraries(omabib-desktop PRIVATE
     Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 quickshell_compat
     quickshell_compatplugin quickshell_ioplugin qs_commonsplugin
 )
-install(TARGETS omabib-desktop RUNTIME DESTINATION bin)
+if(APPLE)
+    # omabib-desktop.app; scripts/bundle-macos-app names it Omabib.app and
+    # adds omabib, the helpers, the icon and Qt.
+    set_target_properties(omabib-desktop PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/macos/Info.plist.in"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    )
+endif()
+install(TARGETS omabib-desktop RUNTIME DESTINATION bin BUNDLE DESTINATION .)

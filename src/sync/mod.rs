@@ -98,9 +98,16 @@ fn clock(c: &Connection, me: &str) -> Result<Hlc> {
 }
 
 fn hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|s| s.trim().to_string())
+    // On a Mac, the name the user gave it in System Settings.
+    #[cfg(target_os = "macos")]
+    let name = std::process::Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .output()
         .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok());
+    #[cfg(not(target_os = "macos"))]
+    let name = std::fs::read_to_string("/proc/sys/kernel/hostname").ok();
+    name.map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "this computer".into())
 }

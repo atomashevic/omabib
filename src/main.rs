@@ -468,7 +468,8 @@ fn run() -> Result<()> {
                     while r["connecting"]["state"].as_str().is_some_and(|s| ["starting", "browser", "finishing"].contains(&s)) {
                         if let Some(url) = r["connecting"]["url"].as_str() {
                             eprintln!("Sign in here: {url}");
-                            let _ = std::process::Command::new("xdg-open").arg(url).status();
+                            let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                            let _ = std::process::Command::new(opener).arg(url).status();
                             while r["connecting"]["state"] == "browser" {
                                 std::thread::sleep(std::time::Duration::from_millis(500));
                                 r = omabib::transport::request("sync_status", &json!({}))?;

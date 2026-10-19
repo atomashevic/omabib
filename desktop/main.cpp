@@ -20,6 +20,8 @@
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QStandardPaths>
+#include <QTimer>
+#include <QWindow>
 #include <QtQml/qqmlextensionplugin.h>
 #include <cstdio>
 #include <unistd.h>
@@ -159,6 +161,25 @@ int main(int argc, char *argv[]) {
     // macOS and Windows styles refuse them.
     if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) QQuickStyle::setStyle("Fusion");
 
+    // The helper scripts and omabib, installed beside this binary, come first.
+    const QByteArray appDir = QCoreApplication::applicationDirPath().toUtf8();
+    qputenv("PATH", appDir + ":" + qgetenv("PATH"));
+#ifdef Q_OS_MACOS
+    // An app opened from Finder or the Dock gets a bare PATH, without
+    // Homebrew or where agents like claude and codex install. The login
+    // shell's PATH is read in the background, for the programs started later.
+    auto *loginShell = new QProcess(&app);
+    QObject::connect(loginShell, &QProcess::finished, loginShell, [loginShell, appDir] {
+        const QString out = QString::fromUtf8(loginShell->readAllStandardOutput());
+        const qsizetype at = out.lastIndexOf("OMABIB_PATH=");
+        const QString path = at < 0 ? QString() : out.mid(at + 12).section('\n', 0, 0).trimmed();
+        if (!path.isEmpty()) qputenv("PATH", appDir + ":" + path.toUtf8());
+        loginShell->deleteLater();
+    });
+    loginShell->start(qEnvironmentVariable("SHELL", "/bin/zsh"), {"-ilc", "printf '\\nOMABIB_PATH=%s\\n' \"$PATH\""});
+    QTimer::singleShot(10000, loginShell, [loginShell] { loginShell->kill(); });
+#endif
+
     // App.qml and the helper scripts read the service socket from here.
     const QString socket = serviceSocket();
     qputenv("OMABIB_SOCKET", socket.toUtf8());
@@ -189,5 +210,14 @@ int main(int argc, char *argv[]) {
         open["cmd"] = "open";
         host->handle(open);
     }
+#ifdef Q_OS_MACOS
+    // Clicking the Dock icon while the window is hidden shows it again.
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, host, [host](Qt::ApplicationState state) {
+        if (state != Qt::ApplicationActive) return;
+        for (const QWindow *window : QGuiApplication::topLevelWindows())
+            if (window->isVisible()) return;
+        host->handle({{"cmd", "open"}, {"payload", "{}"}});
+    });
+#endif
     return app.exec();
 }
