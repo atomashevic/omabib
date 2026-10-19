@@ -27,7 +27,6 @@
 Q_IMPORT_QML_PLUGIN(QuickshellPlugin)
 Q_IMPORT_QML_PLUGIN(Quickshell_IoPlugin)
 Q_IMPORT_QML_PLUGIN(qs_CommonsPlugin)
-Q_IMPORT_QML_PLUGIN(qs_UiPlugin)
 
 struct Request {
     QJsonObject message;

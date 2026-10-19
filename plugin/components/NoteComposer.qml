@@ -43,7 +43,7 @@ FocusScope {
         placeholderTextColor: root.theme.dim
         selectionColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.55)
         selectedTextColor: root.theme.bright
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.small
         leftPadding: root.theme.space(8)
         selectByMouse: true
@@ -73,7 +73,7 @@ FocusScope {
                 text: !root.draft ? "" : root.draft.note ? "Edit note"
                     : (root.isClip ? "Clip" : "Note") + (root.draft.clip ? "  ·  p. " + root.draft.clip.page : "")
                 color: root.theme.bright
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.body
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
@@ -127,7 +127,7 @@ FocusScope {
             Layout.fillWidth: true
             implicitHeight: root.theme.space(30)
             model: ["Global · all projects"].concat(root.app.projects.map(function (p) { return p.name }))
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.theme.small
             contentItem: Text {
                 leftPadding: root.theme.space(8)
@@ -154,7 +154,7 @@ FocusScope {
                 Layout.fillWidth: true
                 text: root.app.composerError
                 color: root.theme.urgent
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.small
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText

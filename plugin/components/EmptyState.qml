@@ -19,8 +19,8 @@ ColumnLayout {
         Layout.alignment: Qt.AlignHCenter
         Layout.bottomMargin: root.theme.space(2)
         implicitWidth: root.theme.space(44); implicitHeight: implicitWidth
-        radius: root.theme.radius
-        color: "transparent"
+        radius: width / 2
+        color: root.theme.side
         border.width: 1
         border.color: root.theme.line
         Icon { theme: root.theme; anchors.centerIn: parent; name: root.icon; size: root.theme.space(22); color: root.iconColor }
@@ -32,8 +32,9 @@ ColumnLayout {
         visible: text !== ""
         text: root.title
         color: root.theme.bright
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.subtitle
+        font.weight: Font.DemiBold
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -45,7 +46,7 @@ ColumnLayout {
         visible: text !== ""
         text: root.hint
         color: root.theme.muted
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.body
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap
@@ -58,7 +59,7 @@ ColumnLayout {
         visible: text !== ""
         text: root.detail
         color: root.theme.dim
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.small
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap

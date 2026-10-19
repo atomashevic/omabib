@@ -9,8 +9,8 @@ Flickable {
 
     required property var theme
     property real measure: theme.space(700)
-    property real sidePadding: theme.space(24)
-    property real topPadding: theme.space(18)
+    property real sidePadding: theme.space(32)
+    property real topPadding: theme.space(20)
     default property alias content: column.data
     property alias column: column
 
@@ -32,7 +32,7 @@ Flickable {
 
     ScrollBar.vertical: ScrollBar {
         policy: ScrollBar.AsNeeded
-        contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line }
+        contentItem: Rectangle { implicitWidth: root.theme.space(4); radius: width / 2; color: root.theme.line }
     }
 
     function scrollToItem(item, offset) {

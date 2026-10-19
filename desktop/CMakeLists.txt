@@ -9,7 +9,6 @@ qt_standard_project_setup(REQUIRES 6.5)
 add_subdirectory(Quickshell)
 add_subdirectory(Quickshell/Io)
 add_subdirectory(qs/Commons)
-add_subdirectory(qs/Ui)
 
 qt_add_executable(omabib-desktop main.cpp)
 qt_add_qml_module(omabib-desktop
@@ -21,12 +20,13 @@ qt_add_qml_module(omabib-desktop
 set(ui_dir "${CMAKE_CURRENT_SOURCE_DIR}/../plugin")
 file(GLOB ui_relative CONFIGURE_DEPENDS RELATIVE "${ui_dir}"
     "${ui_dir}/App.qml" "${ui_dir}/components/*.qml" "${ui_dir}/components/*.js")
-file(GLOB ui_shaders_relative CONFIGURE_DEPENDS RELATIVE "${ui_dir}" "${ui_dir}/components/shaders/*.qsb")
-foreach(file IN LISTS ui_relative ui_shaders_relative)
+file(GLOB ui_resources_relative CONFIGURE_DEPENDS RELATIVE "${ui_dir}"
+    "${ui_dir}/components/shaders/*.qsb" "${ui_dir}/components/fonts/*")
+foreach(file IN LISTS ui_relative ui_resources_relative)
     set_source_files_properties("${ui_dir}/${file}" PROPERTIES QT_RESOURCE_ALIAS "${file}")
 endforeach()
 list(TRANSFORM ui_relative PREPEND "${ui_dir}/" OUTPUT_VARIABLE ui_qml)
-list(TRANSFORM ui_shaders_relative PREPEND "${ui_dir}/" OUTPUT_VARIABLE ui_shaders)
+list(TRANSFORM ui_resources_relative PREPEND "${ui_dir}/" OUTPUT_VARIABLE ui_resources)
 # NO_QMLDIR_TYPES keeps these files out of Omabib.Desktop's types: App.qml
 # reaches them through its relative `import "components"`, and listed as
 # module types they would be looked for under the module's own prefix. It
@@ -37,11 +37,11 @@ qt_target_qml_sources(omabib-desktop
     PREFIX /ui
     NO_QMLDIR_TYPES
     QML_FILES ${ui_qml}
-    RESOURCES ${ui_shaders}
+    RESOURCES ${ui_resources}
 )
 target_include_directories(omabib-desktop PRIVATE Quickshell)
 target_link_libraries(omabib-desktop PRIVATE
     Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 quickshell_compat
-    quickshell_compatplugin quickshell_ioplugin qs_commonsplugin qs_uiplugin
+    quickshell_compatplugin quickshell_ioplugin qs_commonsplugin
 )
 install(TARGETS omabib-desktop RUNTIME DESTINATION bin)

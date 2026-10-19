@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// The theme's text input: focus border and fill, optional leading icon and
-// a clear button. The field itself is exposed as `input`.
+// The theme's text input: a recessed field that lifts and takes an accent
+// ring on focus, with an optional leading icon, a key hint while it is idle
+// and a clear button once it has text. The field itself is exposed as `input`.
 Item {
     id: root
 
@@ -11,7 +12,9 @@ Item {
     property string icon: ""
     property string placeholder: ""
     property bool clearable: true
-    property real fontSize: theme.subtitle
+    // A key that focuses the field ("Ctrl+F"), shown while it is idle.
+    property string hint: ""
+    property real fontSize: theme.body
     // objectName of the inner field, for UI tests that look it up.
     property string inputName: ""
     property alias input: field
@@ -21,15 +24,16 @@ Item {
     signal keyPressed(var event)
     signal shortcutOverride(var event)
 
-    implicitHeight: theme.space(34)
+    implicitHeight: theme.space(32)
     implicitWidth: theme.space(200)
 
     Rectangle {
         anchors.fill: parent
         radius: root.theme.radius
-        color: field.activeFocus ? root.theme.focusFill : Qt.rgba(root.theme.text.r, root.theme.text.g, root.theme.text.b, 0.04)
+        color: field.activeFocus ? root.theme.raised : root.theme.side
         border.width: field.activeFocus ? root.theme.focusBorderWidth : 1
-        border.color: field.activeFocus ? root.theme.focusBorder : root.theme.controlBorder
+        border.color: field.activeFocus ? root.theme.focusBorder : root.theme.line
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     RowLayout {
@@ -37,7 +41,7 @@ Item {
         anchors.leftMargin: root.theme.space(10)
         anchors.rightMargin: root.theme.space(6)
         spacing: root.theme.space(8)
-        Icon { theme: root.theme; visible: root.icon !== ""; name: root.icon; size: root.fontSize + 3; color: root.theme.muted }
+        Icon { theme: root.theme; visible: root.icon !== ""; name: root.icon; size: root.fontSize + 2; color: root.theme.muted }
         TextField {
             id: field
             objectName: root.inputName
@@ -48,14 +52,19 @@ Item {
             placeholderText: root.placeholder
             placeholderTextColor: root.theme.dim
             color: root.theme.bright
-            selectionColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.55)
+            selectionColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.35)
             selectedTextColor: root.theme.bright
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.fontSize
             selectByMouse: true
             background: Item {}
             Keys.onPressed: event => root.keyPressed(event)
             Keys.onShortcutOverride: event => root.shortcutOverride(event)
+        }
+        Keycap {
+            theme: root.theme
+            visible: root.hint !== "" && field.text === "" && !field.activeFocus
+            text: root.hint
         }
         IconButton {
             theme: root.theme

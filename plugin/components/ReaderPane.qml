@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import qs.Ui
 
 // A PDF reader tab. The service renders pages with MuPDF; this pane lays them
 // out, selects and searches text, and turns a dragged rectangle into a clip
@@ -34,6 +33,9 @@ FocusScope {
     readonly property real fitWidth: Math.max(0.25, (pages.width - theme.space(40)) / maxPageWidth)
     readonly property real fitPage: Math.max(0.25, Math.min(fitWidth, (pages.height - pageGap * 2) / maxPageHeight))
     readonly property real zoom: zoomMode === "width" ? fitWidth : zoomMode === "page" ? fitPage : customZoom
+    // The pages and the gaps above them, from the page sizes rather than the
+    // column's layout, so a zoom can place the view before the column relays out.
+    readonly property real docHeight: doc ? doc.pages.reduce(function (y, p) { return y + p.h * zoom + pageGap }, 0) : 0
     // Pages re-render once zooming settles; until then the old image scales.
     property real renderZoom: 1
     property real dpr: Screen.devicePixelRatio || 1
@@ -187,12 +189,44 @@ FocusScope {
         if (!doc) return
         page = Math.max(1, Math.min(doc.page_count, page))
         var y = pageTop(page) + (offsetPt ? Math.max(0, offsetPt * zoom - pages.height / 3) : 0)
+        wheelGlide.stop()
         pages.contentY = Math.max(0, Math.min(y, pages.contentHeight - pages.height))
         updateCurrentPage()
     }
     function scrollBy(dy) {
+        wheelGlide.stop()
         pages.contentY = Math.max(0, Math.min(pages.contentY + dy, pages.contentHeight - pages.height))
     }
+    // A wheel notch scrolls a fixed step, GTK's: the viewport's height to the
+    // 2/3 power (about 80 px in a 750 px window), eased over a short glide that
+    // further notches extend. A touchpad scrolls by the distance it reports.
+    // Flickable's own wheel handling flicks instead, so the distance depended
+    // on how fast the wheel turned.
+    function wheelScroll(event) {
+        var dx = event.pixelDelta.x, dy = event.pixelDelta.y
+        var touchpad = dx !== 0 || dy !== 0
+        if (!touchpad) {
+            var step = Math.pow(pages.height, 2 / 3)
+            dx = event.angleDelta.x / 120 * step
+            dy = event.angleDelta.y / 120 * step
+        }
+        // Shift turns a vertical wheel sideways.
+        if ((event.modifiers & Qt.ShiftModifier) && dx === 0) { dx = dy; dy = 0 }
+        if (dx !== 0) pages.contentX = Math.max(0, Math.min(pages.contentX - dx, pages.contentWidth - pages.width))
+        if (dy === 0) return
+        var bottom = Math.max(0, pages.contentHeight - pages.height)
+        if (touchpad) {
+            wheelGlide.stop()
+            pages.contentY = Math.max(0, Math.min(pages.contentY - dy, bottom))
+            return
+        }
+        var to = Math.max(0, Math.min((wheelGlide.running ? wheelGlide.to : pages.contentY) - dy, bottom))
+        wheelGlide.stop()
+        wheelGlide.from = pages.contentY
+        wheelGlide.to = to
+        wheelGlide.start()
+    }
+    NumberAnimation { id: wheelGlide; target: pages; property: "contentY"; duration: 140; easing.type: Easing.OutCubic }
     function updateCurrentPage() {
         if (!doc) return
         var top = pages.contentY, bottom = top + pages.height, probe = top + pages.height / 3
@@ -210,16 +244,51 @@ FocusScope {
         currentPage = current || lastVisible
         requestNearby()
     }
-    function setZoom(value) {
-        var anchorPage = currentPage
+    // Zooms keeping the spot at (x, y) in the view, by default its centre,
+    // where it is.
+    function setZoom(value, x, y) {
+        if (x === undefined) { x = pages.width / 2; y = pages.height / 2 }
+        var spot = doc ? spotAt(x, y) : null
         customZoom = Math.max(0.25, Math.min(6, value))
         zoomMode = "custom"
-        Qt.callLater(goToPage, anchorPage)
+        if (spot) showSpot(spot, x, y)
     }
+    // Fit page shows the current page whole; fit width keeps the centre.
     function setZoomMode(mode) {
-        var anchorPage = currentPage
+        var page = currentPage, spot = doc ? spotAt(pages.width / 2, pages.height / 2) : null
         zoomMode = mode
-        Qt.callLater(goToPage, anchorPage)
+        if (mode === "page") goToPage(page)
+        else if (spot) showSpot(spot, pages.width / 2, pages.height / 2)
+    }
+    // The page under (x, y) in the view, and the point there in PDF points
+    // from the page's top-left corner.
+    function spotAt(x, y) {
+        var cy = pages.contentY + y - pageGap, page = 1, top = 0
+        while (page < doc.page_count && cy >= top + doc.pages[page - 1].h * zoom + pageGap) {
+            top += doc.pages[page - 1].h * zoom + pageGap
+            page++
+        }
+        var w = doc.pages[page - 1].w * zoom
+        return { page: page, x: (pages.contentX + x - (pages.contentWidth - w) / 2) / zoom, y: (cy - top) / zoom }
+    }
+    // Scrolls so the spot is at (x, y) in the view.
+    function showSpot(spot, x, y) {
+        var w = doc.pages[spot.page - 1].w * zoom
+        scrollTo((pages.contentWidth - w) / 2 + spot.x * zoom - x, pageGap + pageTop(spot.page) + spot.y * zoom - y)
+        updateCurrentPage()
+    }
+    function scrollTo(x, y) {
+        wheelGlide.stop()
+        pages.contentX = Math.max(0, Math.min(x, pages.contentWidth - pages.width))
+        pages.contentY = Math.max(0, Math.min(y, pages.contentHeight - pages.height))
+    }
+    // Ctrl+wheel zooms by 10% a notch, a touchpad by how far it moved,
+    // keeping the spot under the pointer in place.
+    function wheelZoom(event, scenePosition) {
+        var notches = event.pixelDelta.y !== 0 ? event.pixelDelta.y / 50 : event.angleDelta.y / 120
+        if (notches === 0) return
+        var at = pages.mapFromItem(null, scenePosition.x, scenePosition.y)
+        setZoom(zoom * Math.pow(1.1, notches), at.x, at.y)
     }
 
     // --- Geometry ----------------------------------------------------------
@@ -259,7 +328,7 @@ FocusScope {
     }
     function linkAt(page, x, y) {
         var r = renders[page]
-        if (!r || !r.links) return null
+        if (!r || !r.links || !doc) return null
         var p = doc.pages[page - 1], px = p.x0 + x / zoom, py = p.y0 + y / zoom
         for (var i = 0; i < r.links.length; i++) {
             var l = r.links[i]
@@ -383,7 +452,7 @@ FocusScope {
             visible: root.showOutline
             Layout.fillHeight: true
             Layout.preferredWidth: root.theme.space(250)
-            color: root.theme.card
+            color: root.theme.side
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
@@ -430,53 +499,165 @@ FocusScope {
                     Layout.margins: root.theme.space(12)
                     text: "This PDF has no outline."
                     color: root.theme.dim
-                    font.family: root.theme.mono
+                    font.family: root.theme.sans
                     font.pixelSize: root.theme.small
                 }
             }
         }
         Rectangle { visible: root.showOutline; Layout.fillHeight: true; implicitWidth: 1; color: root.theme.line }
 
-        // Pages.
-        ColumnLayout {
+        // Pages, on a canvas a step back from the window, with the page
+        // controls floating over them.
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
+            clip: true
+
+            Rectangle { anchors.fill: parent; color: root.theme.canvas }
+
+            Flickable {
+                id: pages
+                objectName: "readerPages"
+                anchors.fill: parent
+                visible: root.status === "ready"
+                contentWidth: Math.max(width, root.maxPageWidth * root.zoom + root.theme.space(40))
+                // Room under the last page for the page controls floating over it.
+                contentHeight: root.docHeight + controls.height + root.theme.space(28)
+                boundsBehavior: Flickable.StopAtBounds
+                // Drags select text or draw clips; the wheel and scroll bars scroll.
+                acceptedButtons: Qt.NoButton
+                onContentYChanged: root.updateCurrentPage()
+                onHeightChanged: root.updateCurrentPage()
+
+                // Ctrl+wheel zooms at the pointer; the wheel alone scrolls.
+                WheelHandler {
+                    id: pagesWheel
+                    target: null
+                    onWheel: event => {
+                        if (event.modifiers & Qt.ControlModifier) root.wheelZoom(event, pagesWheel.point.scenePosition)
+                        else root.wheelScroll(event)
+                    }
+                }
+
+                Column {
+                    id: column
+                    y: root.pageGap
+                    width: pages.contentWidth
+                    spacing: root.pageGap
+                    Repeater {
+                        model: root.doc ? root.doc.page_count : 0
+                        delegate: PdfPage {}
+                    }
+                }
+
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            }
+
+            // Middle-drag pans the pages, as in most readers.
+            DragHandler {
+                target: null
+                acceptedButtons: Qt.MiddleButton
+                dragThreshold: 0
+                cursorShape: Qt.ClosedHandCursor
+                property point start
+                onActiveChanged: if (active) start = Qt.point(pages.contentX, pages.contentY)
+                onCentroidChanged: if (active) root.scrollTo(start.x - (centroid.scenePosition.x - centroid.scenePressPosition.x),
+                                                             start.y - (centroid.scenePosition.y - centroid.scenePressPosition.y))
+            }
+
+            BusyIndicator { anchors.centerIn: parent; running: root.status === "loading"; visible: running }
+            EmptyState {
+                theme: root.theme
+                anchors.centerIn: parent
+                visible: root.status === "error"
+                icon: "alert"
+                title: "Couldn't open this PDF"
+                detail: root.message
+                TextButton { theme: root.theme; icon: "refresh"; text: "Try again"; onClicked: root.open() }
+            }
+            Rectangle {
+                visible: root.tool === "rect"
+                anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: root.theme.space(12) }
+                implicitWidth: toolHint.implicitWidth + root.theme.space(24)
+                implicitHeight: root.theme.space(32)
+                radius: root.theme.radiusLarge
+                color: root.theme.raised
+                border.width: 1
+                border.color: root.theme.accent
+                Shadow { theme: root.theme; radius: parent.radius; reach: 10 }
+                Text {
+                    id: toolHint
+                    anchors.centerIn: parent
+                    text: "Drag over a region to clip it into a note  ·  Esc cancels"
+                    color: root.theme.bright
+                    font.family: root.theme.sans
+                    font.pixelSize: root.theme.small
+                    font.weight: Font.Medium
+                }
+            }
 
             Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: root.theme.space(40)
-                color: root.theme.card
-                Rectangle { anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 1; color: root.theme.line }
+                id: controls
+                objectName: "readerControls"
+                anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; bottomMargin: root.theme.space(18) }
+                implicitWidth: controlRow.implicitWidth + root.theme.space(8)
+                implicitHeight: controlRow.implicitHeight + root.theme.space(8)
+                radius: root.theme.radiusLarge
+                color: root.theme.raised
+                border.color: root.theme.line
+                Shadow { theme: root.theme; radius: controls.radius; reach: 16 }
+                // The wheel over the controls scrolls and zooms as it does over the pages.
+                WheelHandler {
+                    id: controlsWheel
+                    target: null
+                    onWheel: event => {
+                        if (event.modifiers & Qt.ControlModifier) root.wheelZoom(event, controlsWheel.point.scenePosition)
+                        else root.wheelScroll(event)
+                    }
+                }
+
                 RowLayout {
-                    anchors { fill: parent; leftMargin: root.theme.space(8); rightMargin: root.theme.space(8) }
+                    id: controlRow
+                    anchors.centerIn: parent
                     spacing: root.theme.space(2)
                     IconButton { theme: root.theme; icon: "outline"; active: root.showOutline; tooltip: "Contents"; shortcut: "o"; onClicked: root.showOutline = !root.showOutline }
-                    Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(4); Layout.rightMargin: root.theme.space(4) }
+                    Divider {}
+                    IconButton { theme: root.theme; icon: "chevronLeft"; enabled: root.currentPage > 1; tooltip: "Previous page"; onClicked: root.goToPage(root.currentPage - 1) }
                     TextField {
                         id: pageField
                         objectName: "readerPageField"
-                        implicitWidth: root.theme.space(46)
+                        // Wide enough for the last page's number.
+                        implicitWidth: Math.max(root.theme.space(30), pageDigits.advanceWidth + root.theme.space(12))
                         implicitHeight: root.theme.space(26)
-                        horizontalAlignment: TextInput.AlignRight
+                        horizontalAlignment: TextInput.AlignHCenter
+                        padding: 0
                         text: root.currentPage
                         color: root.theme.bright
                         font.family: root.theme.mono
                         font.pixelSize: root.theme.small
                         validator: IntValidator { bottom: 1; top: root.doc ? root.doc.page_count : 1 }
-                        background: Rectangle { color: root.theme.app; radius: root.theme.radius; border.width: 1; border.color: pageField.activeFocus ? root.theme.focusBorder : root.theme.line }
+                        background: Rectangle {
+                            radius: root.theme.radiusSmall
+                            color: pageField.activeFocus ? root.theme.app : pageHover.hovered ? root.theme.hoverFill : "transparent"
+                            border.width: pageField.activeFocus ? 1 : 0
+                            border.color: root.theme.focusBorder
+                        }
+                        HoverHandler { id: pageHover; cursorShape: Qt.IBeamCursor }
+                        TextMetrics { id: pageDigits; font: pageField.font; text: String(root.doc ? root.doc.page_count : 0) }
                         onAccepted: { root.goToPage(Number(text)); keys.forceActiveFocus() }
                     }
                     Text {
                         text: "/ " + (root.doc ? root.doc.page_count : "–")
-                        color: root.theme.dim
+                        color: root.theme.muted
                         font.family: root.theme.mono
                         font.pixelSize: root.theme.small
                     }
-                    Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(6); Layout.rightMargin: root.theme.space(4) }
+                    IconButton { theme: root.theme; icon: "chevronRight"; enabled: !!root.doc && root.currentPage < root.doc.page_count; tooltip: "Next page"; onClicked: root.goToPage(root.currentPage + 1) }
+                    Divider {}
                     IconButton { theme: root.theme; icon: "zoomOut"; tooltip: "Zoom out"; shortcut: "-"; onClicked: root.setZoom(root.zoom / 1.2) }
                     Text {
-                        Layout.preferredWidth: root.theme.space(44)
+                        Layout.preferredWidth: root.theme.space(42)
                         horizontalAlignment: Text.AlignHCenter
                         text: Math.round(root.zoom * 100) + "%"
                         color: root.theme.muted
@@ -486,29 +667,32 @@ FocusScope {
                     IconButton { theme: root.theme; icon: "zoomIn"; tooltip: "Zoom in"; shortcut: "+"; onClicked: root.setZoom(root.zoom * 1.2) }
                     IconButton { theme: root.theme; icon: "fitWidth"; active: root.zoomMode === "width"; tooltip: "Fit width"; shortcut: "w"; onClicked: root.setZoomMode("width") }
                     IconButton { theme: root.theme; icon: "fitPage"; active: root.zoomMode === "page"; tooltip: "Fit page"; shortcut: "z"; onClicked: root.setZoomMode("page") }
-                    Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(4); Layout.rightMargin: root.theme.space(4) }
+                    Divider {}
                     IconButton { theme: root.theme; objectName: "readerColorsButton"; icon: "pageColors"; active: root.app.pdfThemed; tooltip: root.app.pdfThemed ? "Original page colors" : "Theme page colors"; shortcut: "Ctrl+R"; onClicked: root.app.togglePdfColors() }
-                    Rectangle { implicitWidth: 1; implicitHeight: root.theme.space(16); color: root.theme.line; Layout.leftMargin: root.theme.space(4); Layout.rightMargin: root.theme.space(4) }
                     IconButton { theme: root.theme; icon: "crop"; active: root.tool === "rect"; tooltip: "Clip a region into a note"; shortcut: "r"; onClicked: { root.tool = root.tool === "rect" ? "select" : "rect"; keys.forceActiveFocus() } }
                     IconButton { theme: root.theme; icon: "notePlus"; tooltip: "Note on this page"; shortcut: "a"; onClicked: root.composeNote(root.currentPage, null) }
-                    Item { Layout.fillWidth: true }
+                    Divider {}
                     TextField {
                         id: searchField
                         objectName: "readerSearchField"
                         visible: root.searching || root.search !== null
-                        Layout.preferredWidth: root.theme.space(200)
+                        // Set, not left to Fusion's text-derived width, which
+                        // loops now the controls size to their contents.
+                        implicitWidth: root.theme.space(180)
                         implicitHeight: root.theme.space(26)
+                        leftPadding: root.theme.space(8)
                         placeholderText: "Search this PDF"
                         placeholderTextColor: root.theme.dim
                         color: root.theme.bright
-                        font.family: root.theme.mono
+                        font.family: root.theme.sans
                         font.pixelSize: root.theme.small
-                        background: Rectangle { color: root.theme.app; radius: root.theme.radius; border.width: 1; border.color: searchField.activeFocus ? root.theme.focusBorder : root.theme.line }
+                        background: Rectangle { color: root.theme.app; radius: root.theme.radiusSmall; border.width: 1; border.color: searchField.activeFocus ? root.theme.focusBorder : root.theme.line }
                         onAccepted: { root.runSearch(text); keys.forceActiveFocus() }
                         Keys.onEscapePressed: root.cancel()
                     }
                     Text {
                         visible: root.search !== null
+                        Layout.leftMargin: root.theme.space(4)
                         text: root.search && root.search.flat.length ? (root.search.index + 1) + " / " + root.search.flat.length + (root.search.truncated ? "+" : "") : "0"
                         color: root.theme.muted
                         font.family: root.theme.mono
@@ -517,77 +701,6 @@ FocusScope {
                     IconButton { theme: root.theme; visible: root.search !== null; icon: "chevronUp"; tooltip: "Previous match"; shortcut: "N"; onClicked: root.showHit(-1) }
                     IconButton { theme: root.theme; visible: root.search !== null; icon: "chevronDown"; tooltip: "Next match"; shortcut: "n"; onClicked: root.showHit(1) }
                     IconButton { theme: root.theme; icon: "search"; active: root.searching; tooltip: "Search"; shortcut: "/"; onClicked: { root.searching = true; searchField.forceActiveFocus() } }
-                    IconButton { theme: root.theme; icon: "sidebar"; active: root.showSide; tooltip: "Notes pane"; shortcut: "]"; onClicked: root.showSide = !root.showSide }
-                }
-            }
-
-            Item {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-
-                Rectangle { anchors.fill: parent; color: Qt.darker(root.theme.app, root.theme.light ? 1.08 : 1.25) }
-
-                Flickable {
-                    id: pages
-                    objectName: "readerPages"
-                    anchors.fill: parent
-                    visible: root.status === "ready"
-                    contentWidth: Math.max(width, root.maxPageWidth * root.zoom + root.theme.space(40))
-                    contentHeight: column.implicitHeight + root.pageGap
-                    boundsBehavior: Flickable.StopAtBounds
-                    // Drags select text or draw clips; the wheel and scroll bars scroll.
-                    acceptedButtons: Qt.NoButton
-                    onContentYChanged: root.updateCurrentPage()
-                    onHeightChanged: root.updateCurrentPage()
-
-                    WheelHandler {
-                        acceptedModifiers: Qt.ControlModifier
-                        onWheel: event => root.setZoom(root.zoom * (event.angleDelta.y > 0 ? 1.1 : 1 / 1.1))
-                    }
-
-                    Column {
-                        id: column
-                        y: root.pageGap
-                        width: pages.contentWidth
-                        spacing: root.pageGap
-                        Repeater {
-                            model: root.doc ? root.doc.page_count : 0
-                            delegate: PdfPage {}
-                        }
-                    }
-
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
-                }
-
-                BusyIndicator { anchors.centerIn: parent; running: root.status === "loading"; visible: running }
-                EmptyState {
-                    theme: root.theme
-                    anchors.centerIn: parent
-                    visible: root.status === "error"
-                    icon: "alert"
-                    title: "Couldn't open this PDF"
-                    detail: root.message
-                    TextButton { theme: root.theme; icon: "refresh"; text: "Try again"; onClicked: root.open() }
-                }
-                Rectangle {
-                    visible: root.tool === "rect"
-                    anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: root.theme.space(10) }
-                    implicitWidth: toolHint.implicitWidth + root.theme.space(20)
-                    implicitHeight: root.theme.space(28)
-                    radius: root.theme.radius
-                    color: root.theme.card
-                    border.width: 1
-                    border.color: root.theme.accent
-                    Text {
-                        id: toolHint
-                        anchors.centerIn: parent
-                        text: "Drag over a region to clip it into a note  ·  Esc cancels"
-                        color: root.theme.bright
-                        font.family: root.theme.mono
-                        font.pixelSize: root.theme.small
-                    }
                 }
             }
         }
@@ -603,23 +716,11 @@ FocusScope {
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
-                Text {
-                    Layout.fillWidth: true
-                    Layout.margins: root.theme.space(14)
-                    Layout.bottomMargin: root.theme.space(4)
-                    text: root.ref ? (root.ref.title || root.ref.citekey) : (root.tab ? root.tab.title : "")
-                    color: root.theme.bright
-                    font.family: root.theme.readingFamily
-                    font.pixelSize: root.theme.subtitle
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.Wrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText
-                }
                 SegmentedTabs {
                     Layout.fillWidth: true
-                    Layout.leftMargin: root.theme.space(8)
+                    Layout.topMargin: root.theme.space(10)
+                    Layout.leftMargin: root.theme.space(18)
+                    Layout.rightMargin: root.theme.space(18)
                     theme: root.theme
                     current: side.key
                     tabs: [
@@ -650,13 +751,21 @@ FocusScope {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: sections.indexOf(key)
-                    NotesTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(14) }
-                    OverviewTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(14) }
+                    NotesTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(18) }
+                    OverviewTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(18) }
                     AiSummaryTab { theme: root.theme; app: root.app }
                     ChatPane { objectName: "readerChat"; theme: root.theme; app: root.app; compact: true }
                 }
             }
         }
+    }
+
+    component Divider: Rectangle {
+        implicitWidth: 1
+        implicitHeight: root.theme.space(18)
+        color: root.theme.line
+        Layout.leftMargin: root.theme.space(4)
+        Layout.rightMargin: root.theme.space(4)
     }
 
     component PdfPage: Item {
@@ -684,6 +793,7 @@ FocusScope {
             width: pageItem.sheetWidth
             height: pageItem.sheetHeight
             color: root.app.pdfThemed ? root.theme.pageBackground : "white"
+            Shadow { theme: root.theme; reach: 10; strength: 0.8 }
 
             Image {
                 id: pageImage
@@ -749,10 +859,10 @@ FocusScope {
                     border.width: 2
                     border.color: root.theme.accent
                     HoverHandler { id: clipHover; cursorShape: Qt.PointingHandCursor }
-                    PanelToolTip {
+                    Tip {
+                        theme: root.theme
                         visible: clipHover.hovered
                         text: (clipBox.modelData.body || "Clip").slice(0, 160) + "  ·  click to edit"
-                        fontFamily: root.theme.mono
                     }
                 }
             }

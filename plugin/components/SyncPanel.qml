@@ -34,7 +34,7 @@ ColumnLayout {
     component Hint: Text {
         Layout.fillWidth: true
         color: root.theme.dim
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.small
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -42,7 +42,7 @@ ColumnLayout {
     component Line: Text {
         Layout.fillWidth: true
         color: root.theme.text
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.body
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -51,7 +51,7 @@ ColumnLayout {
         Layout.fillWidth: true
         color: root.theme.bright
         placeholderTextColor: root.theme.dim
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.body
         selectByMouse: true
         background: Rectangle {
@@ -72,8 +72,8 @@ ColumnLayout {
         signal chosen()
         Layout.fillWidth: true
         implicitHeight: cardRow.implicitHeight + root.theme.space(18)
-        radius: root.theme.radius
-        color: selected ? root.theme.line : cardMouse.containsMouse && available ? root.theme.hoverFill : "transparent"
+        radius: root.theme.radiusLarge
+        color: selected ? root.theme.selectedFill : cardMouse.containsMouse && available ? root.theme.hoverFill : root.theme.raised
         border.width: 1
         border.color: selected ? root.theme.accent : root.theme.line
         opacity: available ? 1 : 0.55
@@ -85,9 +85,9 @@ ColumnLayout {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: root.theme.space(2)
-                Text { text: card.label; color: root.theme.bright; font.family: root.theme.mono; font.pixelSize: root.theme.body; font.weight: Font.Medium; textFormat: Text.PlainText }
-                Text { Layout.fillWidth: true; text: card.detail; color: root.theme.dim; font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
-                Text { Layout.fillWidth: true; visible: card.note !== ""; text: card.note; color: root.theme.muted; font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+                Text { text: card.label; color: root.theme.bright; font.family: root.theme.sans; font.pixelSize: root.theme.body; font.weight: Font.Medium; textFormat: Text.PlainText }
+                Text { Layout.fillWidth: true; text: card.detail; color: root.theme.dim; font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+                Text { Layout.fillWidth: true; visible: card.note !== ""; text: card.note; color: root.theme.muted; font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
             }
             Icon { theme: root.theme; visible: card.available; name: "chevronRight"; size: root.theme.body; color: root.theme.dim }
         }
@@ -133,7 +133,7 @@ ColumnLayout {
                 Text {
                     Layout.fillWidth: true
                     text: "Google Drive, Dropbox and OneDrive go through rclone, a free, open-source sync tool. Install it once; this page continues by itself."
-                    color: root.theme.text; font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    color: root.theme.text; font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
                 }
                 TextButton { objectName: "syncInstallRclone"; theme: root.theme; variant: "primary"; icon: "download"; text: "Install rclone"; fontSize: root.theme.small; onClicked: root.app.installRclone() }
             }
@@ -194,7 +194,7 @@ ColumnLayout {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             text: !root.connecting ? "" : root.connecting.state === "browser" ? "Waiting for you in the browser" : root.connecting.state === "finishing" ? "Finishing…" : "Opening " + root.connecting.label + "…"
-            color: root.theme.bright; font.family: root.theme.mono; font.pixelSize: root.theme.title; textFormat: Text.PlainText
+            color: root.theme.bright; font.family: root.theme.sans; font.pixelSize: root.theme.title; textFormat: Text.PlainText
         }
         Hint {
             horizontalAlignment: Text.AlignHCenter
@@ -282,7 +282,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     text: root.app.syncChipText()
                     color: ["offline", "auth", "full", "error"].indexOf(root.s.state) >= 0 ? root.theme.urgent : root.theme.muted
-                    font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
                 }
             }
             TextButton { objectName: "syncNow"; theme: root.theme; icon: "sync"; text: root.s.state === "auth" ? "Reconnect" : "Sync now"; busy: root.app.syncWorking || root.s.state === "syncing"; onClicked: root.s.state === "auth" ? root.app.reconnectSync() : root.app.syncNow() }
@@ -297,9 +297,9 @@ ColumnLayout {
                 Layout.fillWidth: true
                 spacing: root.theme.space(8)
                 Icon { theme: root.theme; name: "laptop"; size: root.theme.title; color: modelData.me ? root.theme.accentText : root.theme.muted }
-                Text { text: modelData.name + (modelData.me ? " (this computer)" : ""); color: root.theme.text; font.family: root.theme.mono; font.pixelSize: root.theme.body; textFormat: Text.PlainText }
+                Text { text: modelData.name + (modelData.me ? " (this computer)" : ""); color: root.theme.text; font.family: root.theme.sans; font.pixelSize: root.theme.body; textFormat: Text.PlainText }
                 Item { Layout.fillWidth: true }
-                Text { text: modelData.updated ? "synced " + Format.relativeTime(modelData.updated) : ""; color: root.theme.dim; font.family: root.theme.mono; font.pixelSize: root.theme.small; textFormat: Text.PlainText }
+                Text { text: modelData.updated ? "synced " + Format.relativeTime(modelData.updated) : ""; color: root.theme.dim; font.family: root.theme.sans; font.pixelSize: root.theme.small; textFormat: Text.PlainText }
             }
         }
         Hint { visible: !(root.s.devices && root.s.devices.length); text: "Computers appear after the first sync." }
@@ -331,13 +331,13 @@ ColumnLayout {
                     id: conflictColumn
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: root.theme.space(9); leftMargin: root.theme.space(12) }
                     spacing: root.theme.space(6)
-                    Text { Layout.fillWidth: true; text: conflict.modelData.summary; color: root.theme.bright; font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+                    Text { Layout.fillWidth: true; text: conflict.modelData.summary; color: root.theme.bright; font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText }
                     Text {
                         Layout.fillWidth: true
                         text: conflict.modelData.kind === "note_copy" ? "The other computer's edit is in the note now; yours was kept as a second note."
                             : conflict.modelData.kind === "deleted" ? "Your changes were kept. Restore brings the paper and its notes back."
                             : "Both references are kept. Delete the one you don't need, or keep both."
-                        color: root.theme.dim; font.family: root.theme.mono; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                        color: root.theme.dim; font.family: root.theme.sans; font.pixelSize: root.theme.small; wrapMode: Text.Wrap; textFormat: Text.PlainText
                     }
                     RowLayout {
                         spacing: root.theme.space(6)
@@ -362,7 +362,7 @@ ColumnLayout {
         visible: root.app.syncError !== "" || (!!root.connecting && root.connecting.state === "error")
         text: root.app.syncError !== "" ? root.app.syncError : root.connecting ? (root.connecting.message || "") : ""
         color: root.theme.urgent
-        font.family: root.theme.mono
+        font.family: root.theme.sans
         font.pixelSize: root.theme.small
         wrapMode: Text.Wrap
         textFormat: Text.PlainText

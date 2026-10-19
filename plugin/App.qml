@@ -16,6 +16,15 @@ Item {
     property var manifest: null
     property bool opened: false
     property bool expanded: false
+    // The library's sidebar, which a paper tab narrows into the rail.
+    property bool sidebarOpen: true
+    // Where the library is, for the toolbar and for the way back from a paper.
+    readonly property string placeLabel: attentionView === "missing_pdf" ? "Missing PDF"
+        : attentionView === "missing_abstract" ? "Missing abstract" : projectName
+    readonly property string backLabel: placeLabel + (queryText !== "" ? " · \u201c" + queryText + "\u201d" : "")
+    readonly property string placeSummary: queryText !== "" || projectId !== "" || attentionView !== ""
+        ? hits.length + (nextCursor !== null && nextCursor !== undefined ? "+" : "") + (queryText !== "" ? " matches" : " references")
+        : referenceCount ? referenceCount.toLocaleString(Qt.locale(), "f", 0) + " references" : ""
     property var projects: []
     property var hits: []
     property string browseSort: "added_desc"
@@ -134,7 +143,7 @@ Item {
     property string syncOpenedUrl: ""
     // Preferences from omabib-settings: {ai_cli, ai_desktop}, plus
     // the installed choices the Settings dialog offers.
-    property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
+    property var settings: ({theme: "system", reading_font: "sans", pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
     readonly property bool pdfThemed: settings.pdf_colors === "theme"
     property var settingsInfo: null
     property string settingsError: ""
@@ -171,7 +180,7 @@ Item {
 
     // The list pane owns these controls; the verbs below address them by
     // their old names.
-    readonly property var query: listPane.queryField
+    readonly property var query: toolbar.queryField
     readonly property var results: listPane.resultsView
     readonly property var authorFilter: listPane.authorField
     readonly property var yearFilter: listPane.yearField
@@ -195,7 +204,20 @@ Item {
 
     Theme {
         id: ui
-        readingFamily: Quickshell.env("OMABIB_READING_FONT") || "Noto Sans"
+        mode: root.settings.theme || "system"
+        reading: root.settings.reading_font || "sans"
+    }
+    // The bundled typefaces and icons, so the window looks the same everywhere.
+    // Only the weights the window uses, as static files: Qt draws a
+    // runtime-loaded variable font only at its default instance. Bold asks
+    // match SemiBold and italics are slanted. The serif loads once chosen.
+    Repeater {
+        model: ["MonaSans-Regular", "MonaSans-Medium", "MonaSans-SemiBold", "lucide"]
+        Item { id: bundled; required property string modelData; FontLoader { source: "components/fonts/" + bundled.modelData + ".ttf" } }
+    }
+    Repeater {
+        model: ui.reading === "serif" ? ["SourceSerif4-Regular", "SourceSerif4-Semibold", "SourceSerif4-It"] : []
+        Item { id: serifFont; required property string modelData; FontLoader { source: "components/fonts/" + serifFont.modelData + ".ttf" } }
     }
 
     component BibButton: Button {
@@ -205,7 +227,7 @@ Item {
         property string variant: "outline"
         property string iconName: ""
         property string shortcutHint: ""
-        readonly property color foreground: !enabled ? ui.dim : variant === "primary" ? ui.bright : variant === "danger" ? ui.urgent : control.hovered || control.activeFocus ? ui.bright : ui.text
+        readonly property color foreground: !enabled ? ui.dim : variant === "primary" ? ui.onAccent : variant === "danger" ? ui.urgent : control.hovered || control.activeFocus ? ui.bright : ui.text
         implicitHeight: ui.space(30)
         implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
         leftPadding: ui.space(12)
@@ -221,13 +243,14 @@ Item {
                 x: control.textLeft ? 0 : Math.round((parent.width - width) / 2)
                 width: control.textLeft ? parent.width : implicitWidth
                 spacing: ui.space(7)
-                Icon { theme: ui; visible: control.iconName !== ""; name: control.iconName; size: ui.body + 2; color: control.variant === "primary" ? ui.bright : control.variant === "danger" ? ui.urgent : control.enabled ? ui.muted : ui.dim }
+                Icon { theme: ui; visible: control.iconName !== ""; name: control.iconName; size: ui.body + 2; color: control.variant === "primary" ? ui.onAccent : control.variant === "danger" ? ui.urgent : control.enabled ? ui.muted : ui.dim }
                 Text {
                     Layout.fillWidth: control.textLeft
                     text: control.text
                     color: control.foreground
-                    font.family: ui.mono
+                    font.family: ui.sans
                     font.pixelSize: ui.body
+                    font.weight: control.variant === "primary" ? Font.DemiBold : Font.Medium
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                 }
@@ -236,8 +259,8 @@ Item {
         }
         background: Rectangle {
             radius: ui.radius
-            color: control.variant === "primary" ? (control.down ? Qt.darker(ui.accent, 1.15) : control.hovered ? Qt.lighter(ui.accent, 1.12) : ui.accent)
-                : control.down ? ui.pressedFill : control.hovered ? ui.hoverFill : control.highlighted ? ui.line : "transparent"
+            color: control.variant === "primary" ? (control.down ? Qt.darker(ui.accentFill, 1.15) : control.hovered ? Qt.lighter(ui.accentFill, 1.1) : ui.accentFill)
+                : control.down ? ui.pressedFill : control.hovered ? ui.hoverFill : control.highlighted ? ui.selectedFill : control.variant === "outline" ? ui.raised : "transparent"
             opacity: control.enabled ? 1 : 0.6
             border.width: control.activeFocus ? ui.focusBorderWidth : (control.variant === "outline" || control.variant === "danger") ? 1 : 0
             border.color: control.activeFocus ? ui.focusBorder : control.variant === "danger" ? Qt.rgba(ui.urgent.r, ui.urgent.g, ui.urgent.b, 0.6) : ui.controlBorder
@@ -262,31 +285,34 @@ Item {
     component BibDialog: Dialog {
         id: dialog
         property string iconName: ""
-        palette.window: ui.card
+        palette.window: ui.raised
         palette.windowText: ui.text
         palette.base: ui.app
         palette.text: ui.bright
-        palette.button: ui.card
+        palette.button: ui.raised
         palette.buttonText: ui.text
-        palette.highlight: ui.line
+        palette.highlight: ui.selectedFill
         palette.highlightedText: ui.bright
         palette.placeholderText: ui.dim
-        font.family: ui.mono
+        font.family: ui.sans
         font.pixelSize: ui.body
         leftPadding: ui.space(20)
         rightPadding: ui.space(20)
         topPadding: ui.space(14)
         bottomPadding: ui.space(16)
         Overlay.modal: Rectangle { color: ui.scrim }
-        background: Rectangle { color: ui.card; border.color: ui.border; border.width: 1; radius: ui.radius }
+        background: Rectangle {
+            color: ui.raised; border.color: ui.border; border.width: 1; radius: ui.radiusLarge + ui.space(2)
+            Shadow { theme: ui; radius: parent.radius; reach: 22 }
+        }
         header: Item {
-            implicitHeight: ui.space(46)
+            implicitHeight: ui.space(52)
             visible: dialog.title !== ""
             RowLayout {
-                anchors { fill: parent; leftMargin: ui.space(20); rightMargin: ui.space(10) }
+                anchors { fill: parent; leftMargin: ui.space(20); rightMargin: ui.space(12) }
                 spacing: ui.space(10)
-                Icon { theme: ui; visible: dialog.iconName !== ""; name: dialog.iconName; size: ui.heading; color: ui.accentText }
-                Text { Layout.fillWidth: true; text: dialog.title; color: ui.bright; font.family: ui.mono; font.pixelSize: ui.title; font.weight: Font.DemiBold; elide: Text.ElideRight; textFormat: Text.PlainText }
+                Icon { theme: ui; visible: dialog.iconName !== ""; name: dialog.iconName; size: ui.title + 3; color: ui.muted }
+                Text { Layout.fillWidth: true; text: dialog.title; color: ui.bright; font.family: ui.sans; font.pixelSize: ui.title + 1; font.weight: Font.DemiBold; elide: Text.ElideRight; textFormat: Text.PlainText }
                 IconButton { theme: ui; icon: "close"; iconColor: ui.dim; tooltip: "Close"; shortcut: "Esc"; onClicked: dialog.close() }
             }
             Rectangle { anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 1; color: ui.line }
@@ -294,7 +320,7 @@ Item {
     }
     component BibLabel: Label {
         color: ui.text
-        font.family: ui.mono
+        font.family: ui.sans
         font.pixelSize: ui.body
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -305,7 +331,7 @@ Item {
         placeholderTextColor: ui.dim
         selectionColor: Qt.rgba(ui.accent.r, ui.accent.g, ui.accent.b, 0.55)
         selectedTextColor: ui.bright
-        font.family: ui.mono
+        font.family: ui.sans
         font.pixelSize: ui.body
         selectByMouse: true
         implicitHeight: ui.space(32)
@@ -321,7 +347,7 @@ Item {
     component BibCombo: ComboBox {
         id: combo
         implicitHeight: ui.space(32)
-        font.family: ui.mono
+        font.family: ui.sans
         font.pixelSize: ui.body
         contentItem: Text {
             leftPadding: ui.space(10)
@@ -348,7 +374,7 @@ Item {
             implicitHeight: ui.space(30)
             highlighted: combo.highlightedIndex === index
             contentItem: Text { text: option.modelData; color: option.highlighted ? ui.bright : ui.text; font: combo.font; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter; textFormat: Text.PlainText }
-            background: Rectangle { color: option.highlighted ? ui.line : "transparent" }
+            background: Rectangle { color: option.highlighted ? ui.hoverFill : "transparent"; radius: ui.radiusSmall }
         }
         popup: Popup {
             y: combo.height + ui.space(2)
@@ -356,7 +382,10 @@ Item {
             implicitHeight: Math.min(contentItem.implicitHeight + ui.space(8), ui.space(320))
             padding: ui.space(4)
             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: combo.popup.visible ? combo.delegateModel : null; currentIndex: combo.highlightedIndex }
-            background: Rectangle { color: ui.card; border.width: 1; border.color: ui.controlBorder; radius: ui.radius }
+            background: Rectangle {
+                color: ui.raised; border.width: 1; border.color: ui.controlBorder; radius: ui.radius
+                Shadow { theme: ui; radius: parent.radius; reach: 14 }
+            }
         }
     }
     component BibTextArea: TextArea {
@@ -388,7 +417,7 @@ Item {
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: ui.space(14); rightMargin: ui.space(6) }
             spacing: ui.space(10)
             Icon { theme: ui; name: "alert"; size: ui.title + 1; color: ui.urgent }
-            Text { Layout.fillWidth: true; text: root.error; color: ui.bright; font.family: ui.mono; font.pixelSize: ui.body; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight; textFormat: Text.PlainText }
+            Text { Layout.fillWidth: true; text: root.error; color: ui.bright; font.family: ui.sans; font.pixelSize: ui.body; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight; textFormat: Text.PlainText }
             IconButton { theme: ui; icon: "close"; size: ui.space(24); iconSize: ui.title; iconColor: ui.muted; tooltip: "Dismiss"; onClicked: root.error = "" }
         }
     }
@@ -528,9 +557,7 @@ Item {
         if(index===activeTab){
             activeTab=-1
             paperTabs=tabs
-            var next=index<tabs.length ? index : index-1
-            if(next<0)enterSearch()
-            else enterPaper(next)
+            enterSearch()
         } else {
             var keep=activeTab>index ? activeTab-1 : activeTab
             paperTabs=tabs
@@ -977,6 +1004,15 @@ Item {
         if(query.text!=="")query.text=""
         search(false)
         query.forceActiveFocus()
+    }
+    // A sidebar place: all references (""), or a project by its id.
+    function showPlace(id) {
+        closeMenus()
+        if(inPaperTab)activateTab(-1)
+        attentionView=""
+        projectId=id||""
+        updateProjectName(); search(false)
+        Qt.callLater(function(){query.forceActiveFocus()})
     }
     function setAttentionView(view) {
         attentionView=view||""
@@ -1638,7 +1674,7 @@ Item {
         items.push({separator:true})
         items.push({key:"__create",label:"Create project…",icon:"plus"})
         projectMenu.items=items
-        projectMenu.openAt(anchor||tabStrip.projectAnchor, anchor&&anchor!==tabStrip.projectAnchor?"side":"left")
+        projectMenu.openAt(anchor||toolbar.titleAnchor, anchor?"side":"left")
     }
     function openAttentionMenu(anchor) {
         attentionMenu.items=[
@@ -1656,6 +1692,12 @@ Item {
     function openOverflowMenu(anchor) {
         if(!selected)return
         overflowMenu.items=[
+            {key:"link",label:"Open link",icon:"external",shortcut:"Ctrl+U"},
+            {key:"note",label:"New note",icon:"notePlus"},
+            {key:"tab",label:"Open in a tab",icon:"tabPlus",shortcut:"Ctrl+T",hidden:inPaperTab},
+            {key:"terminal",label:"Chat in "+cliName,icon:"terminal"},
+            {key:"desktop",label:"Chat in "+desktopName,icon:"chat"},
+            {separator:true},
             {key:"metadata",label:"Fill metadata…",icon:"refresh"},
             {key:"bibtex",label:"Edit BibTeX…",icon:"pencil"},
             {key:"assign",label:"Assign to project…",icon:"folder"},
@@ -1671,7 +1713,19 @@ Item {
             {separator:true},
             {key:"delete",label:"Delete…",icon:"trash",danger:true}
         ]
+        overflowMenu.items=overflowMenu.items.filter(function(i){return !i.hidden})
         overflowMenu.openAt(anchor,"right")
+    }
+    // The detail pane's Cite button: the ways to copy a citation.
+    function openCiteMenu(anchor) {
+        if(!selected)return
+        overflowMenu.items=[
+            {key:"copy_key",label:"Citation key",icon:"copy"},
+            {key:"copy_latex",label:"LaTeX \\cite{…}",icon:"copy"},
+            {key:"copy_pandoc",label:"Pandoc / Quarto [@…]",icon:"copy"},
+            {key:"copy_bibtex",label:"BibTeX entry",icon:"braces"}
+        ]
+        overflowMenu.openAt(anchor,"left")
     }
     function detailThenEdit(kind) {
         if(inPaperTab){if(selected)edit(kind,null);return}
@@ -1864,7 +1918,14 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: 0
-                    Rail {
+                    Sidebar {
+                        visible: !root.inPaperTab && root.sidebarOpen
+                        Layout.fillHeight: true
+                        theme: ui
+                        app: root
+                    }
+                    PaperRail {
+                        visible: root.inPaperTab
                         Layout.fillHeight: true
                         theme: ui
                         app: root
@@ -1873,8 +1934,15 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 0
-                        TabStrip {
-                            id: tabStrip
+                        Toolbar {
+                            id: toolbar
+                            visible: !root.inPaperTab
+                            Layout.fillWidth: true
+                            theme: ui
+                            app: root
+                        }
+                        ReaderBar {
+                            visible: root.inPaperTab
                             Layout.fillWidth: true
                             theme: ui
                             app: root
@@ -1935,12 +2003,12 @@ Item {
                     theme: ui
                     notice: root.notice
                     hints: root.inPdfTab
-                        ? [["j/k", "scroll"], ["gg/G", "first/last"], ["/", "search"], ["r", "clip"], ["a", "page note"], ["o", "contents"], ["]", "notes"], ["^W", "close tab"]]
+                        ? [["Esc", "back to the library"], ["Alt+1–9", "switch paper"], ["j k", "scroll"], ["/", "search"], ["r", "clip"], ["a", "page note"], ["]", "notes"], ["Ctrl+W", "close"]]
                         : root.inPaperTab
-                        ? [[root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^1–5", "sections"], ["^PgUp/Dn", "switch tab"], ["^W", "close tab"], ["type", "search"], ["q", "close"]]
+                        ? [["Esc", "back to the library"], [root.pdfShortcut, "PDF"], ["Ctrl+U", "link"], ["Ctrl+1–5", "sections"], ["Alt+1–9", "switch paper"], ["Ctrl+W", "close"]]
                         : root.expanded
-                        ? [["↑↓", "navigate"], ["↵", "open"], [root.pdfShortcut.replace("Ctrl+", "^"), "PDF"], ["^U", "link"], ["^T", "new tab"], ["^1–5", "sections"], ["^K", "actions"], ["q", "close"]]
-                        : [["↑↓", "navigate"], ["↵", "open"], ["Tab", "details"], ["^T", "new tab"], ["^K", "actions"], ["q", "close"]]
+                        ? [["↑↓", "navigate"], ["↵", "open PDF"], ["Ctrl+T", "open in a tab"], ["Ctrl+1–5", "sections"], ["Ctrl+K", "actions"]]
+                        : [["↑↓", "navigate"], ["↵", "open PDF"], ["Tab", "details"], ["Ctrl+T", "open in a tab"], ["Ctrl+K", "actions"]]
                 }
             }
 
@@ -1952,6 +2020,11 @@ Item {
                 menuWidth: ui.space(250)
                 onTriggered: key => {
                     switch(key) {
+                    case "link": root.openLink(); break
+                    case "note": root.edit("note", null); break
+                    case "tab": root.openInTab(null, false); break
+                    case "terminal": root.openCodex(false); break
+                    case "desktop": root.openCodex(true); break
                     case "metadata": root.lookupMetadata(); break
                     case "bibtex": root.edit("metadata", null); break
                     case "assign": root.assign(); break
@@ -1996,7 +2069,7 @@ Item {
         Shortcut {sequences:["Ctrl+Tab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(1)}
         Shortcut {sequences:["Ctrl+Shift+Tab","Ctrl+Backtab"];enabled:root.opened&&card.wide&&!root.modalOpen;onActivated:root.cycleTab(-1)}
         // In a reader tab Esc first cancels the clip tool, a selection or a search.
-        Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen&&!(root.inPdfTab&&readerPane.wantsEscape);onActivated:root.dismiss()}
+        Shortcut {sequence:"Escape";enabled:root.opened&&!root.modalOpen&&!(root.inPdfTab&&readerPane.wantsEscape);onActivated:root.inPaperTab?root.activateTab(-1):root.dismiss()}
         Shortcut {sequence:"Q";enabled:root.opened&&(root.inPaperTab||query.text.trim()==="")&&!root.modalOpen&&!(root.inPdfTab&&readerPane.searching);onActivated:root.dismiss()}
         LazyPopup {
             id: settingsDialog
@@ -2247,7 +2320,7 @@ Item {
                                 anchors{fill:parent;leftMargin:ui.space(12);rightMargin:ui.space(12)}
                                 spacing:ui.space(10)
                                 Icon {theme:ui;name:"folder";size:ui.title;color:projectRow.ListView.isCurrentItem?ui.accentText:ui.muted}
-                                Text {Layout.fillWidth:true;text:projectRow.modelData.name;color:projectRow.ListView.isCurrentItem?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideRight;textFormat:Text.PlainText}
+                                Text {Layout.fillWidth:true;text:projectRow.modelData.name;color:projectRow.ListView.isCurrentItem?ui.bright:ui.text;font.family:ui.sans;font.pixelSize:ui.body;elide:Text.ElideRight;textFormat:Text.PlainText}
                             }
                             MouseArea {id:projectMouse;anchors.fill:parent;hoverEnabled:true;onClicked:root.assignToProject(projectRow.index)}
                         }
@@ -2374,7 +2447,7 @@ Item {
                             }
                             Text {Layout.fillWidth:true;text:previewCard.item.title||previewCard.item.citekey||"";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading+4;font.weight:Font.DemiBold;lineHeight:1.15;wrapMode:Text.Wrap;textFormat:Text.PlainText}
                             Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:Format.fullAuthors(previewCard.item.authors,10);color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;wrapMode:Text.Wrap;textFormat:Text.PlainText}
-                            Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:[previewCard.venueText,previewCard.item.year].filter(function(s){return !!s}).join("  ·  ");color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;textFormat:Text.PlainText}
+                            Text {Layout.fillWidth:true;Layout.topMargin:-ui.space(6);visible:text!=="";text:[previewCard.venueText,previewCard.item.year].filter(function(s){return !!s}).join("  ·  ");color:ui.muted;font.family:ui.sans;font.pixelSize:ui.small;textFormat:Text.PlainText}
                             Text {Layout.fillWidth:true;visible:previewCard.abstractText!=="";text:previewCard.abstractText;color:ui.text;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;lineHeight:1.5;wrapMode:Text.Wrap;maximumLineCount:6;elide:Text.ElideRight;textFormat:Text.PlainText}
                             Flow {
                                 Layout.fillWidth:true;spacing:ui.space(6)

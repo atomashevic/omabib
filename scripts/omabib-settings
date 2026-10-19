@@ -3,7 +3,10 @@
 
 Preferences live in $XDG_CONFIG_HOME/omabib/settings.json:
 
-  pdf_colors  PDF pages in reader tabs: "original" or "theme" (Omarchy theme colors)
+  theme        "system" (follow light or dark), "light", "dark" or "omarchy"
+               (the active Omarchy theme, when there is one)
+  reading_font paper titles, abstracts and notes: "sans" or "serif"
+  pdf_colors  PDF pages in reader tabs: "original" or "theme" (the theme's colors)
   ai_cli      terminal chat: "codex" (Codex CLI) or "claude" (Claude Code)
   ai_desktop  desktop chat: "chatgpt" (ChatGPT Desktop) or "claude" (Claude Desktop)
   chat_steps  in-window chat: agent commands and tool calls "hidden" or "shown"
@@ -27,11 +30,13 @@ import sys
 import subprocess
 
 # An older pdf_viewer key is ignored: PDFs open in Omabib's reader tabs.
-DEFAULTS = {'pdf_colors': 'original', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt', 'chat_steps': 'hidden',
+DEFAULTS = {'theme': 'system', 'reading_font': 'sans', 'pdf_colors': 'original', 'ai_cli': 'codex', 'ai_desktop': 'chatgpt', 'chat_steps': 'hidden',
             'claude_model': '', 'claude_effort': '', 'codex_model': '', 'codex_effort': ''}
 CHAT_STEPS = ('hidden', 'shown')
 EFFORTS = ('', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 PDF_COLORS = ('original', 'theme')
+THEMES = ('system', 'light', 'dark', 'omarchy')
+READING_FONTS = ('sans', 'serif')
 CLIS = [('codex', 'Codex CLI', 'codex'), ('claude', 'Claude Code', 'claude')]
 DESKTOPS = [('chatgpt', 'ChatGPT Desktop', 'chatgpt'), ('claude', 'Claude Desktop', 'claude-desktop')]
 
@@ -151,6 +156,10 @@ def show():
 def check(key, value):
     if key not in DEFAULTS:
         raise ValueError(f'Unknown setting {key}')
+    if key == 'theme' and value not in THEMES:
+        raise ValueError('Theme must be system, light, dark or omarchy')
+    if key == 'reading_font' and value not in READING_FONTS:
+        raise ValueError('Reading font must be sans or serif')
     if key == 'pdf_colors' and value not in PDF_COLORS:
         raise ValueError('PDF colors must be original or theme')
     if key == 'ai_cli' and value not in {i for i, _, _ in CLIS}:

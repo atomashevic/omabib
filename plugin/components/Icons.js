@@ -1,94 +1,105 @@
 .pragma library
 
-// The popup's icons, by name. Each is a Material Design glyph from the range
-// Nerd Fonts bundle (U+F0001–U+F1AF0), the same range the Omarchy shell and
-// Omamail draw from. Codepoints were read from the installed
-// JetBrainsMono Nerd Font's own glyph names (md-*), not typed from memory.
+// The window's icons, by name: Lucide line icons from the bundled lucide.ttf
+// (fonts/lucide.ttf, ISC licence), cut to these glyphs by scripts/subset-icons.
+// Codepoints were read from that release's codepoints.json, not typed from
+// memory; the comment is Lucide's own name.
 var GLYPHS = {
-  search: 0xF0349,        // magnify
-  book: 0xF15D6,          // book-open-page-variant-outline — the app mark
-  library: 0xF125F,       // bookshelf — all references
-  recent: 0xF0150,        // clock-outline — newest added
-  folder: 0xF0256,        // folder-outline — projects
-  folderOpen: 0xF0DCF,    // folder-open-outline
-  alert: 0xF002A,         // alert-outline — needs attention
-  plus: 0xF0415,          // plus
-  sync: 0xF04E6,          // sync
-  syncAlert: 0xF04E7,     // sync-alert
-  branch: 0xF062C,        // source-branch — history repository
-  command: 0xF0633,       // apple-keyboard-command — actions
-  pdf: 0xF0226,           // file-pdf-box
-  file: 0xF0224,          // file-outline
-  fileMissing: 0xF1036,   // file-question-outline
-  external: 0xF03CC,      // open-in-new
-  link: 0xF0339,          // link-variant
-  unlink: 0xF033A,        // link-variant-off
-  notePlus: 0xF1782,      // note-edit-outline
-  note: 0xF11D7,          // note-text-outline
-  sparkles: 0xF0674,      // creation — the AI overview
-  terminal: 0xF018D,      // console — Codex
-  chat: 0xF0365,          // message-outline — ChatGPT
-  dots: 0xF01D8,          // dots-horizontal — overflow
-  copy: 0xF018F,          // content-copy
-  pencil: 0xF0CB6,        // pencil-outline
-  tag: 0xF04FC,           // tag-outline
-  trash: 0xF0A7A,         // trash-can-outline
-  download: 0xF0B8F,      // download-outline
-  braces: 0xF0169,        // code-braces — BibTeX
-  chevronDown: 0xF0140,   // chevron-down
-  chevronRight: 0xF0142,  // chevron-right
-  close: 0xF0156,         // close
-  filter: 0xF0236,        // filter-variant
-  sort: 0xF04BA,          // sort
-  globe: 0xF01E7,         // earth — global note scope
-  refresh: 0xF0450,       // refresh
-  check: 0xF012C,         // check
-  text: 0xF09AA,          // text-long — abstract
-  image: 0xF0976,         // image-outline
-  enter: 0xF0311,         // keyboard-return
-  checkboxBlank: 0xF0131, // checkbox-blank-outline
-  checkboxMarked: 0xF0135,// checkbox-marked-outline
-  cloudCheck: 0xF12CC,    // cloud-check-outline
-  folderUp: 0xF19F0,      // folder-arrow-up
-  cog: 0xF08BB,           // cog-outline
-  radioOn: 0xF043E,       // radiobox-marked
-  radioOff: 0xF043D,      // radiobox-blank
-  tab: 0xF04E9,           // tab
-  tabPlus: 0xF075C,       // tab-plus
-  document: 0xF09EE,      // file-document-outline
-  bold: 0xF0264,          // format-bold
-  italic: 0xF0277,        // format-italic
-  code: 0xF0174,          // code-tags
-  math: 0xF04A0,          // sigma
-  list: 0xF0279,          // format-list-bulleted
-  heading: 0xF0274,       // format-header-pound
-  quote: 0xF0757,         // format-quote-open
-  crop: 0xF019E,          // crop — the clip rectangle tool
-  zoomIn: 0xF06ED,        // magnify-plus-outline
-  zoomOut: 0xF06EC,       // magnify-minus-outline
-  fitWidth: 0xF084E,      // arrow-expand-horizontal
-  fitPage: 0xF0EF6,       // fit-to-page-outline
-  sidebar: 0xF10AB,       // dock-right — the reader's notes pane
-  outline: 0xF0836,       // table-of-contents
-  chevronUp: 0xF0143,     // chevron-up
-  pageColors: 0xF050E,    // theme-light-dark — PDF pages in theme colors
-  robot: 0xF167A,         // robot-outline — in-window agent chat
-  send: 0xF048A,          // send
-  stop: 0xF04DB,          // stop — end a streaming reply
-  quote: 0xF0757,         // format-quote-open — a quoted selection
-  history: 0xF02DA,       // history — earlier chats
-  steps: 0xF0756,         // format-list-checks — show the agent's steps
-  brain: 0xF09D1,         // brain — the chat model
-  speedometer: 0xF04C5,   // speedometer — reasoning effort
-  googleDrive: 0xF02B6,   // google-drive
-  dropbox: 0xF01E3,       // dropbox
-  onedrive: 0xF03CA,      // microsoft-onedrive
-  folderSync: 0xF0D0C,    // folder-sync-outline — a synced folder
-  cloudSync: 0xF12D6,     // cloud-sync-outline — sync
-  cloudOff: 0xF0164,      // cloud-off-outline — offline
-  cloudAlert: 0xF09E0,    // cloud-alert — sync needs attention
-  laptop: 0xF0322,        // laptop — a computer in the library
-  server: 0xF048D         // server-network — other rclone storage
+  search:         0xE151,  // search
+  book:           0xE05F,  // book-open
+  library:        0xE100,  // library
+  recent:         0xE087,  // clock
+  folder:         0xE0D7,  // folder
+  folderOpen:     0xE247,  // folder-open
+  folderPlus:     0xE0D9,  // folder-plus
+  alert:          0xE193,  // triangle-alert
+  plus:           0xE13D,  // plus
+  sync:           0xE145,  // refresh-cw
+  syncAlert:      0xE498,  // refresh-cw-off
+  branch:         0xE0E2,  // git-branch
+  command:        0xE09A,  // command
+  pdf:            0xE0CC,  // file-text
+  file:           0xE0C0,  // file
+  fileMissing:    0xE322,  // file-question-mark
+  external:       0xE0B9,  // external-link
+  link:           0xE102,  // link
+  unlink:         0xE19C,  // unlink
+  notePlus:       0xE596,  // notebook-pen
+  note:           0xE598,  // notebook-text
+  sparkles:       0xE412,  // sparkles
+  terminal:       0xE181,  // terminal
+  chat:           0xE117,  // message-square
+  dots:           0xE0B6,  // ellipsis
+  copy:           0xE09E,  // copy
+  pencil:         0xE1F9,  // pencil
+  tag:            0xE17F,  // tag
+  trash:          0xE18E,  // trash-2
+  download:       0xE0B2,  // download
+  braces:         0xE36A,  // braces
+  chevronDown:    0xE06D,  // chevron-down
+  chevronRight:   0xE06F,  // chevron-right
+  chevronLeft:    0xE06E,  // chevron-left
+  chevronUp:      0xE070,  // chevron-up
+  close:          0xE1B2,  // x
+  filter:         0xE460,  // list-filter
+  sort:           0xE046,  // arrow-down-up
+  globe:          0xE0E8,  // globe
+  refresh:        0xE145,  // refresh-cw
+  check:          0xE06C,  // check
+  text:           0xE185,  // align-left
+  image:          0xE0F6,  // image
+  enter:          0xE0A1,  // corner-down-left
+  checkboxBlank:  0xE167,  // square
+  checkboxMarked: 0xE559,  // square-check
+  cloudCheck:     0xE66E,  // cloud-check
+  folderUp:       0xE33D,  // folder-up
+  cog:            0xE154,  // settings
+  radioOn:        0xE345,  // circle-dot
+  radioOff:       0xE076,  // circle
+  tab:            0xE426,  // app-window
+  tabPlus:        0xE173,  // square-plus
+  document:       0xE0CC,  // file-text
+  bold:           0xE05D,  // bold
+  italic:         0xE0FB,  // italic
+  code:           0xE093,  // code
+  math:           0xE201,  // sigma
+  list:           0xE106,  // list
+  heading:        0xE384,  // heading
+  quote:          0xE239,  // quote
+  crop:           0xE0AB,  // crop
+  zoomIn:         0xE1B6,  // zoom-in
+  zoomOut:        0xE1B7,  // zoom-out
+  fitWidth:       0xE1C6,  // move-horizontal
+  fitPage:        0xE112,  // maximize
+  sidebar:        0xE431,  // panel-right
+  sidebarLeft:    0xE12A,  // panel-left
+  outline:        0xE408,  // list-tree
+  pageColors:     0xE09D,  // contrast
+  robot:          0xE1BB,  // bot
+  send:           0xE152,  // send
+  stop:           0xE083,  // circle-stop
+  history:        0xE1F5,  // history
+  steps:          0xE1D0,  // list-checks
+  brain:          0xE3C6,  // brain
+  speedometer:    0xE1BF,  // gauge
+  googleDrive:    0xE088,  // cloud
+  dropbox:        0xE088,  // cloud
+  onedrive:       0xE088,  // cloud
+  folderSync:     0xE4C9,  // folder-sync
+  cloudSync:      0xE6E3,  // cloud-sync
+  cloudOff:       0xE08D,  // cloud-off
+  cloudAlert:     0xE633,  // cloud-alert
+  laptop:         0xE1CD,  // laptop
+  server:         0xE153,  // server
+  settings:       0xE154,  // settings
+  sliders:        0xE29A,  // sliders-horizontal
+  back:           0xE048,  // arrow-left
+  cite:           0xE239,  // quote
+  attach:         0xE12D,  // paperclip
+  sun:            0xE178,  // sun
+  moon:           0xE11E,  // moon
+  monitor:        0xE11D,  // monitor
+  palette:        0xE1DD   // palette
 }
 
 function has(name) {

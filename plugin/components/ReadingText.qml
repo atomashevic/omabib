@@ -17,7 +17,7 @@ TextEdit {
     selectionColor: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.5)
     selectedTextColor: theme.bright
     font.family: theme.readingFamily
-    font.pixelSize: theme.title
+    font.pixelSize: theme.reading === "serif" ? theme.title + 1 : theme.subtitle
     onLinkActivated: link => root.openLink(link)
     // Clicking elsewhere in the popup clears a stale highlight.
     onActiveFocusChanged: if (!activeFocus) deselect()

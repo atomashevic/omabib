@@ -40,21 +40,21 @@ ScrollPane {
         Layout.fillWidth: true
         visible: !!root.ref && !root.ref.abstract
         implicitHeight: missing.implicitHeight + root.theme.space(28)
-        color: root.theme.app
+        color: root.theme.side
         border.width: 1
         border.color: root.theme.line
-        radius: root.theme.radius
+        radius: root.theme.radiusLarge
         RowLayout {
             id: missing
             anchors.fill: parent
             anchors.margins: root.theme.space(14)
             spacing: root.theme.space(10)
-            Icon { theme: root.theme; name: "alert"; color: root.theme.accentText }
+            Icon { theme: root.theme; name: "alert"; color: root.theme.warn }
             Text {
                 Layout.fillWidth: true
                 text: "No abstract yet. Fill metadata looks it up by DOI or arXiv ID."
                 color: root.theme.muted
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.body
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
@@ -66,15 +66,18 @@ ScrollPane {
     Rectangle {
         Layout.fillWidth: true
         Layout.topMargin: root.theme.space(6)
-        implicitHeight: 1
-        color: root.theme.line
-    }
+        visible: !!root.ref
+        implicitHeight: facts.implicitHeight + root.theme.space(36)
+        radius: root.theme.radiusLarge
+        color: root.theme.side
+        border.color: root.theme.line
 
     GridLayout {
-        Layout.fillWidth: true
+        id: facts
+        anchors { left: parent.left; right: parent.right; top: parent.top; margins: root.theme.space(18); leftMargin: root.theme.space(20); rightMargin: root.theme.space(20) }
         columns: 3
         columnSpacing: root.theme.space(24)
-        rowSpacing: root.theme.space(14)
+        rowSpacing: root.theme.space(16)
         Repeater {
             model: root.ref ? [
                 {k: "Type", v: root.ref.entry_type || ""},
@@ -85,7 +88,7 @@ ScrollPane {
                 {k: "URL", v: root.fields.url && !root.fields.doi && !root.arxiv ? root.fields.url.replace(/^https?:\/\//, "") : "", url: root.fields.url || ""},
                 {k: "PDF", v: root.ref.pdf_path ? Format.basename(root.ref.pdf_path) : "none linked"},
                 {k: "Added", v: Format.shortDate(root.ref.created_at)},
-                {k: "Citation key", v: root.ref.citekey || ""}
+                {k: "Citation key", v: root.ref.citekey || "", mono: true}
             ].filter(function (e) { return e.v !== "" }) : []
             ColumnLayout {
                 required property var modelData
@@ -93,21 +96,29 @@ ScrollPane {
                 Layout.preferredWidth: 1
                 Layout.alignment: Qt.AlignTop
                 spacing: root.theme.space(3)
-                SectionLabel { theme: root.theme; text: modelData.k }
+                Text {
+                    text: modelData.k
+                    color: root.theme.muted
+                    font.family: root.theme.sans
+                    font.pixelSize: root.theme.small
+                    textFormat: Text.PlainText
+                }
                 Text {
                     Layout.fillWidth: true
                     text: modelData.url ? "<a href=\"" + OverviewText.escapeHtml(modelData.url) + "\">" + OverviewText.escapeHtml(modelData.v) + "</a>" : modelData.v
                     textFormat: modelData.url ? Text.StyledText : Text.PlainText
-                    color: root.theme.text
+                    color: root.theme.bright
                     linkColor: root.theme.accentText
-                    font.family: root.theme.mono
-                    font.pixelSize: root.theme.body
+                    font.family: modelData.mono ? root.theme.mono : root.theme.sans
+                    font.pixelSize: modelData.mono ? root.theme.small : root.theme.body
+                    font.weight: Font.Medium
                     elide: Text.ElideRight
                     onLinkActivated: link => root.app.openExternal(link)
                     HoverHandler { enabled: !!modelData.url; cursorShape: Qt.PointingHandCursor }
                 }
             }
         }
+    }
     }
 
     ColumnLayout {

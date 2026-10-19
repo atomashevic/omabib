@@ -2,14 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Search header and results. App.qml keeps the state and the verbs; this
-// draws them and routes the search field's keys.
+// The results: the order and filters over them, then the list. App.qml keeps
+// the state and the verbs; the toolbar holds the search field.
 Rectangle {
     id: root
 
     required property var theme
     required property var app
-    readonly property Item queryField: search.input
     readonly property Item resultsView: list
     readonly property Item authorField: author.input
     readonly property Item yearField: year.input
@@ -18,93 +17,116 @@ Rectangle {
     property bool filtersOpen: false
     property bool wide: false
 
+    readonly property bool searching: app.queryText !== ""
+
     color: theme.app
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.theme.space(40)
+            Layout.leftMargin: root.theme.space(18)
+            Layout.rightMargin: root.theme.space(12)
+            spacing: root.theme.space(8)
+            Text {
+                Layout.fillWidth: true
+                text: root.searching ? "Best matches" : root.app.browseSort === "added_desc" ? "Newest first" : "By citation key"
+                color: root.theme.muted
+                font.family: root.theme.sans
+                font.pixelSize: root.theme.small
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+            }
+            Chip {
+                theme: root.theme
+                visible: root.app.attentionView !== ""
+                icon: "alert"
+                iconColor: root.theme.warn
+                text: root.app.attentionView === "missing_pdf" ? "no PDF" : "no abstract"
+                trailingIcon: "close"
+                clickable: true
+                tooltip: "Show all references"
+                onClicked: root.app.setAttentionView("")
+            }
+            // Newest | A–Z; a search orders by relevance instead.
+            Rectangle {
+                objectName: "sortButton"
+                visible: !root.searching
+                implicitWidth: sortRow.implicitWidth + root.theme.space(4)
+                implicitHeight: root.theme.space(26)
+                radius: root.theme.radius - 1
+                color: root.theme.side
+                border.color: root.theme.line
+                RowLayout {
+                    id: sortRow
+                    anchors.centerIn: parent
+                    spacing: 0
+                    Repeater {
+                        model: [["added_desc", "Newest"], ["citekey", "A–Z"]]
+                        Item {
+                            id: segment
+                            required property var modelData
+                            readonly property bool on: root.app.browseSort === modelData[0]
+                            implicitWidth: segmentText.implicitWidth + root.theme.space(18)
+                            implicitHeight: root.theme.space(22)
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: root.theme.radiusSmall - 1
+                                color: segment.on ? root.theme.raised : "transparent"
+                                border.width: segment.on ? 1 : 0
+                                border.color: root.theme.line
+                            }
+                            Text {
+                                id: segmentText
+                                anchors.centerIn: parent
+                                text: segment.modelData[1]
+                                color: segment.on ? root.theme.bright : root.theme.muted
+                                font.family: root.theme.sans
+                                font.pixelSize: root.theme.small
+                                font.weight: segment.on ? Font.DemiBold : Font.Medium
+                                textFormat: Text.PlainText
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (!segment.on) root.app.toggleBrowseSort()
+                            }
+                        }
+                    }
+                }
+            }
+            IconButton {
+                theme: root.theme
+                icon: "filter"
+                iconSize: root.theme.title
+                size: root.theme.space(26)
+                iconColor: root.theme.muted
+                active: root.filtersOpen || root.app.filtersActive
+                tooltip: "Filters"
+                onClicked: root.filtersOpen = !root.filtersOpen
+            }
+        }
+
         ColumnLayout {
             Layout.fillWidth: true
-            Layout.margins: root.theme.space(12)
-            Layout.bottomMargin: root.theme.space(10)
-            spacing: root.theme.space(10)
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: root.theme.space(4)
-                Chip {
-                    theme: root.theme
-                    visible: root.app.attentionView !== ""
-                    icon: "alert"
-                    iconColor: root.theme.accentText
-                    text: root.app.attentionView === "missing_pdf" ? "no PDF" : "no abstract"
-                    trailingIcon: "close"
-                    clickable: true
-                    tooltip: "Show all references"
-                    onClicked: root.app.setAttentionView("")
-                }
-                Item { Layout.fillWidth: true }
-                TextButton {
-                    objectName: "sortButton"
-                    theme: root.theme
-                    variant: "ghost"
-                    icon: "sort"
-                    fontSize: root.theme.small
-                    text: search.text.trim() !== "" ? "Relevance" : root.app.browseSort === "added_desc" ? "Newest" : "A–Z"
-                    enabled: search.text.trim() === ""
-                    onClicked: root.app.toggleBrowseSort()
-                }
-                IconButton {
-                    theme: root.theme
-                    icon: "filter"
-                    iconSize: root.theme.title
-                    size: root.theme.space(26)
-                    active: root.filtersOpen || root.app.filtersActive
-                    tooltip: "Filters"
-                    onClicked: root.filtersOpen = !root.filtersOpen
-                }
-            }
-
-            QueryField {
-                id: search
-                Layout.fillWidth: true
-                theme: root.theme
-                icon: "search"
-                placeholder: "Search title, author, abstract, notes…"
-                inputName: "searchField"
-                onTextChanged: root.app.queryEdited()
-                onShortcutOverride: event => {
-                    if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_U || event.key === Qt.Key_O || event.key === Qt.Key_Return || event.key === Qt.Key_Enter))
-                        event.accepted = true
-                    else if (event.key === Qt.Key_Q && event.modifiers === Qt.NoModifier && search.text.trim() === "")
-                        event.accepted = true
-                }
-                onKeyPressed: event => {
-                    var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
-                    if (event.key === Qt.Key_Q && event.modifiers === Qt.NoModifier && search.text.trim() === "") { root.app.dismiss(); event.accepted = true }
-                    else if (ctrl && event.key === Qt.Key_U) { root.app.openLink(); event.accepted = true }
-                    else if (ctrl && event.key === Qt.Key_O) { root.app.getPdf(); event.accepted = true }
-                    else if (event.key === Qt.Key_Down || (ctrl && event.key === Qt.Key_N)) { root.app.navigate(1); event.accepted = true }
-                    else if (event.key === Qt.Key_Up || (ctrl && event.key === Qt.Key_P)) { root.app.navigate(-1); event.accepted = true }
-                    else if (ctrl && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.app.openInTab(null, false); event.accepted = true }
-                    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        if (root.app.hits.length === 0 && root.app.looksLikeIdentifier(search.text)) root.app.startQuickAdd(search.text.trim())
-                        else root.app.openPdf()
-                        event.accepted = true
-                    }
-                    else if (event.key === Qt.Key_Tab) { root.app.showDetail(); event.accepted = true }
-                }
-            }
+            Layout.leftMargin: root.theme.space(12)
+            Layout.rightMargin: root.theme.space(12)
+            Layout.bottomMargin: root.theme.space(8)
+            visible: root.filtersOpen || root.app.candidatesLimited
+            spacing: root.theme.space(8)
 
             RowLayout {
                 Layout.fillWidth: true
                 visible: root.filtersOpen
                 spacing: root.theme.space(6)
-                QueryField { id: author; theme: root.theme; Layout.fillWidth: true; implicitHeight: root.theme.space(28); fontSize: root.theme.body; placeholder: "Author"; onTextChanged: root.app.queryEdited() }
-                QueryField { id: year; theme: root.theme; Layout.preferredWidth: root.theme.space(72); implicitHeight: root.theme.space(28); fontSize: root.theme.body; placeholder: "Year"; clearable: false; onTextChanged: root.app.queryEdited() }
-                QueryField { id: type; theme: root.theme; Layout.preferredWidth: root.theme.space(104); implicitHeight: root.theme.space(28); fontSize: root.theme.body; placeholder: "Type"; clearable: false; onTextChanged: root.app.queryEdited() }
-                QueryField { id: label; theme: root.theme; Layout.preferredWidth: root.theme.space(90); implicitHeight: root.theme.space(28); fontSize: root.theme.body; placeholder: "Label"; clearable: false; onTextChanged: root.app.queryEdited() }
+                QueryField { id: author; theme: root.theme; Layout.fillWidth: true; implicitHeight: root.theme.space(28); placeholder: "Author"; onTextChanged: root.app.queryEdited() }
+                QueryField { id: year; theme: root.theme; Layout.preferredWidth: root.theme.space(72); implicitHeight: root.theme.space(28); placeholder: "Year"; clearable: false; onTextChanged: root.app.queryEdited() }
+                QueryField { id: type; theme: root.theme; Layout.preferredWidth: root.theme.space(104); implicitHeight: root.theme.space(28); placeholder: "Type"; clearable: false; onTextChanged: root.app.queryEdited() }
+                QueryField { id: label; theme: root.theme; Layout.preferredWidth: root.theme.space(90); implicitHeight: root.theme.space(28); placeholder: "Label"; clearable: false; onTextChanged: root.app.queryEdited() }
             }
             RowLayout {
                 visible: root.filtersOpen
@@ -118,20 +140,19 @@ Rectangle {
                 Text {
                     text: "Also search other projects’ notes"
                     color: root.theme.muted
-                    font.family: root.theme.mono
+                    font.family: root.theme.sans
                     font.pixelSize: root.theme.small
                     textFormat: Text.PlainText
                 }
                 TapHandler { onTapped: root.app.toggleSearchAllNotes() }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }
-
             Text {
                 Layout.fillWidth: true
                 visible: root.app.candidatesLimited
                 text: "Showing the strongest matches. Add a word to narrow the search."
                 color: root.theme.dim
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.small
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
@@ -146,6 +167,9 @@ Rectangle {
             clip: true
             model: root.app.hits
             spacing: root.theme.space(2)
+            leftMargin: root.theme.space(8)
+            rightMargin: root.theme.space(8)
+            bottomMargin: root.theme.space(8)
             currentIndex: -1
             reuseItems: true
             boundsBehavior: Flickable.StopAtBounds
@@ -160,7 +184,7 @@ Rectangle {
                 onOpenInTab: (index, background) => root.app.openInTab(root.app.hits[index], background)
             }
             footer: Item {
-                width: list.width
+                width: list.width - list.leftMargin - list.rightMargin
                 height: more.visible ? more.implicitHeight + root.theme.space(20) : 0
                 TextButton {
                     id: more
@@ -175,7 +199,7 @@ Rectangle {
             }
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
-                contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line }
+                contentItem: Rectangle { implicitWidth: root.theme.space(4); radius: width / 2; color: root.theme.line }
             }
         }
     }
@@ -183,18 +207,19 @@ Rectangle {
     EmptyState {
         theme: root.theme
         anchors.centerIn: parent
-        anchors.verticalCenterOffset: root.theme.space(40)
+        anchors.verticalCenterOffset: root.theme.space(20)
         width: Math.min(parent.width - root.theme.space(40), root.theme.space(460))
         visible: root.app.hits.length === 0 && !root.app.searchPending
-        readonly property bool identifier: root.app.looksLikeIdentifier(search.text)
-        icon: identifier ? "plus" : root.app.attentionView !== "" && search.text === "" ? "check" : root.app.referenceCount === 0 ? "book" : "search"
+        readonly property string typed: root.app.query ? root.app.query.text : ""
+        readonly property bool identifier: root.app.looksLikeIdentifier(typed)
+        icon: identifier ? "plus" : root.app.attentionView !== "" && typed === "" ? "check" : root.app.referenceCount === 0 ? "book" : "search"
         title: identifier ? "Not in your library yet"
-            : root.app.attentionView !== "" && search.text === "" ? "Nothing needs attention here"
+            : root.app.attentionView !== "" && typed === "" ? "Nothing needs attention here"
             : root.app.referenceCount === 0 ? "Your library is empty"
             : "No matching references"
         hint: identifier ? "Press Enter to look it up and add it"
-            : root.app.referenceCount === 0 ? "Paste a DOI, arXiv ID or URL above, or press + to add one"
-            : root.app.attentionView !== "" && search.text === "" ? ""
+            : root.app.referenceCount === 0 ? "Paste a DOI, arXiv ID or URL in the search field, or press Add"
+            : root.app.attentionView !== "" && typed === "" ? ""
             : "Try fewer words, another project, or clear the filters"
         detail: identifier ? "Fetches metadata, the abstract and an open-access PDF when available" : ""
     }

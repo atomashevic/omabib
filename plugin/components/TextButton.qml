@@ -1,8 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Icon + label control. Variants: "outline" (default), "ghost", "primary"
-// (accent fill, for the one committing action in a dialog), "danger".
+// Icon + label control. Variants: "outline" (default, a secondary button on
+// the raised surface), "ghost", "primary" (accent fill, for the one committing
+// action in a view or dialog), "danger".
 Item {
     id: root
 
@@ -18,13 +19,13 @@ Item {
     signal clicked()
 
     readonly property bool hot: mouse.containsMouse && enabled
-    readonly property color foreground: variant === "primary" ? theme.bright
+    readonly property color foreground: variant === "primary" ? theme.onAccent
         : variant === "danger" ? theme.urgent
         : variant === "ghost" ? (hot ? theme.bright : theme.muted)
         : theme.text
 
-    implicitHeight: theme.space(28)
-    implicitWidth: row.implicitWidth + theme.space(20)
+    implicitHeight: theme.space(30)
+    implicitWidth: row.implicitWidth + theme.space(24)
     opacity: enabled || busy ? 1 : 0.45
     activeFocusOnTab: focusable
 
@@ -35,12 +36,13 @@ Item {
         anchors.fill: parent
         radius: root.theme.radius
         color: root.variant === "primary"
-            ? (mouse.pressed ? Qt.darker(root.theme.accent, 1.15) : root.hot ? Qt.lighter(root.theme.accent, 1.12) : root.theme.accent)
+            ? (mouse.pressed ? Qt.darker(root.theme.accentFill, 1.15) : root.hot ? Qt.lighter(root.theme.accentFill, 1.1) : root.theme.accentFill)
             : mouse.pressed ? root.theme.pressedFill
-            : root.hot ? (root.variant === "danger" ? Qt.rgba(root.theme.urgent.r, root.theme.urgent.g, root.theme.urgent.b, 0.14) : root.theme.hoverFill)
-            : "transparent"
+            : root.hot ? (root.variant === "danger" ? Qt.rgba(root.theme.urgent.r, root.theme.urgent.g, root.theme.urgent.b, 0.12) : root.theme.hoverFill)
+            : root.variant === "outline" ? root.theme.raised : "transparent"
+        Behavior on color { ColorAnimation { duration: 120 } }
         border.width: root.activeFocus ? root.theme.focusBorderWidth : (root.variant === "outline" ? 1 : 0)
-        border.color: root.activeFocus ? root.theme.focusBorder : root.theme.controlBorder
+        border.color: root.activeFocus ? root.theme.focusBorder : root.theme.line
     }
 
     RowLayout {
@@ -59,8 +61,9 @@ Item {
             text: root.text
             visible: text !== ""
             color: root.foreground
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.fontSize
+            font.weight: root.variant === "primary" ? Font.DemiBold : Font.Medium
             textFormat: Text.PlainText
         }
         Keycap {

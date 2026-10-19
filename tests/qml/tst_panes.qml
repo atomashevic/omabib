@@ -4,14 +4,20 @@ import QtTest
 import "../../plugin/components"
 import "fixture.js" as Fixture
 
-// Renders the rail, list and detail panes against a stand-in for App.qml, so
-// binding and type errors surface offscreen. Screenshots of every tab go to
+// Renders the sidebar or paper rail, the toolbar or reader bar, and the list
+// and detail panes against a stand-in for App.qml, so binding and type errors
+// surface offscreen. Screenshots of every tab go to
 // /tmp/omabib-qml-shots for a visual check.
 Rectangle {
     id: stage
     width: 1320; height: 840
     color: ui.app
     Theme { id: ui }
+    // The faces and icons App.qml loads.
+    Repeater {
+        model: ["MonaSans-Regular", "MonaSans-Medium", "MonaSans-SemiBold", "lucide"]
+        Item { id: bundled; required property string modelData; FontLoader { source: "../../plugin/components/fonts/" + bundled.modelData + ".ttf" } }
+    }
 
     Item {
         id: app
@@ -114,6 +120,16 @@ Rectangle {
             if (!background) activeTab = paperTabs.length - 1
         }
         function findInLibrary() { note("findInLibrary") }
+        readonly property bool inPdfTab: inPaperTab && !!activePaper && activePaper.kind === "pdf"
+        property bool sidebarOpen: true
+        readonly property string placeLabel: projectName
+        readonly property string backLabel: placeLabel + (queryText !== "" ? " · \u201c" + queryText + "\u201d" : "")
+        readonly property string placeSummary: referenceCount + " references"
+        readonly property var query: toolbar.queryField
+        readonly property var readerPane: reader
+        function showPlace(id) { note("showPlace:" + id) }
+        function openCiteMenu(anchor) { note("openCiteMenu") }
+        function flash(text) { note("flash:" + text) }
         property string cliName: settings.ai_cli === "claude" ? "Claude Code" : "Codex"
         property string desktopName: settings.ai_desktop === "claude" ? "Claude Desktop" : "ChatGPT"
         property var settings: ({pdf_colors: "original", ai_cli: "codex", ai_desktop: "chatgpt", chat_steps: "hidden", claude_model: "", claude_effort: "", codex_model: "", codex_effort: ""})
@@ -241,12 +257,15 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
-            Rail { id: rail; Layout.fillHeight: true; theme: ui; app: app }
+            Sidebar { id: sidebar; visible: !app.inPaperTab && app.sidebarOpen; Layout.fillHeight: true; theme: ui; app: app }
+            PaperRail { id: rail; visible: app.inPaperTab; Layout.fillHeight: true; theme: ui; app: app }
+            Rectangle { Layout.fillHeight: true; implicitWidth: 1; color: ui.line }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: 0
-                TabStrip { id: strip; Layout.fillWidth: true; theme: ui; app: app }
+                Toolbar { id: toolbar; visible: !app.inPaperTab; Layout.fillWidth: true; theme: ui; app: app }
+                ReaderBar { id: readerBar; visible: app.inPaperTab; Layout.fillWidth: true; theme: ui; app: app }
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -336,7 +355,7 @@ Rectangle {
 
         function test_1_overview() {
             compare(list.resultsView.count, Fixture.hits.length)
-            verify(find(list, "searchField"), "search field keeps its objectName")
+            verify(find(toolbar, "searchField"), "search field keeps its objectName")
             verify(find(list, "sortButton"), "sort button keeps its objectName")
             shot("1-overview")
         }
@@ -429,32 +448,37 @@ Rectangle {
             compare(app.activeTab, -1, "middle-click opens in the background")
             wait(50)
             verify(rows.itemAtIndex(0).inTab && rows.itemAtIndex(3).inTab && !rows.itemAtIndex(1).inTab, "rows open in a tab are marked")
-            var second = find(strip, "paperTab:" + Fixture.hits[3].citekey)
-            verify(second, "tab rendered")
+            // In the library the open papers are listed in the sidebar.
+            var second = find(sidebar, "paperTab:" + Fixture.hits[3].citekey)
+            verify(second, "open paper listed in the sidebar")
             mouseClick(second, 40, second.height / 2)
             compare(app.activeTab, 1)
             app.selected = Fixture.ref
+            wait(50)
+            verify(!sidebar.visible && rail.visible && readerBar.visible && !toolbar.visible, "a paper swaps the sidebar for the rail")
+            compare(find(readerBar, "backToLibrary").visible, true)
             shot("9b-paper-tab")
-            mouseClick(find(strip, "libraryTab"), 30, 10)
+            // The rail's thumbnails switch papers; its library button goes back.
+            mouseClick(find(rail, "paperTab:" + Fixture.hits[0].citekey))
+            compare(app.activeTab, 0)
+            mouseClick(find(rail, "libraryTab"))
             compare(app.activeTab, -1)
-            mouseClick(find(strip, "paperTab:" + Fixture.hits[0].citekey), 40, 10, Qt.MiddleButton)
-            compare(app.paperTabs.length, 1, "middle-click closes a tab")
-            var close = find(find(strip, "paperTab:" + Fixture.hits[3].citekey), "closeTab")
-            mouseClick(close)
-            compare(app.paperTabs.length, 0, "close button closes a tab")
+            wait(50)
+            verify(sidebar.visible && toolbar.visible, "back in the library")
+            mouseClick(find(sidebar, "paperTab:" + Fixture.hits[0].citekey), 40, 10, Qt.MiddleButton)
+            compare(app.paperTabs.length, 1, "middle-click closes a paper")
+            // The close button shows on hover, which a synthetic move doesn't give.
+            find(find(sidebar, "paperTab:" + Fixture.hits[3].citekey), "closeTab").clicked()
+            compare(app.paperTabs.length, 0, "close button closes a paper")
         }
-        function test_9c_tabs_stack_when_full() {
+        function test_9c_rail_scrolls_when_full() {
             var tabs = []
-            for (var i = 0; i < 10; i++) tabs.push({id: "t" + i, citekey: "paper_" + i + "_2026", title: "A fairly long paper title number " + i + " about stacking tabs", detail_tab: i === 4 ? "ai" : "overview"})
+            for (var i = 0; i < 10; i++) tabs.push({id: "t" + i, citekey: "paper_" + i + "_2026", title: "A fairly long paper title number " + i + " about many open papers", detail_tab: i === 4 ? "ai" : "overview"})
             app.paperTabs = tabs
             app.activeTab = 4
             wait(250)
-            var deck = find(strip, "paperTabs")
-            verify(strip.stacked, "ten tabs overlap at this width")
-            var first = find(strip, "paperTab:paper_0_2026"), last = find(strip, "paperTab:paper_9_2026"), active = find(strip, "paperTab:paper_4_2026")
-            verify(last.x + last.width <= deck.width + 1, "the last tab stays inside the strip")
-            verify(active.z > first.z && active.z > last.z, "the active tab is on top")
-            shot("9c-tabs-stacked")
+            for (var j = 0; j < 10; j++) verify(find(rail, "paperTab:paper_" + j + "_2026"), "paper " + j + " in the rail")
+            shot("9c-rail-full")
             app.openInTab({id: "t10", citekey: "one_too_many", title: "Eleventh"}, false)
             compare(app.paperTabs.length, 10, "no eleventh tab")
         }
@@ -614,6 +638,39 @@ Rectangle {
             compare(reader.doc.page_count, 3)
             tryCompare(reader, "currentPage", 2)
             tryVerify(function () { return app.calls.indexOf("pdf_render:2") >= 0 }, 2000, "the restored page renders: " + app.calls)
+            // A wheel notch scrolls one fixed step, quick notches add up, and
+            // nothing keeps moving after them.
+            var flick = find(reader, "readerPages")
+            reader.goToPage(1)
+            var start = flick.contentY, step = Math.pow(flick.height, 2 / 3)
+            mouseWheel(flick, flick.width / 2, flick.height / 2, 0, -120)
+            mouseWheel(flick, flick.width / 2, flick.height / 2, 0, -120)
+            wait(400)
+            fuzzyCompare(flick.contentY - start, 2 * step, 1, "two notches scroll two steps")
+            mouseWheel(flick, flick.width / 2, flick.height / 2, 0, 120)
+            wait(400)
+            fuzzyCompare(flick.contentY - start, step, 1, "one notch back up")
+            // Ctrl+wheel zooms 10% a notch around the pointer.
+            var z0 = reader.zoom, vx = flick.width * 0.3, vy = flick.height * 0.4
+            var spot = reader.spotAt(vx, vy)
+            mouseWheel(flick, vx, vy, 0, 120, Qt.NoButton, Qt.ControlModifier)
+            fuzzyCompare(reader.zoom, z0 * 1.1, 0.001, "a notch zooms 10%")
+            var kept = reader.spotAt(vx, vy)
+            compare(kept.page, spot.page)
+            fuzzyCompare(kept.x, spot.x, 0.5, "the spot under the pointer stays: x")
+            fuzzyCompare(kept.y, spot.y, 0.5, "the spot under the pointer stays: y")
+            mouseWheel(flick, vx, vy, 0, -120, Qt.NoButton, Qt.ControlModifier)
+            fuzzyCompare(reader.zoom, z0, 0.001, "and back")
+            // Middle-drag pans with the pointer, without selecting text.
+            reader.goToPage(1)
+            var y1 = flick.contentY
+            mousePress(flick, 200, 400, Qt.MiddleButton)
+            mouseMove(flick, 200, 330, -1, Qt.MiddleButton)
+            mouseMove(flick, 200, 250, -1, Qt.MiddleButton)
+            mouseRelease(flick, 200, 250, Qt.MiddleButton)
+            fuzzyCompare(flick.contentY - y1, 150, 1, "middle-drag pans")
+            compare(reader.selection, null)
+            reader.setZoomMode("width")
             compare(reader.clips.length, 1, "only pt clips from this PDF are drawn")
 
             // Keyboard navigation.

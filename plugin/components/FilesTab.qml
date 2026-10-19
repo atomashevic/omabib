@@ -85,7 +85,7 @@ ScrollPane {
             visible: root.attachments.length > 0
             text: "Removing a link keeps the file"
             color: root.theme.dim
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.theme.small
             textFormat: Text.PlainText
         }

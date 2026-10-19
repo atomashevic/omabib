@@ -86,8 +86,8 @@ Popup {
     onClosed: root.app.clearActionDigits()
 
     x: Math.round((parent.width - width) / 2)
-    y: Math.round(Math.max(theme.space(40), (parent.height - height) / 3))
-    width: Math.min(parent.width - theme.space(48), theme.space(560))
+    y: Math.round(Math.max(theme.space(40), Math.min(parent.height * 0.14, parent.height - height - theme.space(40))))
+    width: Math.min(parent.width - theme.space(48), theme.space(640))
     height: Math.min(parent.height - theme.space(80), theme.space(600))
     modal: true
     focus: true
@@ -96,10 +96,11 @@ Popup {
 
     Overlay.modal: Rectangle { color: root.theme.scrim }
     background: Rectangle {
-        color: root.theme.card
+        color: root.theme.raised
         border.width: 1
         border.color: root.theme.border
-        radius: root.theme.radius
+        radius: root.theme.radiusLarge + root.theme.space(2)
+        Shadow { theme: root.theme; radius: parent.radius; reach: 22 }
     }
 
     contentItem: ColumnLayout {
@@ -107,18 +108,19 @@ Popup {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: root.theme.space(52)
+            Layout.preferredHeight: root.theme.space(54)
             Layout.leftMargin: root.theme.space(16)
             Layout.rightMargin: root.theme.space(14)
-            spacing: root.theme.space(10)
-            Icon { theme: root.theme; name: "command"; size: root.theme.heading; color: root.theme.muted }
+            spacing: root.theme.space(12)
+            Icon { theme: root.theme; name: "command"; size: root.theme.title + 3; color: root.theme.muted }
             TextInput {
                 id: field
                 objectName: "commandFilter"
                 Layout.fillWidth: true
                 color: root.theme.bright
-                font.family: root.theme.mono
-                font.pixelSize: root.theme.subtitle + 1
+                font.family: root.theme.sans
+                font.pixelSize: root.theme.subtitle + 2
+                font.weight: Font.Medium
                 selectionColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.55)
                 selectedTextColor: root.theme.bright
                 clip: true
@@ -152,6 +154,26 @@ Popup {
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.theme.line }
 
+        // What the reference actions act on.
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: root.theme.space(16)
+            Layout.rightMargin: root.theme.space(16)
+            Layout.topMargin: root.theme.space(10)
+            visible: !!root.app.selected
+            spacing: root.theme.space(8)
+            Icon { theme: root.theme; name: "file"; size: root.theme.body; color: root.theme.muted }
+            Text {
+                Layout.fillWidth: true
+                text: root.app.selected ? (root.app.selected.title || root.app.selected.citekey || "") : ""
+                color: root.theme.muted
+                font.family: root.theme.sans
+                font.pixelSize: root.theme.small
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+            }
+        }
+
         ListView {
             id: list
             Layout.fillWidth: true
@@ -159,8 +181,8 @@ Popup {
             clip: true
             model: root.rows
             boundsBehavior: Flickable.StopAtBounds
-            header: Item { width: list.width; height: root.theme.space(4) }
-            footer: Item { width: list.width; height: root.theme.space(6) }
+            header: Item { width: list.width; height: root.theme.space(2) }
+            footer: Item { width: list.width; height: root.theme.space(8) }
             ScrollBar.vertical: ScrollBar { contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line } }
 
             delegate: Item {
@@ -172,27 +194,27 @@ Popup {
                 readonly property bool hot: digitHit || (root.app.actionDigits === "" && matchIndex === root.cursor)
                 readonly property bool unavailable: !isSection && !!modelData.ref && root.app.hits.length === 0
                 width: list.width
-                height: isSection ? root.theme.space(28) : root.theme.space(34)
+                height: isSection ? root.theme.space(30) : root.theme.space(38)
 
                 Text {
                     visible: row.isSection
-                    anchors { left: parent.left; leftMargin: root.theme.space(16); bottom: parent.bottom; bottomMargin: root.theme.space(5) }
-                    text: String(row.modelData.section || "").toUpperCase()
+                    anchors { left: parent.left; leftMargin: root.theme.space(18); bottom: parent.bottom; bottomMargin: root.theme.space(6) }
+                    text: row.modelData.section || ""
                     color: row.modelData.section === "Danger" ? root.theme.urgent : root.theme.dim
-                    font.family: root.theme.mono
+                    font.family: root.theme.sans
                     font.pixelSize: root.theme.caption
-                    font.letterSpacing: 0.6
+                    font.weight: Font.DemiBold
                 }
                 Rectangle {
                     visible: !row.isSection
-                    anchors.fill: parent
-                    color: row.hot ? root.theme.line : mouse.containsMouse ? root.theme.hoverFill : "transparent"
-                    Rectangle { visible: row.hot; anchors { left: parent.left; top: parent.top; bottom: parent.bottom } width: 2; color: root.theme.accent }
+                    anchors { fill: parent; leftMargin: root.theme.space(8); rightMargin: root.theme.space(8) }
+                    radius: root.theme.radius
+                    color: row.hot ? root.theme.selectedFill : mouse.containsMouse ? root.theme.hoverFill : "transparent"
                 }
                 RowLayout {
                     visible: !row.isSection
-                    anchors { fill: parent; leftMargin: root.theme.space(16); rightMargin: root.theme.space(16) }
-                    spacing: root.theme.space(10)
+                    anchors { fill: parent; leftMargin: root.theme.space(18); rightMargin: root.theme.space(18) }
+                    spacing: root.theme.space(12)
                     opacity: row.unavailable ? 0.45 : 1
                     Icon {
                         theme: root.theme
@@ -203,15 +225,16 @@ Popup {
                     Text {
                         text: row.modelData.label || ""
                         color: row.modelData.danger ? root.theme.urgent : row.hot ? root.theme.bright : root.theme.text
-                        font.family: root.theme.mono
-                        font.pixelSize: root.theme.body + 1
+                        font.family: root.theme.sans
+                        font.pixelSize: root.theme.body + 0.5
+                        font.weight: Font.Medium
                         textFormat: Text.PlainText
                     }
                     Text {
                         Layout.fillWidth: true
                         text: row.modelData.hint || ""
                         color: root.theme.dim
-                        font.family: root.theme.mono
+                        font.family: root.theme.sans
                         font.pixelSize: root.theme.small
                         elide: Text.ElideRight
                         textFormat: Text.PlainText
@@ -224,7 +247,7 @@ Popup {
                         color: row.digitHit ? root.theme.accentText : root.theme.dim
                         font.family: root.theme.mono
                         font.pixelSize: root.theme.small
-                        font.weight: row.digitHit ? Font.Bold : Font.Normal
+                        font.weight: row.digitHit ? Font.DemiBold : Font.Normal
                     }
                 }
                 MouseArea {
@@ -246,27 +269,39 @@ Popup {
             horizontalAlignment: Text.AlignHCenter
             text: "No matching action"
             color: root.theme.dim
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.theme.body
         }
 
-        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.theme.line }
-        RowLayout {
+        // The key hints on the side surface, inside the card's rounded bottom.
+        Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: root.theme.space(30)
-            Layout.leftMargin: root.theme.space(16)
-            Layout.rightMargin: root.theme.space(16)
-            spacing: root.theme.space(14)
-            Repeater {
-                model: [["↑↓", "select"], ["↵", "run"], ["0–9", "numbered action"], ["esc", "close"]]
-                RowLayout {
-                    required property var modelData
-                    spacing: root.theme.space(5)
-                    Keycap { theme: root.theme; text: modelData[0] }
-                    Text { text: modelData[1]; color: root.theme.dim; font.family: root.theme.mono; font.pixelSize: root.theme.caption }
+            Layout.margins: 1
+            implicitHeight: root.theme.space(36)
+            radius: root.theme.radiusLarge + root.theme.space(2) - 1
+            color: root.theme.side
+            Rectangle { anchors { left: parent.left; right: parent.right; top: parent.top } height: parent.radius; color: root.theme.side }
+            Rectangle { anchors { left: parent.left; right: parent.right; top: parent.top } height: 1; color: root.theme.line }
+            RowLayout {
+                anchors { fill: parent; leftMargin: root.theme.space(16); rightMargin: root.theme.space(16) }
+                spacing: root.theme.space(16)
+                Repeater {
+                    model: [["↑↓", "select"], ["↵", "run"], ["0–9", "run by number"]]
+                    RowLayout {
+                        required property var modelData
+                        spacing: root.theme.space(6)
+                        Keycap { theme: root.theme; text: modelData[0] }
+                        Text { text: modelData[1]; color: root.theme.muted; font.family: root.theme.sans; font.pixelSize: root.theme.small }
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    text: root.matches.length === root.actions.length ? root.actions.length + " commands" : root.matches.length + " of " + root.actions.length + " commands"
+                    color: root.theme.muted
+                    font.family: root.theme.sans
+                    font.pixelSize: root.theme.small
                 }
             }
-            Item { Layout.fillWidth: true }
         }
     }
 }

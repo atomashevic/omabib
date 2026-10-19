@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Layouts
 
-// The detail tabs: one strip with a hairline under it; the current tab gets
-// the selected fill and the theme's accent underline.
+// The detail tabs: labels over a hairline; the current one is set in the
+// strong text color with the accent underline, counts sit in small pills.
 Item {
     id: root
 
@@ -13,7 +13,7 @@ Item {
 
     signal selected(string key)
 
-    implicitHeight: theme.space(32)
+    implicitHeight: theme.space(34)
 
     Rectangle {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
@@ -23,7 +23,7 @@ Item {
 
     RowLayout {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
-        spacing: root.theme.space(2)
+        spacing: root.theme.space(20)
         Repeater {
             model: root.tabs.filter(function (t) { return t.visible !== false })
             Item {
@@ -31,36 +31,44 @@ Item {
                 required property var modelData
                 readonly property bool on: modelData.key === root.current
                 Layout.fillHeight: true
-                implicitWidth: row.implicitWidth + root.theme.space(24)
-                Rectangle {
-                    anchors.fill: parent
-                    color: tab.on ? root.theme.selectedFill : mouse.containsMouse ? root.theme.hoverFill : "transparent"
-                }
+                implicitWidth: row.implicitWidth + root.theme.space(4)
                 Rectangle {
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                    height: 1
-                    visible: tab.on
+                    height: 2
+                    radius: 1
                     color: root.theme.accent
+                    opacity: tab.on ? 1 : 0
+                    Behavior on opacity { NumberAnimation { duration: 120 } }
                 }
                 RowLayout {
                     id: row
-                    anchors.centerIn: parent
+                    anchors { horizontalCenter: parent.horizontalCenter; verticalCenter: parent.verticalCenter; verticalCenterOffset: -root.theme.space(2) }
                     spacing: root.theme.space(6)
-                    Icon { theme: root.theme; visible: !!tab.modelData.icon; name: tab.modelData.icon || ""; size: root.theme.body; color: root.theme.accentText }
+                    Icon { theme: root.theme; visible: !!tab.modelData.icon; name: tab.modelData.icon || ""; size: root.theme.body + 1; color: tab.on ? root.theme.accentText : root.theme.muted }
                     Text {
                         text: tab.modelData.label
-                        color: tab.on ? root.theme.bright : mouse.containsMouse ? root.theme.text : root.theme.muted
-                        font.family: root.theme.mono
+                        color: tab.on || mouse.containsMouse ? root.theme.bright : root.theme.muted
+                        font.family: root.theme.sans
                         font.pixelSize: root.theme.body
+                        font.weight: tab.on ? Font.DemiBold : Font.Medium
                         textFormat: Text.PlainText
                     }
-                    Text {
+                    Rectangle {
                         visible: tab.modelData.count !== undefined && tab.modelData.count !== null
-                        text: String(tab.modelData.count)
-                        color: root.theme.dim
-                        font.family: root.theme.mono
-                        font.pixelSize: root.theme.body
-                        textFormat: Text.PlainText
+                        implicitWidth: countText.implicitWidth + root.theme.space(12)
+                        implicitHeight: countText.implicitHeight + root.theme.space(2)
+                        radius: height / 2
+                        color: root.theme.hoverFill
+                        Text {
+                            id: countText
+                            anchors.centerIn: parent
+                            text: String(tab.modelData.count)
+                            color: root.theme.muted
+                            font.family: root.theme.sans
+                            font.pixelSize: root.theme.caption
+                            font.weight: Font.DemiBold
+                            textFormat: Text.PlainText
+                        }
                     }
                 }
                 MouseArea {

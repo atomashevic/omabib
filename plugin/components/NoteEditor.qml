@@ -254,7 +254,7 @@ FocusScope {
                 elide: Text.ElideLeft
                 text: "Markdown  ·  $…$ math  ·  ``` code"
                 color: root.theme.dim
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.small
                 textFormat: Text.PlainText
             }

@@ -51,10 +51,11 @@ Popup {
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
     background: Rectangle {
-        color: root.theme.card
+        color: root.theme.raised
         border.width: 1
         border.color: root.theme.border
-        radius: root.theme.radius
+        radius: root.theme.radius + root.theme.space(2)
+        Shadow { theme: root.theme; radius: parent.radius; reach: 18 }
     }
 
     contentItem: ColumnLayout {
@@ -80,27 +81,27 @@ Popup {
                 Rectangle {
                     visible: !!entry.modelData.separator
                     anchors.centerIn: parent
-                    width: parent.width; height: 1
+                    width: parent.width - root.theme.space(16); height: 1
                     color: root.theme.line
                 }
                 Text {
                     visible: !!entry.modelData.section
-                    anchors { left: parent.left; leftMargin: root.theme.space(12); bottom: parent.bottom; bottomMargin: root.theme.space(4) }
-                    text: String(entry.modelData.section || "").toUpperCase()
-                    color: root.theme.dim
-                    font.family: root.theme.mono
-                    font.pixelSize: root.theme.caption
-                    font.letterSpacing: 0.4
+                    anchors { left: parent.left; leftMargin: root.theme.space(14); bottom: parent.bottom; bottomMargin: root.theme.space(4) }
+                    text: entry.modelData.section || ""
+                    color: root.theme.muted
+                    font.family: root.theme.sans
+                    font.pixelSize: root.theme.small
+                    font.weight: Font.DemiBold
                 }
                 Rectangle {
-                    visible: entry.actionIndex >= 0
-                    anchors.fill: parent
-                    color: entry.hot ? root.theme.line : "transparent"
-                    Rectangle { visible: entry.hot; anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 1; color: root.theme.accent }
+                    visible: entry.actionIndex >= 0 && entry.hot
+                    anchors { fill: parent; leftMargin: root.theme.space(4); rightMargin: root.theme.space(4) }
+                    radius: root.theme.radiusSmall
+                    color: root.theme.hoverFill
                 }
                 RowLayout {
                     visible: entry.actionIndex >= 0
-                    anchors { fill: parent; leftMargin: root.theme.space(12); rightMargin: root.theme.space(12) }
+                    anchors { fill: parent; leftMargin: root.theme.space(14); rightMargin: root.theme.space(12) }
                     spacing: root.theme.space(10)
                     Icon {
                         theme: root.theme
@@ -112,7 +113,7 @@ Popup {
                         Layout.fillWidth: true
                         text: entry.modelData.label || ""
                         color: entry.modelData.danger ? root.theme.urgent : entry.hot ? root.theme.bright : root.theme.text
-                        font.family: root.theme.mono
+                        font.family: root.theme.sans
                         font.pixelSize: root.theme.body
                         elide: Text.ElideRight
                         textFormat: Text.PlainText

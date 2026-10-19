@@ -70,7 +70,7 @@ ColumnLayout {
         Text {
             text: "AI-generated overview by alphaXiv"
             color: root.theme.bright
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.theme.small
             textFormat: Text.PlainText
         }
@@ -78,7 +78,7 @@ ColumnLayout {
             visible: root.loaded
             text: "·  " + (root.app.overviewCached ? "cached · " : "") + "fetched " + Format.relativeTime(root.app.overviewFetchedAt)
             color: root.theme.dim
-            font.family: root.theme.mono
+            font.family: root.theme.sans
             font.pixelSize: root.theme.small
             textFormat: Text.PlainText
         }

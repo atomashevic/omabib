@@ -1,29 +1,43 @@
 pragma Singleton
 import QtQuick
 import Quickshell
+import Quickshell.Io
 
-// The Omarchy shell's palette, replaced by a light and a dark one that follow
-// the system's color scheme. OMABIB_COLOR_SCHEME=light|dark overrides it.
+// The Omarchy shell's Color, as far as Omabib uses it: the active Omarchy
+// theme's foundational palette, read from its colors.toml the way the shell
+// reads it. omarchyTheme says whether there is one to follow; the shell's own
+// Color has no such property, since under the shell there always is.
 QtObject {
-    readonly property string scheme: Quickshell.env("OMABIB_COLOR_SCHEME") || ""
-    readonly property bool dark: scheme === "dark" || (scheme !== "light" && Qt.styleHints.colorScheme !== Qt.ColorScheme.Light)
+    id: root
 
-    readonly property color background: dark ? "#16181d" : "#f2f3f5"
-    readonly property color foreground: dark ? "#b9bec6" : "#2b2f36"
-    readonly property color accent: dark ? "#5b8cff" : "#2f66d6"
-    readonly property color urgent: dark ? "#ef5a52" : "#c9302c"
-    readonly property color muted: dark ? "#4b515b" : "#9aa0a8"
-    readonly property QtObject menu: QtObject {
-        readonly property color background: dark ? "#1e2127" : "#ffffff"
-        readonly property color text: dark ? "#b9bec6" : "#2b2f36"
-        readonly property color border: dark ? "#2f343d" : "#d5d9df"
-        readonly property color scrim: dark ? Qt.rgba(0.04, 0.05, 0.06, 0.62) : Qt.rgba(0.1, 0.12, 0.15, 0.32)
-        readonly property color selectedBackground: dark ? "#2a2e36" : "#e7eaee"
-        readonly property color selectedText: dark ? "#eceff2" : "#0f1217"
+    property bool omarchyTheme: false
+    property color background: "#101315"
+    property color foreground: "#cacccc"
+    property color accent: "#cacccc"
+    property color urgent: "#a55555"
+    property color muted: "#707880"
+
+    function load(raw) {
+        const values = {}
+        for (const line of String(raw || "").split("\n")) {
+            const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+            if (match) values[match[1]] = match[2]
+        }
+        const pick = (...keys) => keys.map(k => values[k]).find(v => v !== undefined)
+        const bg = pick("background", "color0")
+        const fg = pick("foreground", "color7")
+        if (!bg || !fg) { omarchyTheme = false; return }
+        background = bg
+        foreground = fg
+        accent = pick("accent", "color4") || fg
+        urgent = pick("red", "color1") || urgent
+        muted = pick("muted", "color8") || fg
+        omarchyTheme = true
     }
-    readonly property QtObject tooltip: QtObject {
-        readonly property color background: dark ? "#2a2e36" : "#2b2f36"
-        readonly property color text: dark ? "#eceff2" : "#f2f3f5"
-        readonly property color border: dark ? "#3a404a" : "#2b2f36"
+
+    property FileView colors: FileView {
+        path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+        onLoaded: root.load(text())
+        onLoadFailed: root.omarchyTheme = false
     }
 }

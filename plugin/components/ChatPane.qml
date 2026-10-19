@@ -210,7 +210,7 @@ FocusScope {
                 Layout.fillWidth: true
                 text: root.busy ? (ChatText.statusLabel(root.status) || "Working…") : ""
                 color: root.status === "approval" ? root.theme.accentText : root.theme.dim
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.small
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
@@ -343,7 +343,7 @@ FocusScope {
                                 visible: !root.stepsShown && root.activity !== "" && root.renderedDraft === ""
                                 text: root.activity
                                 color: root.theme.dim
-                                font.family: root.theme.mono
+                                font.family: root.theme.sans
                                 font.pixelSize: root.theme.small
                                 elide: Text.ElideRight
                                 textFormat: Text.PlainText
@@ -377,7 +377,7 @@ FocusScope {
                 visible: root.app.chatError !== ""
                 text: root.app.chatError
                 color: root.theme.urgent
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.small
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
@@ -479,7 +479,7 @@ FocusScope {
                 visible: !root.compact
                 text: "Enter sends · Shift+Enter adds a line · pages like “p. 7” open in the reader"
                 color: root.theme.dim
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.caption
                 elide: Text.ElideRight
             }
@@ -707,7 +707,7 @@ FocusScope {
                         visible: !approval.pending
                         text: !approval.outcome ? "" : approval.outcome.allow ? "Allowed" : approval.outcome.reason === "expired" ? "Expired, not allowed" : "Declined"
                         color: approval.outcome && approval.outcome.allow ? root.theme.accentText : root.theme.dim
-                        font.family: root.theme.mono
+                        font.family: root.theme.sans
                         font.pixelSize: root.theme.small
                     }
                 }
@@ -730,7 +730,7 @@ FocusScope {
                     Layout.fillWidth: true
                     text: parent.parent.d.message || ""
                     color: root.theme.urgent
-                    font.family: root.theme.mono
+                    font.family: root.theme.sans
                     font.pixelSize: root.theme.small
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
@@ -758,7 +758,7 @@ FocusScope {
                 Text {
                     text: turn.usage
                     color: root.theme.dim
-                    font.family: root.theme.mono
+                    font.family: root.theme.sans
                     font.pixelSize: root.theme.caption
                 }
             }
@@ -777,7 +777,7 @@ FocusScope {
                 width: parent.width - root.side * 2
                 text: parent.kind === "session" ? [parent.d.agent === "codex" ? "Codex" : "Claude Code", parent.d.version, parent.d.model].filter(function (s) { return !!s }).join(" · ") : (parent.d.message || "")
                 color: root.theme.dim
-                font.family: root.theme.mono
+                font.family: root.theme.sans
                 font.pixelSize: root.theme.caption
                 elide: Text.ElideRight
                 textFormat: Text.PlainText

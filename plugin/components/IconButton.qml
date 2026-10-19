@@ -1,5 +1,4 @@
 import QtQuick
-import qs.Ui
 
 // An icon-only control with the theme's hover/selected fills, a tooltip that
 // names its shortcut, an optional status dot and a busy spin.
@@ -29,10 +28,11 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: root.theme.radius
+        radius: root.theme.radiusSmall
         color: mouse.pressed ? root.theme.pressedFill
-            : root.active ? root.theme.line
+            : root.active ? root.theme.selectedFill
             : root.hot ? root.theme.hoverFill : "transparent"
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     Icon {
@@ -53,7 +53,7 @@ Item {
     Rectangle {
         visible: root.dot
         width: root.theme.space(6); height: width
-        radius: root.theme.radius > 0 ? width / 2 : 0
+        radius: width / 2
         color: root.dotColor
         anchors { top: parent.top; right: parent.right; topMargin: root.size * 0.2; rightMargin: root.size * 0.2 }
     }
@@ -66,9 +66,9 @@ Item {
         onClicked: if (root.enabled) root.clicked()
     }
 
-    PanelToolTip {
+    Tip {
+        theme: root.theme
         visible: root.tooltip !== "" && mouse.containsMouse
         text: root.tooltip + (root.shortcut ? "  ·  " + root.shortcut : "")
-        fontFamily: root.theme.mono
     }
 }

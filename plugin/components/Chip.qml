@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import qs.Ui
 
 // A small labelled token: note scope, page, project, citation key, section.
 Item {
@@ -14,7 +13,11 @@ Item {
     property bool selected: false
     property bool clickable: false
     property bool bordered: true
-    property color textColor: selected ? theme.bright : theme.text
+    // A link-like pill (arXiv, DOI) in the accent tint.
+    property bool accent: false
+    // Set in the code face, for citation keys.
+    property bool mono: false
+    property color textColor: accent ? theme.accentText : selected ? theme.bright : theme.text
     property color iconColor: theme.muted
     property real maxTextWidth: theme.space(260)
 
@@ -22,15 +25,16 @@ Item {
 
     readonly property bool hot: clickable && mouse.containsMouse
 
-    implicitHeight: theme.space(22)
-    implicitWidth: row.implicitWidth + theme.space(14)
+    implicitHeight: theme.space(24)
+    implicitWidth: row.implicitWidth + theme.space(18)
 
     Rectangle {
         anchors.fill: parent
-        radius: root.theme.radius
-        color: root.selected ? root.theme.selectedFill : root.hot ? root.theme.hoverFill : "transparent"
-        border.width: root.bordered || root.selected ? 1 : 0
+        radius: height / 2
+        color: root.accent || root.selected ? root.theme.selectedFill : root.hot ? root.theme.hoverFill : root.bordered ? root.theme.side : "transparent"
+        border.width: !root.accent && (root.bordered || root.selected) ? 1 : 0
         border.color: root.selected ? root.theme.accent : root.theme.line
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     RowLayout {
@@ -41,9 +45,10 @@ Item {
         Text {
             visible: root.text !== ""
             text: root.text
-            color: root.hot ? root.theme.bright : root.textColor
-            font.family: root.theme.mono
+            color: root.hot && !root.accent ? root.theme.bright : root.textColor
+            font.family: root.mono ? root.theme.mono : root.theme.sans
             font.pixelSize: root.theme.small
+            font.weight: root.accent ? Font.DemiBold : Font.Medium
             textFormat: Text.PlainText
             elide: Text.ElideRight
             Layout.maximumWidth: root.maxTextWidth
@@ -60,9 +65,9 @@ Item {
         onClicked: if (root.clickable) root.clicked()
     }
 
-    PanelToolTip {
+    Tip {
+        theme: root.theme
         visible: root.tooltip !== "" && mouse.containsMouse
         text: root.tooltip
-        fontFamily: root.theme.mono
     }
 }

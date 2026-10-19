@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Cut a Lucide release's lucide.ttf down to the glyphs plugin/components/Icons.js
+# names, and write it to plugin/components/fonts/lucide.ttf. The full font is
+# ~900 KB; the cut is ~30 KB. Rerun after adding an icon to Icons.js.
+# Needs uvx (for fonttools' pyftsubset).
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 path/to/lucide.ttf  (the full font from a lucide-static release)" >&2
+  exit 2
+fi
+unicodes=$(grep -oE '0x[0-9A-Fa-f]{4,5}' "$source_dir/plugin/components/Icons.js" | sort -u | sed 's/^0x/U+/' | paste -sd,)
+uvx --from fonttools pyftsubset "$1" --unicodes="$unicodes" --no-hinting --desubroutinize \
+  --layout-features='' --name-IDs='*' --output-file="$source_dir/plugin/components/fonts/lucide.ttf"

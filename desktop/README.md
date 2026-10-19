@@ -40,27 +40,28 @@ OMABIB_UI_DIR=$PWD/plugin build/desktop/omabib-desktop
 
 ## How it works
 
-App.qml imports `Quickshell`, `Quickshell.Io`, `qs.Commons` and `qs.Ui`. This
-host compiles in stand-ins under those names and puts them ahead of any
+The window draws its own light and dark themes (Settings → Theme: System,
+Light, Dark, and Omarchy when an Omarchy theme is present). It bundles its
+typefaces in `plugin/components/fonts`: Mona Sans in three weights, loaded at
+start, Source Serif 4, loaded only for the serif reading font, and Lucide icons
+cut to the glyphs `Icons.js` names (`scripts/subset-icons` redoes the cut).
+Monospace text uses the platform's own monospace font.
+
+App.qml imports `Quickshell`, `Quickshell.Io` and `qs.Commons`. This host
+compiles in stand-ins under those names and puts them ahead of any
 installed Quickshell on the import path:
 
 | Module | Stand-in |
 |---|---|
 | `Quickshell` | `env`, `execDetached` (Omarchy's browser launcher and `xdg-open` fall back to the platform opener), `clipboardText`, `FloatingWindow` as a plain `Window` |
 | `Quickshell.Io` | `Process`, `SplitParser`, `StdioCollector` on QProcess; `Socket` on QLocalSocket; `FileView` on QSaveFile; `IpcHandler` reachable through `omabib-desktop ipc` |
-| `qs.Commons` | `Color` and `Style`: a light and a dark palette following the system scheme (`OMABIB_COLOR_SCHEME=light\|dark` overrides) |
-| `qs.Ui` | `PanelToolTip` |
+| `qs.Commons` | `Color`: the current Omarchy theme's colors from `~/.local/state/omarchy/current/theme/colors.toml`, when there is one, for the Omarchy theme choice; `Style.space()` |
 
 `DesktopHost` (in `Quickshell/host.*`) takes the shell's place: one running
 copy, a local socket for later launches, window raising and IPC dispatch.
 
 ## Not done yet
 
-- `omabib open`, `omabib add` and `omabib pdf open` in `src/main.rs` still go
-  through `omarchy-shell` and `hyprctl`; they should call `omabib-desktop`
-  when the Omarchy shell is absent.
-- Icons and monospace text need JetBrainsMono Nerd Font installed; a
-  standalone build should bundle a font.
 - Terminal chat uses `xdg-terminal-exec`, and installing rclone uses
   `omarchy-pkg-add`.
 - On Wayland, raising a window that is shown but unfocused depends on the
