@@ -102,7 +102,8 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **0** or **w** / **z** | fit width / fit page |
 | **gg** / **G**, a number and **G** | first page, last page, that page |
 | **/**, then **n** / **N** | find, next / previous match |
-| drag, double-click, **Ctrl+C** | select words, copy |
+| drag, double-click | select those words and save a yellow highlight |
+| **Ctrl+C** | copy the selection |
 | **r** | clip a region into a note |
 | **a** | note on the current page |
 | **o** / **]** | contents / side pane |
@@ -110,6 +111,8 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **Ctrl+R** | theme or original page colors |
 | **Esc** | cancel the clip, selection or search; again to go back |
 | **Ctrl+W** | close the tab |
+
+Dragging across words, or double-clicking one word, saves a yellow highlight and leaves the words selected, so **Ctrl+C** and **c** still use that passage. A click on empty text does not. Click a highlight to change its color (yellow, red, green, purple, or blue), write a comment, or delete it. A new highlight is always yellow. The colors are only colors. The highlight is kept in the library and is not written into the PDF. It is drawn only while the open file is the one it was taken from.
 
 Links inside the paper jump to their page, and web links open in your browser. **Open PDF in another app** in **⋯** hands the file to your system's PDF viewer.
 

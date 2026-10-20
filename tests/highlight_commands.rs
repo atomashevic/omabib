@@ -541,3 +541,42 @@ fn omabib_call_and_schema_use_the_highlight_commands() {
     let reference = sandbox.call("get_reference", &json!({"id": "cmd"}));
     assert!(reference.get("highlights").is_none());
 }
+
+#[test]
+fn pdf_highlights_returns_boxes_only_while_the_file_matches() {
+    let paper = Paper::new("paint", "Paint");
+    let saved = paper.add("paint", "line");
+    let painted = paper
+        .lib
+        .call(
+            "pdf_highlights",
+            &json!({"ref_id": "paint", "attachment_id": saved["attachment_id"]}),
+        )
+        .unwrap();
+    let rows = painted["highlights"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], saved["id"]);
+    assert_eq!(rows[0]["quote"], "line");
+    assert_eq!(rows[0]["color"], "yellow");
+    assert_eq!(rows[0]["rects"][0], json!([10.0, 20.0, 30.0, 40.0]));
+    assert_eq!(rows[0]["rects"][1], json!([10.0, 44.0, 80.0, 60.0]));
+    assert!(rows[0].get("stale").is_none());
+
+    paper
+        .lib
+        .call(
+            "relink_attachment",
+            &json!({"id": saved["attachment_id"], "path": &paper.pdf, "fingerprint": "replaced"}),
+        )
+        .unwrap();
+    let hidden = paper
+        .lib
+        .call(
+            "pdf_highlights",
+            &json!({"ref_id": "paint", "attachment_id": saved["attachment_id"]}),
+        )
+        .unwrap();
+    assert!(hidden["highlights"].as_array().unwrap().is_empty());
+    assert_eq!(std::fs::read(&paper.pdf).unwrap(), paper.bytes);
+    assert!(!mcp::tools().iter().any(|t| t["name"] == "pdf_highlights"));
+}
