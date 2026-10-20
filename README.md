@@ -1,13 +1,28 @@
-# Omabib
+<p align="center">
+  <a href="https://omabib.github.io"><img src="https://omabib.github.io/favicon.svg" width="84" height="84" alt="Omabib"></a>
+</p>
 
-**A fast reference manager for Linux and macOS, made to work with AI agents.**
+<h1 align="center">Omabib</h1>
 
-[![Sponsor Omabib](https://img.shields.io/badge/Sponsor-Omabib-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/atomashevic)
+<p align="center"><b>The reference manager you share with your agent</b></p>
 
-Omabib keeps your papers, PDFs and notes in one quick, keyboard-friendly window. Search as you type, read PDFs in tabs, clip figures into notes, and ask Claude or Codex about the paper in front of you. It's free and open source, and your library stays on your computer.
+<p align="center">
+  <a href="https://omabib.github.io">Website</a> ·
+  <a href="#install">Install</a> ·
+  <a href="docs/guide.md">User guide</a> ·
+  <a href="https://omabib.github.io/privacy.html">Privacy</a> ·
+  <a href="https://github.com/sponsors/atomashevic">Sponsor</a>
+</p>
 
-<!-- Demo video: replace with the new recording. -->
-[![Omabib in action](docs/demos/demo-1.gif)](docs/demos/demo-1.mp4)
+<p align="center">
+  <a href="https://github.com/atomashevic/omabib/releases/latest"><img src="https://img.shields.io/github/v/release/atomashevic/omabib?label=release&color=0969da" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/Linux%20%C2%B7%20macOS-0969da" alt="Linux and macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-0969da" alt="AGPL-3.0"></a>
+</p>
+
+Omabib is a fast reference manager and PDF reader for Linux and macOS. Read, annotate and organize your literature with your own agent working alongside you: it reads the paper you have open, answers with page references, and saves notes when you ask. A fast MCP server is built in, so Claude Code, Codex or any other MCP client can use your library too.
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/library-dark.webp"><img src="https://omabib.github.io/img/library-light.webp" alt="Omabib's library: projects in the sidebar, a list of papers, and Attention Is All You Need open with its abstract, citation key and a note."></picture>
 
 ## Install
 
@@ -17,110 +32,121 @@ Open a terminal and paste:
 curl -fsSL https://github.com/atomashevic/omabib/releases/latest/download/get.sh | sh
 ```
 
-That's it. Open **Omabib** from your applications (Spotlight or Launchpad on a Mac), or run `omabib open`.
+Then open **Omabib** from your applications (Spotlight or Launchpad on a Mac), or run `omabib open`.
 
-- **Runs on** Linux on x86-64 (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and most other distributions) and macOS 13 or newer on Apple silicon.
-- **No admin password or developer tools.** Everything goes into your home folder.
-- **Checked before it's installed.** The [install script](scripts/get.sh) downloads the build for your computer and verifies it against the release's checksums.
+- **Runs on** Linux on x86-64 (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and most others) and macOS 13 or newer on Apple silicon.
+- **No admin password or developer tools.** Everything goes into your home folder, checked against the release's checksums first ([the script](scripts/get.sh)).
+- **To update,** run the same command again. Your library and settings stay as they are.
 
 On a Mac, the first time you open Settings or a chat, macOS may offer to install its command line tools, which include Python. Accept, and you're set.
 
-**To update,** run the same command again. Your library and settings stay as they are.
+## What it does
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/search-dark.webp"><img src="https://omabib.github.io/img/features/search-light.webp" alt="Searching a project for attention"></picture>
+
+**Fast search as you type** &nbsp;<kbd>Ctrl</kbd>+<kbd>F</kbd><br>
+Titles, authors, citation keys, abstracts and your notes. Results follow every keystroke, even in a large library, and small typos are forgiven.
+
+</td>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/ask-dark.webp"><img src="https://omabib.github.io/img/features/ask-light.webp" alt="A chat asking before it saves a note"></picture>
+
+**Bring your own agent** &nbsp;<kbd>c</kbd><br>
+Claude Code or Codex, on your own login, with no API keys. It reads the paper, your notes and the PDF, cites pages you can click, and asks before it changes anything.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/agents-dark.webp"><img src="https://omabib.github.io/img/features/agents-light.webp" alt="Agents found on this computer"></picture>
+
+**First-class MCP, built in**<br>
+One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes and clips, and open PDFs.
+
+</td>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/read-dark.webp"><img src="https://omabib.github.io/img/features/read-light.webp" alt="A paper open in a reader tab"></picture>
+
+**Read PDFs in tabs** &nbsp;<kbd>Enter</kbd><br>
+Notes, abstract and AI summary beside the page, and your page remembered. Zoom with the wheel, find with <kbd>/</kbd>, and read in your theme’s colors at night.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/clip-dark.webp"><img src="https://omabib.github.io/img/features/clip-light.webp" alt="A clipped figure saved as a note"></picture>
+
+**Clip a figure into a note** &nbsp;<kbd>r</kbd><br>
+Drag over a figure, table or equation. It lands in a note with its page, sharp at any zoom, ready for you and your agent.
+
+</td>
+<td width="50%" valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/sync-dark.webp"><img src="https://omabib.github.io/img/features/sync-light.webp" alt="A library found in Dropbox"></picture>
+
+**Sync through your own storage**<br>
+Google Drive, Dropbox, OneDrive or a folder you already sync. Edits merge, PDFs come along, and the files stay readable in your own storage.
+
+</td>
+</tr>
+</table>
+
+**Cite in a click.** **Cite** on any paper copies its citation key, a LaTeX `\cite{…}`, a Pandoc or Quarto `[@…]` citation, or the full BibTeX entry. **Copy project bibliography** in <kbd>Ctrl</kbd>+<kbd>K</kbd> copies a whole project's BibTeX.
 
 ## Get started
 
-1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry. Check the preview, then press **Import**. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one.
-   You can also paste an identifier straight into the search box and press **Enter**.
-2. **Bring your existing library.** Export a `.bib` file from Zotero, Mendeley or any other reference manager. In Omabib, press **Ctrl+K** and choose **Import BibTeX file…**.
-3. **Find anything.** Just start typing: titles, authors, citation keys, abstracts and your own notes are all searched. Small typos are fine.
-4. **Read.** Press **Enter** to open the paper's PDF in a tab, with its notes, abstract and AI summary beside the page.
-5. **Organize.** Click **New project** in the sidebar, then **Add to project** on any paper. Each project gets its own notes.
+1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry, or paste one straight into the search box and press <kbd>Enter</kbd>. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one.
+2. **Bring your existing library.** Export a `.bib` file from Zotero, Mendeley or any other manager, then press <kbd>Ctrl</kbd>+<kbd>K</kbd> and choose **Import BibTeX file…**.
+3. **Organize.** Click **New project** in the sidebar, then **Add to project** on any paper. Each project keeps its own notes.
 
-> **On a Mac,** press **⌘** wherever this page says **Ctrl**, and **⌥** for **Alt**.
+### Your agent, alongside you
 
-## What you can do
-
-### Read PDFs comfortably
-
-- Scroll with the wheel, zoom with **Ctrl** + wheel, and pan by dragging with the middle mouse button.
-- Keep several papers open in tabs. They're still there, on the same page, next time.
-- Find text in a paper with **/**, and jump between matches with **n** and **N**.
-- Read at night: **Ctrl+R** draws the page in your theme's colors, and figures and links keep their hue.
-
-### Take notes and clip figures
-
-- Write notes in Markdown, with a live preview and math.
-- In a PDF, press **r** and drag over a figure, table or equation. It's saved into a note with its page number.
-- Notes can belong to a project, so the same paper can carry different notes for different projects.
-
-### Ask an AI about your papers
-
-- Open a paper and click **Ask Claude** (or **Ask Codex**, if you pick it in **Settings**). The agent reads the paper, its notes and its PDF, and its page references open the page when you click them.
-- Select a passage in the PDF and press **c** to ask about just that part.
-- It uses your own [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) login: install one and sign in once. There are no API keys to set up, and Omabib costs nothing extra.
-- The agent can read freely, but it asks you before it changes anything in your library.
-
-The rest of Omabib works without any AI account.
-
-### Cite in a click
-
-**Cite** on any paper copies its citation key, a LaTeX `\cite{…}`, a Pandoc or Quarto `[@…]` citation, or the full BibTeX entry. **Copy project bibliography** in **Ctrl+K** copies a whole project's BibTeX.
+- Open a paper and click **Ask Claude** (or **Ask Codex**, chosen in **Settings**). Select a passage in the PDF and press <kbd>c</kbd> to ask about just that part.
+- It uses your own [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) login: install one and sign in once. The rest of Omabib works without any AI account.
+- To use your library from other agents too:
+  - **Codex:** in **Settings**, click **Connect Codex**.
+  - **Claude Desktop:** in **Settings**, click **Add Omabib to Claude Desktop**, then restart it.
+  - **Claude Code:** run `claude mcp add --scope user omabib -- ~/.local/bin/omabib mcp`.
 
 ### Sync between your computers
 
-Keep the same library on your laptop and your desktop. Click **Sync** at the bottom of the sidebar and pick where to keep it: Google Drive, Dropbox, OneDrive, a folder you already sync (Syncthing, Nextcloud…), or other storage. Omabib walks you through the rest and syncs by itself from then on. PDFs and notes come along.
+Click **Sync** at the bottom of the sidebar and pick where to keep your library. Cloud storage works through [rclone](https://rclone.org), a free sync tool; if you don't have it, install it once with `brew install rclone` on a Mac, or `sudo apt install rclone`, `sudo dnf install rclone` or `sudo pacman -S rclone` on Linux.
 
-Cloud storage works through [rclone](https://rclone.org), a free sync tool. If you don't have it, install it once: `brew install rclone` on a Mac, or `sudo apt install rclone`, `sudo dnf install rclone` or `sudo pacman -S rclone` on Linux.
+## Everything is a keystroke away
 
-### Use your library from other AI apps
+And a button too, for the mouse. On a Mac, <kbd>⌘</kbd> takes the place of <kbd>Ctrl</kbd> and <kbd>⌥</kbd> of <kbd>Alt</kbd>.
 
-Let your agents search your library, read your notes and open PDFs from anywhere:
+| In the library | | In a PDF | |
+|---|---|---|---|
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> | every action | <kbd>j</kbd> <kbd>k</kbd>, wheel | scroll |
+| <kbd>Ctrl</kbd>+<kbd>F</kbd> | search | <kbd>Ctrl</kbd> + wheel, <kbd>+</kbd> <kbd>−</kbd> | zoom |
+| <kbd>Enter</kbd> | open the PDF | <kbd>w</kbd> / <kbd>z</kbd> | fit width / page |
+| <kbd>Tab</kbd> | paper details | middle-button drag | pan |
+| <kbd>Ctrl</kbd>+<kbd>T</kbd> | open in a tab | <kbd>g</kbd><kbd>g</kbd> / <kbd>G</kbd> | first / last page |
+| <kbd>Ctrl</kbd>+<kbd>P</kbd> | switch project | <kbd>/</kbd>, <kbd>n</kbd> <kbd>N</kbd> | find, next, previous |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | detail sections | <kbd>r</kbd> | clip into a note |
+| <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | switch tabs | <kbd>a</kbd> | note on this page |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | ask about the selection |
+| <kbd>Esc</kbd> | back, or hide | <kbd>Ctrl</kbd>+<kbd>R</kbd> | theme or original colors |
 
-- **Codex:** in Omabib's **Settings**, click **Connect Codex**.
-- **Claude Desktop:** in **Settings**, click **Add Omabib to Claude Desktop**, then restart Claude Desktop.
-- **Claude Code:** run `claude mcp add --scope user omabib -- ~/.local/bin/omabib mcp`.
+Closing the window keeps Omabib ready in the background, so it opens instantly. To show or hide it from anywhere, add a shortcut for `omabib open` in your desktop's keyboard settings; `omabib add` opens straight into the add box.
 
-Then ask, for example, "which papers in my library use network models of attitudes?" Agents only add or change things when you ask them to.
+## Your library stays yours
 
-## Keyboard shortcuts
+Omabib runs on your computer and keeps your library there. Sync goes straight to storage you already have. See the [privacy policy](https://omabib.github.io/privacy.html).
 
-Everything has a button too. **Ctrl+K** lists every action, and you can search it.
-
-| In the library | |
-|---|---|
-| Type, or **Ctrl+F** | search |
-| **↑** / **↓** | move through results |
-| **Enter** | open the PDF (or the paper's web page) |
-| **Tab** | show the paper's details |
-| **Ctrl+T** | open the paper in a tab |
-| **Ctrl+K** | all actions |
-| **Ctrl+P** | switch project |
-| **Ctrl+1** … **Ctrl+6** | Overview, AI summary, Notes, Files, BibTeX, Chat |
-| **Alt+1** … **Alt+9**, **Ctrl+PgUp** / **Ctrl+PgDn** | switch tabs |
-| **Ctrl+W** | close the tab |
-| **Esc** | go back, or hide the window |
-
-| In a PDF | |
-|---|---|
-| Wheel, **j** / **k**, arrows, **Space** | scroll |
-| **Ctrl** + wheel, **+** / **−** | zoom |
-| **w** / **z** | fit width / fit page |
-| Middle-button drag | pan |
-| **gg** / **G**, or a number and **G** | first page, last page, or that page |
-| **/**, then **n** / **N** | find, next / previous match |
-| **r** | clip a region into a note |
-| **a** | note on this page |
-| **c** | ask the AI about the selection |
-| **o** / **]** | contents / side pane |
-| **Ctrl+R** | theme or original page colors |
-
-Closing the window keeps Omabib ready in the background, so it opens instantly next time. To show or hide it from anywhere, add a shortcut for `omabib open` in your desktop's keyboard settings; `omabib add` opens straight into the add box.
-
-## Your data
-
-- Your library lives on your computer, in `~/.local/share/omabib/`, along with the PDFs Omabib downloads. PDFs you attach from elsewhere stay where they are.
-- Make a backup any time with `omabib backup ~/omabib-backup.db`.
-- BibTeX goes in and out freely, so you're never locked in.
+- **Free and open source:** AGPL, no subscription.
+- **No servers, no analytics:** nothing to sign up for, nothing tracked.
+- **Your files:** the library and the PDFs Omabib downloads live in `~/.local/share/omabib/`. PDFs you attach from elsewhere stay where they are.
+- **No lock-in:** BibTeX in and out, and `omabib backup ~/omabib-backup.db` makes a backup any time.
 
 ## Uninstall
 
@@ -130,7 +156,8 @@ This removes the app and keeps your library. Delete `~/.local/share/omabib` too 
 
 ```bash
 omabib-desktop --quit; pkill -f 'omabib serve'
-rm -rf ~/.local/lib/omabib ~/.local/share/applications/omabib.desktop ~/.local/share/icons/hicolor/scalable/apps/omabib.svg
+rm -rf ~/.local/lib/omabib ~/.local/share/applications/omabib.desktop
+rm -f ~/.local/share/icons/hicolor/*/apps/omabib.{png,svg}
 rm -f ~/.local/bin/omabib ~/.local/bin/omabib-*
 ```
 
