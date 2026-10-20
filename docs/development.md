@@ -93,6 +93,8 @@ On a tag, `linux`, `linux-install` and `macos` have to succeed before `publish`.
 
 Leave a published tag in place. `v0.1.1` is published. Move a tag only when the `linux` job fails before `publish`: fix the tree on a new commit and point the tag at that commit. After `publish`, the next fix is a new version.
 
+After a release is published, [Install test](../.github/workflows/install-test.yml) curls that release's `get.sh` and pipes it to `sh`, which is the README command with the published tag in place of `latest`. It runs on clean macOS 15 and macOS 26. A manual run with an empty tag uses the README command as written (`curl -fsSL https://github.com/atomashevic/omabib/releases/latest/download/get.sh | sh`) and installs the latest release. A manual run with a tag uses that release's `get.sh`. Each run keeps a throwaway home, checks the command, the service and the MCP server, and opens the app. It does not use a real library, a cloud account or a Google Drive folder. A macOS 15 Intel runner checks that `get.sh` refuses Intel Macs and installs nothing. macOS 14 is not included: that runner image retires on 2026-11-02.
+
 The Google and Dropbox sign-in apps' secrets are built in from the repository's Actions secrets `OMABIB_GOOGLE_CLIENT_SECRET` and `OMABIB_DROPBOX_APP_SECRET`. A build without them can't connect those two; for a local build, export the same variables before `cargo build`, or keep the downloaded credentials beside Omabib's `rclone.conf` (`google-client.json`, `dropbox-client.json`).
 
 Each release has:

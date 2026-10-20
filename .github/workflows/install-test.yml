@@ -1,0 +1,257 @@
+# Installs a published release the way the README does, with
+# `curl -fsSL …/get.sh | sh`, on a clean Mac. A manual run with an empty tag
+# uses the latest-release URL. A tag, or a release that was just published,
+# uses that release's own get.sh, which is where the latest URL redirects.
+# macOS 14 is not in the matrix: that image retires on 2026-11-02, and jobs
+# that use it fail during the brownouts before then.
+name: Install test
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install, such as v0.1.0. Leave empty to install the latest release.
+        required: false
+        type: string
+        default: ''
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  EVENT_NAME: ${{ github.event_name }}
+  INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+  RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+
+jobs:
+  macos:
+    name: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Throwaway home
+        run: |
+          set -euo pipefail
+          home=$(mktemp -d /tmp/omabib-home.XXXXXX)
+          mkdir -p "$home/.local/share" "$home/.config" "$home/.local/state" "$home/run"
+          chmod 700 "$home/run"
+          {
+            echo "HOME=$home"
+            echo "XDG_DATA_HOME=$home/.local/share"
+            echo "XDG_CONFIG_HOME=$home/.config"
+            echo "XDG_STATE_HOME=$home/.local/state"
+            echo "XDG_RUNTIME_DIR=$home/run"
+            echo "PATH<<EOF"
+            echo "$home/.local/bin:$PATH"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+          echo "Throwaway home: $home"
+
+      - name: Choose the install command
+        run: |
+          set -euo pipefail
+          if [[ $EVENT_NAME == release ]]; then
+            tag=$RELEASE_TAG
+          else
+            tag=$INPUT_TAG
+          fi
+          if [[ -z $tag ]]; then
+            url=https://github.com/atomashevic/omabib/releases/latest/download/get.sh
+          else
+            case $tag in
+              v[0-9]*) ;;
+              *) echo "The tag must look like v0.1.0." >&2; exit 1 ;;
+            esac
+            case $tag in
+              *[!A-Za-z0-9._+-]*) echo "The tag has characters that are not part of a release tag." >&2; exit 1 ;;
+            esac
+            url=https://github.com/atomashevic/omabib/releases/download/${tag}/get.sh
+          fi
+          echo "GET_URL=$url" >> "$GITHUB_ENV"
+          echo "INSTALL_TAG=$tag" >> "$GITHUB_ENV"
+          echo "Install command: curl -fsSL $url | sh"
+
+      - name: Install with the README command
+        run: |
+          set -euo pipefail
+          unset OMABIB_DB OMABIB_SOCKET OMABIB_DOWNLOAD_URL OMABIB_VERSION \
+            OMABIB_GOOGLE_CLIENT_ID OMABIB_GOOGLE_CLIENT_SECRET OMABIB_DROPBOX_APP_SECRET \
+            RCLONE_CONFIG
+          [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]]
+          [[ $HOME != /Users/runner ]]
+          set -o pipefail
+          if ! curl -fsSL "$GET_URL" | sh > install.log 2>&1; then
+            cat install.log
+            exit 1
+          fi
+          cat install.log
+          [[ -d $HOME/Applications/Omabib.app ]]
+          [[ -x $HOME/.local/bin/omabib ]]
+          [[ ! -e $HOME/.config/rclone/rclone.conf ]]
+          [[ ! -e ${XDG_CONFIG_HOME}/omabib/rclone.conf ]]
+
+      - name: CLI, service and MCP
+        run: |
+          set -euo pipefail
+          unset OMABIB_DB OMABIB_SOCKET OMABIB_DOWNLOAD_URL OMABIB_VERSION \
+            OMABIB_GOOGLE_CLIENT_ID OMABIB_GOOGLE_CLIENT_SECRET OMABIB_DROPBOX_APP_SECRET \
+            RCLONE_CONFIG
+          sw_vers
+          uname -m
+          version=$(omabib --version)
+          echo "$version"
+          if [[ -n $INSTALL_TAG ]]; then
+            [[ $version == "omabib ${INSTALL_TAG#v}" ]]
+          fi
+          omabib status > status.json
+          omabib sync status --json > sync.json
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | omabib mcp > mcp.jsonl
+          python3 - <<'PY'
+          import json, os
+          status = json.load(open("status.json"))
+          sync = json.load(open("sync.json"))
+          assert status["references"] == 0, status
+          assert status["notes"] == 0, status
+          assert sync["connected"] is False, sync
+          assert sync["state"] == "off", sync
+          home = os.path.realpath(os.environ["HOME"])
+          db = os.path.realpath(os.path.join(os.environ["XDG_DATA_HOME"], "omabib", "library.db"))
+          assert os.path.isfile(db), db
+          assert db.startswith(home + os.sep), db
+          lines = [json.loads(line) for line in open("mcp.jsonl") if line.strip()]
+          tools = next(line for line in lines if line.get("id") == 2)["result"]["tools"]
+          names = sorted(tool["name"] for tool in tools)
+          print(len(names), names)
+          assert len(names) >= 19, "expected at least 19 MCP tools"
+          PY
+
+      - name: Open the app and screenshot it
+        run: |
+          set -euo pipefail
+          unset OMABIB_DB OMABIB_SOCKET OMABIB_DOWNLOAD_URL OMABIB_VERSION \
+            OMABIB_GOOGLE_CLIENT_ID OMABIB_GOOGLE_CLIENT_SECRET OMABIB_DROPBOX_APP_SECRET \
+            RCLONE_CONFIG
+          omabib-desktop > app.log 2>&1 &
+          ready=0
+          for _ in $(seq 1 150); do
+            if omabib-desktop ipc state >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          [[ $ready == 1 ]]
+          sleep 2
+          omabib-desktop screenshot "$GITHUB_WORKSPACE/screenshot.png"
+          omabib-desktop --quit || true
+          cat app.log
+          if grep -E 'is not installed|Cannot load library|could not be loaded|Could not find the Qt platform plugin|module "[^"]*" plugin' app.log; then
+            echo "The app is missing part of Qt." >&2
+            exit 1
+          fi
+          bytes=$(wc -c < "$GITHUB_WORKSPACE/screenshot.png" | tr -d '[:space:]')
+          [[ $bytes -gt 20000 ]]
+          [[ ! -e $HOME/.config/rclone/rclone.conf ]]
+          [[ ! -e ${XDG_CONFIG_HOME}/omabib/rclone.conf ]]
+          omabib status > status.json
+          omabib sync status --json > sync.json
+          python3 - <<'PY'
+          import json, os
+          status = json.load(open("status.json"))
+          sync = json.load(open("sync.json"))
+          assert status["references"] == 0, status
+          assert status["notes"] == 0, status
+          assert sync["connected"] is False, sync
+          assert sync["state"] == "off", sync
+          home = os.path.realpath(os.environ["HOME"])
+          db = os.path.realpath(os.path.join(os.environ["XDG_DATA_HOME"], "omabib", "library.db"))
+          assert db.startswith(home + os.sep), db
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-${{ matrix.runner }}
+          path: |
+            screenshot.png
+            app.log
+            mcp.jsonl
+            status.json
+            sync.json
+            install.log
+          if-no-files-found: ignore
+
+  macos-intel:
+    name: Intel refusal
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - name: Throwaway home
+        run: |
+          set -euo pipefail
+          home=$(mktemp -d /tmp/omabib-home.XXXXXX)
+          mkdir -p "$home/.local/share" "$home/.config" "$home/run"
+          chmod 700 "$home/run"
+          {
+            echo "HOME=$home"
+            echo "XDG_DATA_HOME=$home/.local/share"
+            echo "XDG_CONFIG_HOME=$home/.config"
+            echo "XDG_RUNTIME_DIR=$home/run"
+          } >> "$GITHUB_ENV"
+
+      - name: Choose the install command
+        run: |
+          set -euo pipefail
+          if [[ $EVENT_NAME == release ]]; then
+            tag=$RELEASE_TAG
+          else
+            tag=$INPUT_TAG
+          fi
+          if [[ -z $tag ]]; then
+            url=https://github.com/atomashevic/omabib/releases/latest/download/get.sh
+          else
+            case $tag in
+              v[0-9]*) ;;
+              *) echo "The tag must look like v0.1.0." >&2; exit 1 ;;
+            esac
+            case $tag in
+              *[!A-Za-z0-9._+-]*) echo "The tag has characters that are not part of a release tag." >&2; exit 1 ;;
+            esac
+            url=https://github.com/atomashevic/omabib/releases/download/${tag}/get.sh
+          fi
+          echo "GET_URL=$url" >> "$GITHUB_ENV"
+          echo "Install command: curl -fsSL $url | sh"
+
+      - name: get.sh refuses Intel Macs
+        run: |
+          set -euo pipefail
+          unset OMABIB_DB OMABIB_SOCKET OMABIB_DOWNLOAD_URL OMABIB_VERSION \
+            OMABIB_GOOGLE_CLIENT_ID OMABIB_GOOGLE_CLIENT_SECRET OMABIB_DROPBOX_APP_SECRET \
+            RCLONE_CONFIG
+          [[ $(uname -s) == Darwin ]]
+          [[ $(uname -m) == x86_64 ]]
+          set +e
+          out=$(curl -fsSL "$GET_URL" | sh 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          [[ $code -ne 0 ]]
+          printf '%s\n' "$out" | grep -F 'needs a Mac with Apple silicon'
+          [[ ! -e $HOME/Applications/Omabib.app ]]
+          [[ ! -e $HOME/.local/bin/omabib ]]
+          [[ ! -e $HOME/.config/rclone/rclone.conf ]]
+          [[ ! -e ${XDG_CONFIG_HOME}/omabib/rclone.conf ]]
