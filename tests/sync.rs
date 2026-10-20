@@ -544,6 +544,138 @@ fn two_computers_share_a_library_through_rclone() {
     assert!(format!("{err:#}").contains("nowhere"), "{err:#}");
 }
 
+fn export(c: &Computer, id: &str) -> String {
+    c.call("export_bibtex", json!({"ids": [id]}))["bibtex"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn edit(c: &Computer, id: &str, bibtex: &str) {
+    let rev = c.call("get_reference", json!({"id": id}))["revision"].clone();
+    c.call(
+        "upsert_reference",
+        json!({"id": id, "expected_revision": rev, "bibtex": bibtex}),
+    );
+}
+
+/// The metadata editor saves the whole entry, so two computers editing the same
+/// entry before syncing settle on the later save, all of it. The library columns
+/// and the export agree everywhere.
+#[test]
+fn editor_edits_from_two_computers_settle_on_one_entry() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let id = a.import(
+        "@article{k,title={Old title},author={Doe, J.},year={2020},journal={J},pages={1--10}}",
+    );
+    a.call("sync_start", json!({"mode":"new"}));
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode":"join"}));
+    // A fixes the title and the pages. B, not yet synced, fixes the year later.
+    edit(
+        &a,
+        &id,
+        "@article{k,title={New title from A},author={Doe, J.},year={2020},journal={J},pages={11--20}}",
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    edit(
+        &b,
+        &id,
+        "@article{k,title={Old title},author={Doe, J.},year={2021},journal={J},pages={1--10}}",
+    );
+    settle(&[&a, &b]);
+    for c in [&a, &b] {
+        let r = c.call("get_reference", json!({"id": &id}));
+        assert_eq!(r["title"], "Old title", "{r}");
+        assert_eq!(r["year"], "2021", "{r}");
+        assert_eq!(r["fields"]["pages"], "1\u{2013}10", "{r}");
+        let exported = export(c, &id);
+        assert!(exported.contains("title = {Old title}"), "{exported}");
+        assert!(exported.contains("year = {2021}"), "{exported}");
+        assert!(!exported.contains("New title from A"), "{exported}");
+    }
+    assert_same(&a, &b);
+}
+
+/// A change whose columns disagree with its entry (as a library hit by the old
+/// column-by-column merge could send) follows the entry.
+#[test]
+fn a_change_whose_columns_disagree_with_its_entry_follows_the_entry() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let id = a.import(
+        "@article{k,title={Old title},author={Doe, J.},year={2020},journal={J},pages={1--10}}",
+    );
+    a.call("sync_start", json!({"mode":"new"}));
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode":"join"}));
+
+    let mut ch = omabib::sync::apply::Change {
+        kind: "ref".into(),
+        key: id.clone(),
+        device: "olddevice".into(),
+        ..Default::default()
+    };
+    let hlc = "9999999999999.00000.olddevice";
+    ch.fields.insert("title".into(), json!("Title from a column"));
+    ch.fields.insert("year".into(), json!("1999"));
+    ch.fields.insert(
+        "fields".into(),
+        json!({"title":"Title from a column","author":"Doe, J.","year":"1999","journal":"J"}),
+    );
+    ch.fields.insert(
+        "bibtex".into(),
+        json!("@article{k,\nauthor = {Doe, J.},\njournal = {J},\npages = {11--20},\ntitle = {Title from the entry},\nyear = {2021},\n}"),
+    );
+    ch.clocks = ch.fields.keys().map(|k| (k.clone(), hlc.into())).collect();
+    let bytes = omabib::sync::format::write_batch("olddevice", 1, "now", &[ch]).unwrap();
+    let root = shared.path().join("Omabib");
+    std::fs::create_dir_all(root.join("changes/olddevice")).unwrap();
+    std::fs::write(root.join("changes/olddevice/0000000001.jsonl.gz"), bytes).unwrap();
+    std::fs::write(
+        root.join("devices/olddevice.json"),
+        format!(r#"{{"device":"olddevice","name":"old","seq":1,"hlc":"{hlc}"}}"#),
+    )
+    .unwrap();
+    settle(&[&a, &b]);
+    for c in [&a, &b] {
+        let r = c.call("get_reference", json!({"id": &id}));
+        assert_eq!(r["title"], "Title from the entry", "{r}");
+        assert_eq!(r["year"], "2021", "{r}");
+        assert_eq!(r["fields"]["pages"], "11\u{2013}20", "{r}");
+        assert_eq!(r["fields"]["title"], "Title from the entry", "{r}");
+        let exported = export(c, &id);
+        assert!(exported.contains("Title from the entry"), "{exported}");
+        assert!(!exported.contains("column"), "{exported}");
+    }
+    assert_same(&a, &b);
+}
+
+/// Sync copies the entry text as it is: protected braces, a braced corporate
+/// author, the DOI's case, escapes, and a URL all survive a join and an edit
+/// made on the other computer.
+#[test]
+fn entry_text_survives_sync_unchanged() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let id = a.import(
+        "@article{k,title={{DNA} sequencing of {E. coli}},author={Doe, J. and {World Health Organization}},year={2020},journal={J \\& Sons},pages={1--10},doi={10.1000/ABC},url={https://example.org/a_b%20c}}",
+    );
+    let before = export(&a, &id);
+    assert!(before.contains("{{DNA} sequencing of {E. coli}}"), "{before}");
+    a.call("sync_start", json!({"mode":"new"}));
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode":"join"}));
+    settle(&[&a, &b]);
+    assert_eq!(export(&b, &id), before);
+    let rb = b.call("get_reference", json!({"id": &id}));
+    edit(&b, &id, &rb["bibtex"].as_str().unwrap().replace("2020", "2021"));
+    settle(&[&a, &b]);
+    assert_eq!(export(&a, &id), before.replace("2020", "2021"));
+    assert_same(&a, &b);
+}
+
 #[test]
 fn idle_syncs_leave_the_manifest_alone() {
     let shared = tempfile::tempdir().unwrap();

@@ -482,6 +482,14 @@ impl Applier<'_> {
                 accepted.insert(f, v);
             }
         }
+        // The clock each accepted field takes: its own, unless it restates the entry.
+        let mut stamps: BTreeMap<String, String> = accepted
+            .keys()
+            .map(|f| (f.clone(), ch.clocks[f].clone()))
+            .collect();
+        if kind == "ref" {
+            follow_entry(ch, &mut accepted, &mut stamps);
+        }
         let present = records::exists(c, kind, &key)?;
         if accepted.is_empty() && present {
             return Ok(());
@@ -497,7 +505,7 @@ impl Applier<'_> {
         }
         let before = claims(&b.data);
         for (f, v) in accepted {
-            b.clocks.insert(f.clone(), ch.clocks[&f].clone());
+            b.clocks.insert(f.clone(), stamps[&f].clone());
             b.data.insert(f, v);
         }
         let key = if kind == "project" {
@@ -794,6 +802,63 @@ impl Applier<'_> {
         )?;
         self.out.conflicts += 1;
         Ok(())
+    }
+}
+
+/// The columns and `fields` of a reference that restate its BibTeX entry.
+const ENTRY_COLUMNS: [&str; 7] = [
+    "entry_type",
+    "title",
+    "authors",
+    "abstract",
+    "year",
+    "doi",
+    "fields",
+];
+
+/// A reference's BibTeX entry is one fact: the editor saves it whole, and the
+/// columns and `fields` are read out of it. So they follow the entry. When a
+/// change's entry is taken, they are rebuilt from that entry rather than merged
+/// one by one, and when its entry loses to the one already here, they lose with
+/// it. Otherwise a title from one computer could sit over an entry from another,
+/// and the export would disagree with the library.
+fn follow_entry(
+    ch: &Change,
+    accepted: &mut Map<String, Value>,
+    stamps: &mut BTreeMap<String, String>,
+) {
+    let Some(entry) = ch.fields.get("bibtex").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(clock) = ch.clocks.get("bibtex") else {
+        return;
+    };
+    if !accepted.contains_key("bibtex") {
+        for f in ENTRY_COLUMNS {
+            accepted.remove(f);
+            stamps.remove(f);
+        }
+        return;
+    }
+    let Some(cols) = crate::db::parse_bibtex(entry)
+        .ok()
+        .and_then(|b| b.iter().next().map(crate::db::entry_columns))
+    else {
+        // An entry this version cannot read keeps the sender's columns.
+        return;
+    };
+    let doi = cols.doi.map_or(Value::Null, Value::String);
+    for (f, v) in [
+        ("entry_type", json!(cols.kind)),
+        ("title", json!(cols.title)),
+        ("authors", json!(cols.authors)),
+        ("abstract", json!(cols.abstract_text)),
+        ("year", json!(cols.year)),
+        ("doi", doi),
+        ("fields", json!(cols.fields)),
+    ] {
+        accepted.insert(f.into(), v);
+        stamps.insert(f.into(), clock.clone());
     }
 }
 

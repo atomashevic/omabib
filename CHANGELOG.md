@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Sync treats a reference's BibTeX entry as one fact. When two computers edited the same reference before syncing, the columns were merged one by one while the entry text came from whichever edit was later, so the library could show one title and the export another. Now the later entry wins whole, and the title, authors, year, DOI and other fields are read back out of it on every computer. The entry text is copied as written, so protected braces and corporate authors survive a sync. Nothing about the sync format changes.
+
 ## [0.1.1] - 2026-10-20
 
 ### Changed
