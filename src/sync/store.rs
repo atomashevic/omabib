@@ -201,6 +201,35 @@ pub fn rclone_binary() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The oldest rclone that can sign in to a cloud account: 1.56 added the
+/// non-interactive `config create` questions Omabib answers.
+pub const RCLONE_MINIMUM: (u32, u32) = (1, 56);
+
+/// rclone's version as (major, minor), from `rclone version`'s first line
+/// ("rclone v1.60.1" or Debian's "rclone v1.60.1-DEV"). None when it can't
+/// be run or says something else.
+pub fn rclone_version(binary: &Path) -> Option<(u32, u32)> {
+    let out = Command::new(binary)
+        .arg("version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    parse_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_version(text: &str) -> Option<(u32, u32)> {
+    let word = text.lines().next()?.split_whitespace().nth(1)?;
+    let mut parts = word.strip_prefix('v')?.split(['.', '-']);
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// rclone 1.66 started copying directory modification times and added
+/// `--no-update-dir-modtime` to turn that off. Older versions reject the flag
+/// and never touch directory times, so they get the same result without it.
+fn skips_dir_modtimes(version: Option<(u32, u32)>) -> bool {
+    version.is_none_or(|v| v >= (1, 66))
+}
+
 /// Sorts rclone's error text into something the user can act on.
 pub fn classify(stderr: &str) -> &'static str {
     let s = stderr.to_ascii_lowercase();
@@ -380,23 +409,23 @@ impl Store for RcloneStore {
         }
         // A single process shares its remote directory cache and connections.
         // The private staging tree contains exactly this batch's files.
-        self.run(
-            &[
-                "copy",
-                &root.to_string_lossy(),
-                &self.root,
-                "--transfers",
-                "4",
-                "--checkers",
-                "4",
-                "--checksum",
-                "--immutable",
-                "--no-update-dir-modtime",
-            ],
-            None,
-            LONG,
-        )?
-        .context("Could not upload file batch")?;
+        let root = root.to_string_lossy();
+        let mut args = vec![
+            "copy",
+            &root,
+            &self.root,
+            "--transfers",
+            "4",
+            "--checkers",
+            "4",
+            "--checksum",
+            "--immutable",
+        ];
+        if skips_dir_modtimes(rclone_binary().and_then(|b| rclone_version(&b))) {
+            args.push("--no-update-dir-modtime");
+        }
+        self.run(&args, None, LONG)?
+            .context("Could not upload file batch")?;
         Ok(())
     }
     fn list(&self, dir: &str) -> Result<Vec<Entry>> {
@@ -520,6 +549,27 @@ mod tests {
             std::fs::read(destination.join(&paths[0])).unwrap(),
             paths[0].as_bytes()
         );
+    }
+
+    #[test]
+    fn old_rclone_versions_get_only_the_flags_they_know() {
+        assert_eq!(parse_version("rclone v1.60.1\n"), Some((1, 60)));
+        assert_eq!(
+            parse_version("rclone v1.60.1-DEV\n- os/version: debian 13"),
+            Some((1, 60))
+        );
+        assert_eq!(parse_version("rclone v1.75.2\n"), Some((1, 75)));
+        assert_eq!(
+            parse_version("rclone v1.66.0-beta.7890.abc\n"),
+            Some((1, 66))
+        );
+        assert_eq!(parse_version("something else"), None);
+        assert!(!skips_dir_modtimes(Some((1, 53))));
+        assert!(!skips_dir_modtimes(Some((1, 65))));
+        assert!(skips_dir_modtimes(Some((1, 66))));
+        assert!(skips_dir_modtimes(Some((2, 0))));
+        assert!(skips_dir_modtimes(None));
+        assert!((1, 55) < RCLONE_MINIMUM && (1, 56) >= RCLONE_MINIMUM);
     }
 
     #[test]

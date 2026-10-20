@@ -3,7 +3,7 @@
 //! (`rclone authorize … --auth-no-open-browser`) and hands the sign-in link to
 //! the window, which opens it. The connection is always the `omabib` remote in
 //! Omabib's own rclone config.
-use super::store::rclone_binary;
+use super::store::{RCLONE_MINIMUM, rclone_binary, rclone_version as version_of};
 use super::{Sync, rclone_config};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -272,7 +272,17 @@ pub fn start(sync: Arc<Sync>, provider: &str) -> Result<Arc<Connecting>> {
         .iter()
         .find(|p| p.id == provider)
         .with_context(|| format!("Unknown storage {provider}"))?;
-    rclone_binary().context("Install rclone first")?;
+    let binary = rclone_binary().context("Install rclone first")?;
+    if let Some((major, minor)) = version_of(&binary)
+        && (major, minor) < RCLONE_MINIMUM
+    {
+        bail!(
+            "Signing in needs rclone {}.{} or newer, and this computer has {major}.{minor}. \
+             Install the current version from https://rclone.org/install/",
+            RCLONE_MINIMUM.0,
+            RCLONE_MINIMUM.1
+        );
+    }
     let mut params: Vec<String> = p.params.iter().map(|v| v.to_string()).collect();
     if let Some(app) = &p.app {
         let (id, secret) = credentials(app).context(app.waiting)?;

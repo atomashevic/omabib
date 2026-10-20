@@ -118,7 +118,7 @@ Google Drive, Dropbox, OneDrive or a folder you already sync. Edits merge, PDFs 
 
 ### Sync between your computers
 
-Click **Sync** at the bottom of the sidebar and pick where to keep your library. Cloud storage works through [rclone](https://rclone.org), a free sync tool; if you don't have it, install it once with `brew install rclone` on a Mac, or `sudo apt install rclone`, `sudo dnf install rclone` or `sudo pacman -S rclone` on Linux.
+Click **Sync** at the bottom of the sidebar and pick where to keep your library. Cloud storage works through [rclone](https://rclone.org), a free sync tool; if you don't have it, install it once with `brew install rclone` on a Mac, or `sudo apt install rclone`, `sudo dnf install rclone` or `sudo pacman -S rclone` on Linux. Signing in needs rclone 1.56 or newer; Ubuntu 22.04 packages 1.53, so there use the script from [rclone.org/install](https://rclone.org/install/).
 
 ## Everything is a keystroke away
 
