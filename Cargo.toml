@@ -28,6 +28,12 @@ typst-assets = { version = "0.15.1", features = ["fonts"] }
 mupdf = "0.8.0"
 tempfile = "3"
 
+# Sets process-wide environment variables, so it runs as its own program with
+# no other tests beside it.
+[[test]]
+name = "old_rclone"
+harness = false
+
 [profile.release]
 lto = "thin"
 strip = true

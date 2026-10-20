@@ -7,6 +7,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -201,6 +202,64 @@ pub fn rclone_binary() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The oldest rclone that can sign in to a cloud account: 1.56 added the
+/// non-interactive `config create` questions Omabib answers.
+const RCLONE_MINIMUM: (u32, u32) = (1, 56);
+
+/// The version word of `rclone version`'s first line ("v1.60.1", or Debian's
+/// "v1.60.1-DEV"). None when it can't be run, says something else, or takes
+/// longer than 10 seconds.
+pub fn rclone_version(binary: &Path) -> Option<String> {
+    let mut child = Command::new(binary)
+        .arg("version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let out = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().ok()?.is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let text = out.join().ok()?;
+    Some(text.lines().next()?.split_whitespace().nth(1)?.to_owned())
+}
+
+/// (major, minor) from a version word such as "v1.60.1-DEV".
+pub fn version_number(word: &str) -> Option<(u32, u32)> {
+    let mut parts = word.trim_start_matches('v').split(['.', '-']);
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// Why this rclone can't sign in to a cloud account, if it is too old.
+pub fn too_old_to_sign_in(version: Option<&str>) -> Option<String> {
+    let (major, minor) = version.and_then(version_number)?;
+    ((major, minor) < RCLONE_MINIMUM).then(|| {
+        format!(
+            "Signing in needs rclone {}.{} or newer, and this computer has {major}.{minor}. \
+             Install the current version from https://rclone.org/install/",
+            RCLONE_MINIMUM.0, RCLONE_MINIMUM.1
+        )
+    })
+}
+
+/// rclone 1.66 started copying directory modification times and added
+/// `--no-update-dir-modtime` to turn that off. Older versions reject the flag
+/// and never touch directory times; once one does, uploads leave it out.
+static NO_DIR_MODTIME_FLAG: AtomicBool = AtomicBool::new(false);
+const DIR_MODTIME_FLAG: &str = "--no-update-dir-modtime";
+
 /// Sorts rclone's error text into something the user can act on.
 pub fn classify(stderr: &str) -> &'static str {
     let s = stderr.to_ascii_lowercase();
@@ -380,23 +439,33 @@ impl Store for RcloneStore {
         }
         // A single process shares its remote directory cache and connections.
         // The private staging tree contains exactly this batch's files.
-        self.run(
-            &[
-                "copy",
-                &root.to_string_lossy(),
-                &self.root,
-                "--transfers",
-                "4",
-                "--checkers",
-                "4",
-                "--checksum",
-                "--immutable",
-                "--no-update-dir-modtime",
-            ],
-            None,
-            LONG,
-        )?
-        .context("Could not upload file batch")?;
+        let root = root.to_string_lossy();
+        let mut args = vec![
+            "copy",
+            &root,
+            &self.root,
+            "--transfers",
+            "4",
+            "--checkers",
+            "4",
+            "--checksum",
+            "--immutable",
+        ];
+        let flag = !NO_DIR_MODTIME_FLAG.load(Ordering::Relaxed);
+        if flag {
+            args.push(DIR_MODTIME_FLAG);
+        }
+        let mut copied = self.run(&args, None, LONG);
+        if flag
+            && let Err(e) = &copied
+            && e.to_string()
+                .contains("unknown flag: --no-update-dir-modtime")
+        {
+            NO_DIR_MODTIME_FLAG.store(true, Ordering::Relaxed);
+            args.pop();
+            copied = self.run(&args, None, LONG);
+        }
+        copied?.context("Could not upload file batch")?;
         Ok(())
     }
     fn list(&self, dir: &str) -> Result<Vec<Entry>> {
@@ -520,6 +589,22 @@ mod tests {
             std::fs::read(destination.join(&paths[0])).unwrap(),
             paths[0].as_bytes()
         );
+    }
+
+    #[test]
+    fn rclone_versions_parse_and_old_ones_cannot_sign_in() {
+        assert_eq!(version_number("v1.60.1"), Some((1, 60)));
+        assert_eq!(version_number("v1.60.1-DEV"), Some((1, 60)));
+        assert_eq!(version_number("1.75.2"), Some((1, 75)));
+        assert_eq!(version_number("v1.66.0-beta.7890.abc"), Some((1, 66)));
+        assert_eq!(version_number("else"), None);
+        assert!(
+            too_old_to_sign_in(Some("v1.53.3"))
+                .unwrap()
+                .contains("1.56")
+        );
+        assert_eq!(too_old_to_sign_in(Some("v1.56.0")), None);
+        assert_eq!(too_old_to_sign_in(None), None);
     }
 
     #[test]
