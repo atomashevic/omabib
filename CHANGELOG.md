@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-10-20
+## [0.1.3] - 2026-10-20
+
+v0.1.2 was tagged on 2026-10-20 and the release was never published. The notes below are the user-facing changes written for 0.1.2, plus the install fix.
 
 ### Added
 
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A mouse-wheel notch moves about three lines in every scrollable view. High-resolution notches that arrived as several small angles on one timestamp used to move only a few pixels. Touchpad scrolling stays one pixel per pixel.
+- Installing the packages the installer prints is enough to finish the install. Apt, dnf and pacman names come from one list, and the release test installs that list and no other library packages. The 0.1.2 test installed a shorter apt list, so Ubuntu 22.04, Ubuntu 24.04 and Debian 12 still stopped and asked for `libxcb-render0`, `libxcb-shape0` and `libxcb-xkb1`.
 - Sync works with rclone older than 1.66. Those versions reject `--no-update-dir-modtime`, so a sync that included a PDF failed on Debian 12 and 13 and Ubuntu 24.04, which package rclone 1.60.1. Omabib retries the upload without that flag. Signing in still needs rclone 1.56 or newer, and names that minimum when the installed rclone is older. Ubuntu 22.04 packages 1.53, so there the current rclone comes from rclone.org.
 - On a minimal Linux system, the installer names the missing libraries and copies nothing. It prints the apt, dnf, or pacman packages for the `omabib` command (fontconfig and freetype) and for the window (OpenGL, X11 and xcb), then exits.
 - Sync treats a reference's BibTeX entry as one fact. When two computers edited the same reference before syncing, the columns were merged one by one while the entry text came from whichever edit was later, so the library could show one title and the export another. The later entry now wins whole, and the title, authors, year, DOI and other fields are read back out of that entry. The entry text is copied as written, so protected braces, corporate authors and DOI case survive a sync.
@@ -54,6 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The library stays on the computer, in `~/.local/share/omabib/`. BibTeX goes in and out, and `omabib backup` writes a backup. Free software, AGPL-3.0-or-later.
 
 [Unreleased]: https://github.com/atomashevic/omabib/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/atomashevic/omabib/compare/v0.1.1...v0.1.2
+[0.1.3]: https://github.com/atomashevic/omabib/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/atomashevic/omabib/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/atomashevic/omabib/releases/tag/v0.1.0

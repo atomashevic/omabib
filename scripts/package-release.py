@@ -73,7 +73,7 @@ def main():
     artifacts = []
     with tempfile.TemporaryDirectory(prefix='omabib-release-') as temporary:
         stage = Path(temporary) / name
-        for file in ('README.md', 'LICENSE', 'API.md', 'scripts/install.sh', 'skills/omabib/SKILL.md'):
+        for file in ('README.md', 'LICENSE', 'API.md', 'scripts/install.sh', 'scripts/linux-packages', 'skills/omabib/SKILL.md'):
             copy(ROOT / file, stage / file)
         for file in (ROOT / 'plugin/components/fonts').iterdir():
             if not file.name.endswith('.ttf'):
