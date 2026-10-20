@@ -5,7 +5,7 @@ use crate::db::{index_note, insert_doc};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Parents before children: the order changes are applied in.
 pub const KINDS: [&str; 7] = [
@@ -59,6 +59,158 @@ fn json_text(r: &Map<String, Value>, k: &str, default: Value) -> String {
         .to_string()
 }
 
+/// Columns of a reference. Anything else in the sync map is one BibTeX field.
+const REF_COLUMNS: [&str; 10] = [
+    "citekey",
+    "entry_type",
+    "title",
+    "authors",
+    "abstract",
+    "year",
+    "doi",
+    "source",
+    "created_at",
+    "updated_at",
+];
+
+fn is_ref_column(name: &str) -> bool {
+    REF_COLUMNS.contains(&name)
+}
+
+/// `author` is the `authors` column. The other four share their BibTeX name.
+fn column_of_bib_field(name: &str) -> Option<&'static str> {
+    match name {
+        "title" => Some("title"),
+        "author" => Some("authors"),
+        "abstract" => Some("abstract"),
+        "year" => Some("year"),
+        "doi" => Some("doi"),
+        _ => None,
+    }
+}
+
+/// Sync name for a BibTeX field that is not already a column. `fields` and
+/// `bibtex` stay reserved for the old grouped form.
+fn bib_sync_key(name: &str) -> String {
+    if is_ref_column(name) || name == "fields" || name == "bibtex" {
+        format!("bib:{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// BibTeX name of a sync key, when the key is a single BibTeX field.
+fn bib_field_name(sync_key: &str) -> Option<String> {
+    if let Some(name) = sync_key.strip_prefix("bib:") {
+        return Some(name.to_string());
+    }
+    if is_ref_column(sync_key) || sync_key == "fields" || sync_key == "bibtex" {
+        None
+    } else {
+        Some(sync_key.to_string())
+    }
+}
+
+/// Old records stored every non-column BibTeX field in one `fields` object and
+/// the whole entry in `bibtex`, so one later edit replaced all of them. Split
+/// the object. A column that is already present keeps its own value and clock:
+/// that column is the last edit of that field, while the object was replaced
+/// by whichever edit touched any field.
+pub(crate) fn expand_legacy(
+    data: &mut Map<String, Value>,
+    clocks: &mut BTreeMap<String, String>,
+) -> bool {
+    let blob = data.remove("fields");
+    let blob_clock = clocks.remove("fields");
+    let had_bibtex = data.remove("bibtex").is_some();
+    clocks.remove("bibtex");
+    let Some(Value::Object(fields)) = blob else {
+        return had_bibtex || blob.is_some();
+    };
+    for (name, value) in fields {
+        if let Some(column) = column_of_bib_field(&name) {
+            if !data.contains_key(column) {
+                data.insert(column.into(), value);
+                if let Some(clock) = &blob_clock {
+                    clocks.entry(column.into()).or_insert_with(|| clock.clone());
+                }
+            }
+            continue;
+        }
+        let key = bib_sync_key(&name);
+        if data.contains_key(&key) {
+            continue;
+        }
+        data.insert(key.clone(), value);
+        if let Some(clock) = &blob_clock {
+            clocks.entry(key).or_insert_with(|| clock.clone());
+        }
+    }
+    true
+}
+
+/// `fields` JSON and BibTeX text for a reference, built from its synced fields
+/// so the library column and `export_bibtex` cannot drift apart.
+pub(crate) fn render_ref(r: &Map<String, Value>) -> Result<(String, String)> {
+    let mut bib = BTreeMap::new();
+    let add = |bib: &mut BTreeMap<String, String>, name: &str, value: &str| {
+        if !value.is_empty() {
+            bib.insert(name.to_string(), value.to_string());
+        }
+    };
+    add(&mut bib, "title", s(r, "title"));
+    add(&mut bib, "author", s(r, "authors"));
+    add(&mut bib, "abstract", s(r, "abstract"));
+    add(&mut bib, "year", s(r, "year"));
+    if let Some(doi) = r
+        .get("doi")
+        .and_then(Value::as_str)
+        .filter(|d| !d.is_empty())
+    {
+        bib.insert("doi".into(), doi.to_string());
+    }
+    for (key, value) in r {
+        let Some(name) = bib_field_name(key) else {
+            continue;
+        };
+        let Some(text) = value.as_str() else { continue };
+        bib.insert(name, text.to_string());
+    }
+    let fields = serde_json::to_string(&bib)?;
+    let kind = match s(r, "entry_type") {
+        "" => "misc",
+        kind => kind,
+    };
+    let key = match s(r, "citekey") {
+        "" => "ref",
+        key => key,
+    };
+    let mut entry = biblatex::Entry::new(key.to_string(), biblatex::EntryType::new(kind));
+    for (name, value) in &bib {
+        entry.set(
+            name,
+            vec![biblatex::Spanned::detached(biblatex::Chunk::Normal(
+                value.clone(),
+            ))],
+        );
+    }
+    Ok((fields, crate::db::serialize_entry(&entry)))
+}
+
+/// Uses a stored `fields` object and `bibtex` string when a caller already
+/// built them (a restore of an old record, or a write that must keep the real
+/// citation key while the column is parked). Otherwise builds both from the
+/// synced fields.
+fn stored_ref_text(r: &Map<String, Value>) -> Result<(String, String)> {
+    if let (Some(fields), Some(bibtex)) = (
+        r.get("fields").filter(|v| v.is_object()),
+        r.get("bibtex").and_then(Value::as_str),
+    ) {
+        return Ok((fields.to_string(), bibtex.to_string()));
+    }
+    render_ref(r)
+}
+
 /// The current time in SQLite's `strftime('%Y-%m-%dT%H:%M:%fZ')` form.
 pub fn now() -> String {
     let ms = super::clock::now_ms();
@@ -97,14 +249,30 @@ pub fn read(c: &Connection, kind: &str, key: &str) -> Result<Option<Map<String, 
                 "SELECT citekey,entry_type,title,authors,abstract,year,doi,fields,bibtex,source,created_at,updated_at FROM refs WHERE id=?",
                 [key],
                 |r| {
-                    Ok(json!({
+                    let fields = match parsed(r.get(7)?) {
+                        Value::Object(m) => m,
+                        _ => Map::new(),
+                    };
+                    // Each BibTeX field is its own synced value. The columns
+                    // already cover title, author, abstract, year and doi, and
+                    // the entry text is rebuilt on write.
+                    let mut obj = match json!({
                         "citekey": r.get::<_, String>(0)?, "entry_type": r.get::<_, String>(1)?,
                         "title": r.get::<_, String>(2)?, "authors": r.get::<_, String>(3)?,
                         "abstract": r.get::<_, String>(4)?, "year": r.get::<_, String>(5)?,
-                        "doi": r.get::<_, Option<String>>(6)?, "fields": parsed(r.get(7)?),
-                        "bibtex": r.get::<_, String>(8)?, "source": r.get::<_, String>(9)?,
+                        "doi": r.get::<_, Option<String>>(6)?, "source": r.get::<_, String>(9)?,
                         "created_at": r.get::<_, String>(10)?, "updated_at": r.get::<_, String>(11)?,
-                    }))
+                    }) {
+                        Value::Object(m) => m,
+                        _ => Map::new(),
+                    };
+                    for (name, value) in fields {
+                        if column_of_bib_field(&name).is_some() {
+                            continue;
+                        }
+                        obj.insert(bib_sync_key(&name), value);
+                    }
+                    Ok(Value::Object(obj))
                 },
             )
             .optional()?,
@@ -245,6 +413,7 @@ pub fn write(
     let stamp = now();
     match kind {
         "ref" => {
+            let (fields, bibtex) = stored_ref_text(r)?;
             c.execute(
                 "INSERT INTO refs(id,citekey,entry_type,title,authors,abstract,year,doi,fields,bibtex,source,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
                  ON CONFLICT(id) DO UPDATE SET citekey=excluded.citekey,entry_type=excluded.entry_type,title=excluded.title,authors=excluded.authors,abstract=excluded.abstract,year=excluded.year,doi=excluded.doi,fields=excluded.fields,bibtex=excluded.bibtex,source=excluded.source,created_at=excluded.created_at,updated_at=excluded.updated_at,revision=revision+1",
@@ -257,8 +426,8 @@ pub fn write(
                     s(r, "abstract"),
                     s(r, "year"),
                     opt(r, "doi").filter(|d| !d.is_empty()),
-                    json_text(r, "fields", json!({})),
-                    s(r, "bibtex"),
+                    fields,
+                    bibtex,
                     s(r, "source"),
                     opt(r, "created_at").unwrap_or_else(|| stamp.clone()),
                     opt(r, "updated_at").unwrap_or_else(|| stamp.clone()),
@@ -534,10 +703,44 @@ pub fn exists(c: &Connection, kind: &str, key: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn timestamps_round_trip() {
         let t = super::now();
         let ms = super::super::clock::iso_ms(&t).unwrap();
         assert!(ms.abs_diff(super::super::clock::now_ms()) < 5000, "{t}");
+    }
+
+    #[test]
+    fn legacy_fields_split_and_the_entry_text_follows_the_columns() {
+        let mut data = Map::new();
+        data.insert("citekey".into(), json!("k"));
+        data.insert("entry_type".into(), json!("article"));
+        data.insert("title".into(), json!("New title"));
+        data.insert("authors".into(), json!("Doe, J."));
+        data.insert("year".into(), json!("2021"));
+        data.insert(
+            "fields".into(),
+            json!({"title":"Old title","author":"Doe, J.","year":"2020","journal":"J","pages":"11\u{2013}20"}),
+        );
+        data.insert("bibtex".into(), json!("@article{k,title={Old title}}"));
+        let mut clocks = BTreeMap::new();
+        clocks.insert("title".into(), "2".into());
+        clocks.insert("fields".into(), "9".into());
+        clocks.insert("bibtex".into(), "9".into());
+        assert!(expand_legacy(&mut data, &mut clocks));
+        assert!(data.get("fields").is_none());
+        assert!(data.get("bibtex").is_none());
+        assert_eq!(data["title"], "New title");
+        assert_eq!(data["pages"], "11\u{2013}20");
+        assert_eq!(clocks["pages"], "9");
+        assert!(!clocks.contains_key("bibtex"));
+        assert!(!expand_legacy(&mut data, &mut clocks));
+        let (_, bibtex) = render_ref(&data).unwrap();
+        assert!(bibtex.contains("New title"), "{bibtex}");
+        assert!(bibtex.contains("2021"), "{bibtex}");
+        assert!(bibtex.contains("11"), "{bibtex}");
+        assert!(!bibtex.contains("Old title"), "{bibtex}");
     }
 }

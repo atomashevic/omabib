@@ -544,6 +544,123 @@ fn two_computers_share_a_library_through_rclone() {
     assert!(format!("{err:#}").contains("nowhere"), "{err:#}");
 }
 
+/// The metadata editor saves the whole entry. Two computers can still edit
+/// different fields, and the library column and the export stay in agreement.
+#[test]
+fn editor_edits_to_different_fields_merge() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let id = a.import(
+        "@article{k,title={Old title},author={Doe, J.},year={2020},journal={J},pages={1--10}}",
+    );
+    a.call("sync_start", json!({"mode":"new"}));
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode":"join"}));
+    let edit = |c: &Computer, bibtex: &str| {
+        let rev = c.call("get_reference", json!({"id": &id}))["revision"].clone();
+        c.call(
+            "upsert_reference",
+            json!({"id": &id, "expected_revision": rev, "bibtex": bibtex}),
+        );
+    };
+    // A fixes the title and the pages. B, not yet synced, fixes the year.
+    edit(
+        &a,
+        "@article{k,title={New title from A},author={Doe, J.},year={2020},journal={J},pages={11--20}}",
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    edit(
+        &b,
+        "@article{k,title={Old title},author={Doe, J.},year={2021},journal={J},pages={1--10}}",
+    );
+    settle(&[&a, &b]);
+    // Import stores `--` as an en dash. This test leaves that as it is.
+    let pages = "11\u{2013}20";
+    for c in [&a, &b] {
+        let r = c.call("get_reference", json!({"id": &id}));
+        assert_eq!(r["title"], "New title from A", "{r}");
+        assert_eq!(r["year"], "2021", "{r}");
+        assert_eq!(r["fields"]["pages"], pages, "{r}");
+        let exported = c.call("export_bibtex", json!({"ids": [&id]}))["bibtex"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            exported.contains("New title from A"),
+            "export title: {exported}"
+        );
+        assert!(
+            exported.contains("year = {2021}"),
+            "export year: {exported}"
+        );
+        assert!(
+            exported.contains(&format!("pages = {{{pages}}}")),
+            "export pages: {exported}"
+        );
+        assert!(
+            !exported.contains("Old title"),
+            "export kept the old title: {exported}"
+        );
+    }
+}
+
+/// A batch from before per-field BibTeX still applies. The entry text in that
+/// batch is not a second copy of the fields.
+#[test]
+fn an_old_style_batch_rebuilds_the_entry_from_its_fields() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let id = a.import(
+        "@article{k,title={Old title},author={Doe, J.},year={2020},journal={J},pages={1--10}}",
+    );
+    a.call("sync_start", json!({"mode":"new"}));
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode":"join"}));
+
+    let mut ch = omabib::sync::apply::Change {
+        kind: "ref".into(),
+        key: id.clone(),
+        device: "olddevice".into(),
+        ..Default::default()
+    };
+    let hlc = "9999999999999.00000.olddevice";
+    ch.fields.insert("title".into(), json!("New title from A"));
+    ch.fields.insert("year".into(), json!("2021"));
+    ch.fields.insert(
+        "fields".into(),
+        json!({"title":"Old title","author":"Doe, J.","year":"2021","journal":"J","pages":"11-20"}),
+    );
+    ch.fields.insert(
+        "bibtex".into(),
+        json!("@article{k,title={Old title},year={2020},pages={1--10}}"),
+    );
+    ch.clocks.insert("title".into(), hlc.into());
+    let bytes = omabib::sync::format::write_batch("olddevice", 1, "now", &[ch]).unwrap();
+    let root = shared.path().join("Omabib");
+    std::fs::create_dir_all(root.join("changes/olddevice")).unwrap();
+    std::fs::write(root.join("changes/olddevice/0000000001.jsonl.gz"), bytes).unwrap();
+    std::fs::write(
+        root.join("devices/olddevice.json"),
+        format!(r#"{{"device":"olddevice","name":"old","seq":1,"hlc":"{hlc}"}}"#),
+    )
+    .unwrap();
+    settle(&[&a, &b]);
+    for c in [&a, &b] {
+        let r = c.call("get_reference", json!({"id": &id}));
+        assert_eq!(r["title"], "New title from A", "{r}");
+        assert_eq!(r["year"], "2021", "{r}");
+        assert_eq!(r["fields"]["pages"], "11-20", "{r}");
+        let exported = c.call("export_bibtex", json!({"ids": [&id]}))["bibtex"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(exported.contains("New title from A"), "{exported}");
+        assert!(exported.contains("year = {2021}"), "{exported}");
+        assert!(exported.contains("pages = {11-20}"), "{exported}");
+        assert!(!exported.contains("Old title"), "{exported}");
+    }
+}
+
 #[test]
 fn idle_syncs_leave_the_manifest_alone() {
     let shared = tempfile::tempdir().unwrap();

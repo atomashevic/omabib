@@ -237,6 +237,7 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
             }
             (Some(mut current), base) => {
                 let mut b = base.unwrap_or_default();
+                let migrated = kind == "ref" && records::expand_legacy(&mut b.data, &mut b.clocks);
                 if kind == "ref" && !b.data.is_empty() {
                     // A shared citekey or DOI shown differently here is not an edit.
                     let (citekey, doi) = shown(c, &key, &b.data)?;
@@ -251,9 +252,18 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
                     regroup.push(claims(&current));
                 }
                 let mut changed = Map::new();
-                for (f, v) in current {
-                    if b.data.get(&f) != Some(&v) {
-                        changed.insert(f, v);
+                for (f, v) in &current {
+                    if b.data.get(f) != Some(v) {
+                        changed.insert(f.clone(), v.clone());
+                    }
+                }
+                // A BibTeX field that disappeared is an edit. Null keeps the
+                // clock, so an older copy of the field cannot come back.
+                if kind == "ref" {
+                    for (f, v) in &b.data {
+                        if !current.contains_key(f) && !v.is_null() {
+                            changed.insert(f.clone(), Value::Null);
+                        }
                     }
                 }
                 if kind == "attachment" {
@@ -290,6 +300,9 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
                     queue_upload(c, &format!("clips/{sha}.png"), &kind, &key)?;
                 }
                 if changed.is_empty() {
+                    if migrated {
+                        save_base(c, &kind, &key, &b)?;
+                    }
                     continue;
                 }
                 *clock = clock.tick(edited, me);
@@ -451,10 +464,18 @@ impl Applier<'_> {
     }
 
     fn upsert(&mut self, ch: &Change) -> Result<()> {
+        let mut owned = ch.clone();
+        if owned.kind == "ref" {
+            records::expand_legacy(&mut owned.fields, &mut owned.clocks);
+        }
+        let ch = &owned;
         let c = self.c;
         let kind = ch.kind.as_str();
         let (key, fields) = self.resolved(ch)?;
         let mut b = load_base(c, kind, &key)?.unwrap_or_default();
+        if kind == "ref" {
+            records::expand_legacy(&mut b.data, &mut b.clocks);
+        }
         if b.deleted.is_some() {
             return Ok(());
         }
@@ -520,10 +541,14 @@ impl Applier<'_> {
         }
         if kind == "ref" {
             // The citekey and DOI are handed out by `reconcile`, since another
-            // reference may claim the same ones.
+            // reference may claim the same ones. The entry text is built first,
+            // from the real key, so the parked column does not leak into it.
             let mut data = b.data.clone();
+            let (fields, bibtex) = records::render_ref(&data)?;
             data.insert("citekey".into(), json!(format!("~{key}")));
             data.insert("doi".into(), Value::Null);
+            data.insert("fields".into(), serde_json::from_str::<Value>(&fields)?);
+            data.insert("bibtex".into(), json!(bibtex));
             records::write(c, kind, &key, &data, self.clips)?;
             save_base(c, kind, &key, &b)?;
             let touched = reconcile(c, &[before, claims(&b.data)])?;
