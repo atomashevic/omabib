@@ -3,32 +3,113 @@
 # the archive and SHA256SUMS. Then checks the CLI, starts the service through
 # it, opens the app and saves a screenshot. CI runs it in fresh Ubuntu, Debian,
 # Fedora and Arch containers and on macOS, each with a throwaway home.
-# Usage: scripts/test-get [--deps] DIST_DIR SCREENSHOT.png
-# --deps first installs, as root, what any desktop already has: OpenGL, fonts,
-# xkbcommon, Python.
+# Usage: scripts/test-get [--deps | --bare] DIST_DIR [SCREENSHOT.png]
+# --deps first checks a bare container (no library packages), then installs,
+# as root, what any desktop already has: OpenGL, fonts, xkbcommon, Python.
+# --bare only runs that check: the installer must name missing packages,
+# exit non-zero, and leave the home directory unchanged.
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-deps=false
+mode=install
 if [[ ${1:-} == --deps ]]; then
-  deps=true
+  mode=deps
+  shift
+elif [[ ${1:-} == --bare ]]; then
+  mode=bare
   shift
 fi
-dist=$(cd -- "$1" && pwd) shot=$2
-if [[ $deps == true ]]; then
+dist=$(cd -- "$1" && pwd)
+shot=${2:-}
+if [[ $mode != bare && -z $shot ]]; then
+  echo "Usage: $0 [--deps | --bare] DIST_DIR [SCREENSHOT.png]" >&2
+  exit 2
+fi
+version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$source_dir/manifest.json" | head -n 1)
+
+# curl and Python, not the libraries. A bare image can then run the installer.
+install_base_tools() {
   if command -v apt-get >/dev/null; then
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates python3 \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates python3 tar >/dev/null
+  elif command -v dnf >/dev/null; then
+    dnf install -y -q curl ca-certificates python3 tar gzip
+  elif command -v pacman >/dev/null; then
+    pacman -Sy --noconfirm --needed curl ca-certificates python tar gzip >/dev/null
+  fi
+}
+install_desktop_libraries() {
+  if command -v apt-get >/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       libgl1 libegl1 libopengl0 libfontconfig1 fonts-dejavu-core libxkbcommon0 libdbus-1-3 libglib2.0-0 \
       libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-xcb1 libxcb1 >/dev/null
   elif command -v dnf >/dev/null; then
-    dnf install -y -q curl python3 tar gzip findutils libglvnd-opengl libglvnd-egl libglvnd-glx fontconfig \
+    dnf install -y -q libglvnd-opengl libglvnd-egl libglvnd-glx fontconfig \
       dejavu-sans-fonts libxkbcommon dbus-libs glib2 libwayland-client libwayland-cursor libwayland-egl libX11-xcb libxcb
   elif command -v pacman >/dev/null; then
-    pacman -Syu --noconfirm --needed curl python libglvnd fontconfig ttf-dejavu libxkbcommon dbus glib2 wayland \
+    pacman -Syu --noconfirm --needed libglvnd fontconfig ttf-dejavu libxkbcommon dbus glib2 wayland \
       libx11 libxcb >/dev/null
   fi
+}
+# The linux-install job passes --deps. Before those packages are installed,
+# this is the bare-container case: no --deps libraries yet.
+bare_container_refuses() {
+  local out status manager="" cli_line window_line
+  if [[ -e $HOME/.local/bin/omabib || -e $HOME/.local/lib/omabib || -e ${XDG_DATA_HOME:-$HOME/.local/share}/omabib ]]; then
+    echo "FAIL: home already has Omabib, so this is not a bare install" >&2
+    exit 1
+  fi
+  set +e
+  out=$(OMABIB_DOWNLOAD_URL="file://$dist" OMABIB_VERSION="v$version" sh < "$source_dir/scripts/get.sh" 2>&1)
+  status=$?
+  set -e
+  printf '%s\n' "$out"
+  if [[ $status -eq 0 ]]; then
+    echo "FAIL: bare install succeeded" >&2
+    exit 1
+  fi
+  if [[ -e $HOME/.local/bin/omabib || -e $HOME/.local/lib/omabib || -e ${XDG_DATA_HOME:-$HOME/.local/share}/omabib || -e $HOME/.local/share/applications/omabib.desktop ]]; then
+    echo "FAIL: bare install left files behind" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$out" | grep -q 'error while loading shared libraries'; then
+    echo "FAIL: raw loader error instead of package names" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out" | grep -q 'Nothing was installed' || { echo "FAIL: installer did not say nothing was installed" >&2; exit 1; }
+  if command -v apt-get >/dev/null; then manager=apt
+  elif command -v dnf >/dev/null; then manager=dnf
+  elif command -v pacman >/dev/null; then manager=pacman
+  else
+    echo "FAIL: no apt, dnf or pacman" >&2
+    exit 1
+  fi
+  mapfile -t lines < <(printf '%s\n' "$out" | grep -E '^  sudo ')
+  [[ ${#lines[@]} -eq 2 ]] || { echo "FAIL: expected a command line and a window package line" >&2; exit 1; }
+  cli_line=${lines[0]}
+  window_line=${lines[1]}
+  case $manager in
+    apt)
+      [[ $cli_line == *'sudo apt install '*libfontconfig1* && $cli_line == *libfreetype6* ]] || { echo "FAIL: apt CLI packages" >&2; exit 1; }
+      [[ $cli_line != *libgl1* && $window_line == *'sudo apt install '*libgl1* && $window_line == *libxcb1* && $window_line != *libfontconfig1* && $window_line != *libfreetype6* ]] || { echo "FAIL: apt window packages" >&2; exit 1; }
+      ;;
+    dnf)
+      [[ $cli_line == *'sudo dnf install '*fontconfig* && $cli_line == *freetype* && $cli_line != *libglvnd* ]] || { echo "FAIL: dnf CLI packages" >&2; exit 1; }
+      [[ $window_line == *'sudo dnf install '*libglvnd* && $window_line == *libxcb* && $window_line != *fontconfig* && $window_line != *freetype* ]] || { echo "FAIL: dnf window packages" >&2; exit 1; }
+      ;;
+    pacman)
+      [[ $cli_line == *'sudo pacman -S '*fontconfig* && $cli_line == *freetype2* && $cli_line != *libglvnd* ]] || { echo "FAIL: pacman CLI packages" >&2; exit 1; }
+      [[ $window_line == *'sudo pacman -S '*libglvnd* && $window_line == *libxcb* && $window_line != *fontconfig* && $window_line != *freetype2* ]] || { echo "FAIL: pacman window packages" >&2; exit 1; }
+      ;;
+  esac
+  echo "PASS: bare container refused install and named $manager packages"
+}
+if [[ $(uname -s) == Linux && $mode != install ]]; then
+  install_base_tools
+  bash "$source_dir/scripts/test_missing_libraries.sh"
+  bare_container_refuses
+  if [[ $mode == bare ]]; then exit 0; fi
+  install_desktop_libraries
 fi
-version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$source_dir/manifest.json" | head -n 1)
 OMABIB_DOWNLOAD_URL="file://$dist" OMABIB_VERSION="v$version" sh < "$source_dir/scripts/get.sh"
 export PATH="$HOME/.local/bin:$PATH"
 [[ $(omabib --version) == "omabib $version" ]] || { echo "FAIL: omabib --version" >&2; exit 1; }

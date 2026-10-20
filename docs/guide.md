@@ -275,7 +275,7 @@ A backup is a consistent copy, safe to make while Omabib runs; don't copy `libra
 
 ## The command line
 
-The `omabib` command does most of what the window does:
+The `omabib` command does most of what the window does. On a minimal Linux system the installer names the fontconfig and freetype packages for this command, and the OpenGL, X11 and xcb packages for the window, then stops with nothing copied.
 
 ```bash
 omabib open                      # show or hide the window

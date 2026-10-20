@@ -36,6 +36,7 @@ Then open **Omabib** from your applications (Spotlight or Launchpad on a Mac), o
 
 - **Runs on** Linux on x86-64 (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and most others) and macOS 13 or newer on Apple silicon.
 - **No admin password or developer tools.** Everything goes into your home folder, checked against the release's checksums first ([the script](scripts/get.sh)).
+- **A normal desktop already has the libraries.** On a minimal Linux system the installer stops and prints two package lists: fontconfig and freetype for the `omabib` command, and OpenGL, X11 and xcb for the window. It uses apt, dnf or pacman, and it copies nothing until those packages are installed.
 - **To update,** run the same command again. Your library and settings stay as they are.
 
 On a Mac, the first time you open Settings or a chat, macOS may offer to install its command line tools, which include Python. Accept, and you're set.
@@ -173,7 +174,8 @@ rm -f ~/.local/bin/omabib ~/.local/bin/omabib-*
 
 - **`omabib: command not found`.** Open a new terminal. If that doesn't help, add `~/.local/bin` to your `PATH`: put `export PATH="$HOME/.local/bin:$PATH"` at the end of `~/.profile` (on a Mac, `~/.zprofile`).
 - **The installer says `python3` is missing.** Omabib's helpers use Python 3, which most Linux desktops include. Install it (`sudo pacman -S python`, `sudo apt install python3` or `sudo dnf install python3`) and run the install command again.
-- **The app doesn't open on Linux.** Run `omabib-desktop` in a terminal to see why. On a very minimal system, `ldd ~/.local/lib/omabib/bin/omabib-desktop | grep 'not found'` lists the system libraries it's missing.
+- **The installer lists missing Linux libraries.** It prints one command for the `omabib` program (fontconfig and freetype) and another for the window (OpenGL, X11 and xcb), for apt, dnf or pacman, then exits. Nothing is installed. Install those packages and run the command again.
+- **The app doesn't open on Linux.** Run `omabib-desktop` in a terminal to see why.
 - **macOS says Omabib can't be opened.** That happens only to a copy downloaded with a web browser. Run `xattr -dr com.apple.quarantine ~/Applications/Omabib.app`, or install with the command above instead.
 - **Chat can't find Claude Code or Codex.** Install it, run `claude` or `codex` once in a terminal to sign in, then choose it in **Settings**.
 - **Something else?** [Open an issue](https://github.com/atomashevic/omabib/issues) with what happened and the output of `omabib --version` and `uname -sm`.

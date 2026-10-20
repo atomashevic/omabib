@@ -1,6 +1,6 @@
 # JSON interface
 
-All operations use `omabib call METHOD` with one JSON object on stdin. The socket protocol is newline-delimited JSON:
+All operations use `omabib call METHOD` with one JSON object on stdin. On Linux that command needs fontconfig and freetype, and the window needs OpenGL, X11 and xcb; the installer names the apt, dnf or pacman packages for each and copies nothing when they are missing. The socket protocol is newline-delimited JSON:
 
 ```json
 {"v":1,"id":1,"method":"search","params":{"query":"network","limit":8}}
