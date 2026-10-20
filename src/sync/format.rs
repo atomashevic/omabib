@@ -12,6 +12,11 @@ pub fn batch_path(device: &str, seq: i64) -> String {
     format!("changes/{device}/{seq:010}.jsonl.gz")
 }
 
+/// Highlight batches. An older client never reads this path.
+pub fn annotation_batch_path(device: &str, seq: i64) -> String {
+    format!("annotations/changes/{device}/{seq:010}.jsonl.gz")
+}
+
 pub fn device_path(device: &str) -> String {
     format!("devices/{device}.json")
 }

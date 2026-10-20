@@ -183,7 +183,7 @@ Sync keeps your library the same on all your computers, through storage you alre
 
 From then on, sync runs by itself: about 30 seconds after you stop editing, every 5 minutes, when the window opens, and when you press **Sync**. Changes from other computers appear in the open window.
 
-**What syncs:** references, notes and their clips, projects, attachments and cached AI summaries. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
+**What syncs:** references, notes and their clips, projects, attachments, cached AI summaries, and text highlights. Highlights are kept in the library and synced beside it. They are not written into the PDF. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
 
 **When edits meet:**
 

@@ -4,6 +4,7 @@ pub mod attachments;
 pub mod chat;
 pub mod sync;
 pub mod db;
+pub mod highlights;
 pub mod ingest;
 pub mod math;
 pub mod mcp;

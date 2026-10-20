@@ -251,6 +251,7 @@ impl Library {
         }
         let c = read_connection(&path)?;
         let version: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let fresh = version == 0;
         ensure!(
             version <= 1,
             "Database schema {version} is newer than this Omabib version"
@@ -273,7 +274,11 @@ impl Library {
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
         crate::chat::migrate(&c)?;
+        // Backup an existing library before the table exists, then create it.
+        // user_version stays 1.
+        crate::highlights::ensure_table(&c, &path, fresh)?;
         crate::sync::migrate(&c)?;
+        crate::sync::annotations::drop_orphans(&c)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let chats = crate::chat::Chats::new(&path);
@@ -581,6 +586,8 @@ impl Library {
                     "DELETE FROM attachments WHERE ref_id=?",
                     "DELETE FROM associations WHERE ref_id=?",
                     "DELETE FROM external_summaries WHERE ref_id=?",
+                    // No foreign key: an older client can still delete the reference.
+                    "DELETE FROM highlights WHERE ref_id=?",
                 ] {
                     tx.execute(sql, [rid])?;
                 }
