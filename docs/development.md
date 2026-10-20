@@ -19,7 +19,7 @@ cmake --build build/desktop -j
 
 `scripts/install.sh` installs `target/release/omabib` (or `$CARGO_TARGET_DIR/release/omabib`, or a path you give it) and `build/desktop/omabib-desktop` against the system's Qt. To update, keep any local changes, then `git pull --ff-only` and run the same steps again.
 
-To build what a release ships, with Qt bundled (on a Mac, the only way to install from source), do what the [release workflow](../.github/workflows/release.yml) does. `QT` is the Qt you built with, such as `~/Qt/6.10.3/macos`, and the version must be the one in `Cargo.toml`:
+To build what a release ships, with Qt bundled (on a Mac, the only way to install from source), do what the [release workflow](../.github/workflows/release.yml) does. `QT` is the Qt you built with, such as `~/Qt/6.10.3/macos`. `--version` is `v` plus the semver shared by `Cargo.toml`, `manifest.json` and `desktop/CMakeLists.txt`. On this tree that is `v0.1.1`, and `omabib --version` must print `omabib 0.1.1`. `scripts/package-release.py` refuses any other value:
 
 ```bash
 cargo build --release --locked
@@ -27,12 +27,12 @@ cmake -S desktop -B build/desktop -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH
 cmake --build build/desktop -j
 # macOS:
 scripts/bundle-macos-app build/desktop/omabib-desktop.app target/release/omabib "$QT" target/app
-python3 scripts/package-release.py --version v0.1.0 --platform macos-arm64 --app target/app
+python3 scripts/package-release.py --version v0.1.1 --platform macos-arm64 --app target/app
 # Linux:
 scripts/bundle-linux-app build/desktop/omabib-desktop "$QT" target/app
-python3 scripts/package-release.py --version v0.1.0 --app target/app
+python3 scripts/package-release.py --version v0.1.1 --app target/app
 # Then install the archive the way users do:
-OMABIB_DOWNLOAD_URL="file://$PWD/target/dist" OMABIB_VERSION=v0.1.0 sh scripts/get.sh
+OMABIB_DOWNLOAD_URL="file://$PWD/target/dist" OMABIB_VERSION=v0.1.1 sh scripts/get.sh
 ```
 
 Packaging needs Python 3.12 or newer and network access for uncached crates. `--source` (from a clean checkout) also writes the source archive with vendored dependencies, which builds offline with `./scripts/build.sh --offline`.
@@ -67,7 +67,7 @@ cargo clippy --all-targets -- -D warnings
 python scripts/test_transport.py target/release/omabib
 python3 scripts/test_plugin_entry.py
 python3 scripts/test_plugin_lifecycle.py
-python3 scripts/test_plugin_backend.py target/dist/omabib-0.1.0-linux-x86_64.tar.gz
+python3 scripts/test_plugin_backend.py target/dist/omabib-0.1.1-linux-x86_64.tar.gz
 python scripts/benchmark.py --directory /absolute/scratch/benchmark --binary target/release/omabib
 scripts/test-get target/dist screenshot.png
 scripts/test_missing_libraries.sh
@@ -86,7 +86,15 @@ The benchmark refuses to overwrite a database and uses synthetic metadata, so it
 
 ## Releases
 
-The [release workflow](../.github/workflows/release.yml) builds Linux on Ubuntu 22.04 x86-64 and macOS on Apple silicon, runs the tests, bundles Qt with the app, installs each archive with `get.sh` on fresh Ubuntu 22.04 and 24.04, Debian 12, Fedora and Arch systems and on macOS, opens the app there, and publishes the release when a `v*` tag is pushed. On each Linux image the install job first runs that installer with no library packages, and checks that a bare container is told which packages to install. The tag must match the versions in `Cargo.toml`, `manifest.json` and `desktop/CMakeLists.txt`; update `Cargo.lock` with a version change, and commit everything before tagging. A manual run builds and keeps the archives and a screenshot of the app on each system, without publishing.
+Bump one semver in four places and merge that commit to `main`. The four places are `Cargo.toml` (`package.version`), `Cargo.lock` (the `omabib` package), `manifest.json` (`version`) and `desktop/CMakeLists.txt` (`project(omabib-desktop VERSION …)`). This tree is `0.1.1`. Tag the merged commit `vX.Y.Z`, `v` plus the same semver, and push the tag. GitHub Actions publishes the artifacts.
+
+The [release workflow](../.github/workflows/release.yml) runs on a `v*` tag and when **Release** is started by hand. A tag push is what publishes. A manual Release run is a rehearsal: it builds and keeps the archives and a screenshot of the app on each system, and does not publish.
+
+On a tag, `linux`, `linux-install` and `macos` have to succeed before `publish`. `linux` (Ubuntu 22.04, glibc 2.35) checks that the tag is `v` plus the Cargo version and that `manifest.json` and `desktop/CMakeLists.txt` match, shellchecks the install scripts, builds, tests, bundles Qt `6.10.*`, packs the archive and the vendored source, and installs that archive on the runner. `linux-install` runs `scripts/test-get` on Ubuntu 22.04, Ubuntu 24.04, Debian 12, Fedora 42 and Arch. On each of those images it first runs the installer with no library packages, and checks that a bare container is told which packages to install. `macos` (macOS 15, deployment target 13.0, Apple silicon) packs `Omabib.app`, installs it with `get.sh`, then runs the tests. `publish` writes `SHA256SUMS`, copies `scripts/get.sh` with this tag filled in, and creates the GitHub release. A tag that contains `-` is a prerelease.
+
+Leave a published tag in place. `v0.1.1` is published. Move a tag only when the `linux` job fails before `publish`: fix the tree on a new commit and point the tag at that commit. After `publish`, the next fix is a new version.
+
+After a release is published, [Install test](../.github/workflows/install-test.yml) curls that release's `get.sh` and pipes it to `sh`, which is the README command with the published tag in place of `latest`. It runs on clean macOS 15 and macOS 26. A manual run with an empty tag uses the README command as written (`curl -fsSL https://github.com/atomashevic/omabib/releases/latest/download/get.sh | sh`) and installs the latest release. A manual run with a tag uses that release's `get.sh`. Each run keeps a throwaway home, checks the command, the service and the MCP server, and opens the app. It does not use a real library, a cloud account or a Google Drive folder. A macOS 15 Intel runner checks that `get.sh` refuses Intel Macs and installs nothing. macOS 14 is not included: that runner image retires on 2026-11-02.
 
 The Google and Dropbox sign-in apps' secrets are built in from the repository's Actions secrets `OMABIB_GOOGLE_CLIENT_SECRET` and `OMABIB_DROPBOX_APP_SECRET`. A build without them can't connect those two; for a local build, export the same variables before `cargo build`, or keep the downloaded credentials beside Omabib's `rclone.conf` (`google-client.json`, `dropbox-client.json`).
 
@@ -98,7 +106,7 @@ Each release has:
 - `SHA256SUMS`: checksums for the archives.
 - `get.sh`: the install script, set to install this release.
 
-To install an archive by hand, download it with `SHA256SUMS` into one folder, check it with `sha256sum --check --ignore-missing SHA256SUMS` (on a Mac, compare `shasum -a 256 FILE` with its line in `SHA256SUMS`), extract it and run `./scripts/install.sh` inside. `get.sh` does exactly that; `OMABIB_VERSION=v0.1.0` before `sh` picks a release.
+To install an archive by hand, download it with `SHA256SUMS` into one folder, check it with `sha256sum --check --ignore-missing SHA256SUMS` (on a Mac, compare `shasum -a 256 FILE` with its line in `SHA256SUMS`), extract it and run `./scripts/install.sh` inside. `get.sh` does exactly that; `OMABIB_VERSION=v0.1.1` before `sh` picks a release.
 
 The macOS app is signed ad hoc, not notarized. Installing with `curl` adds no quarantine flag, so it opens normally; a copy downloaded in a browser needs `xattr -dr com.apple.quarantine ~/Applications/Omabib.app`.
 
