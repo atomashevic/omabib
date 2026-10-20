@@ -57,7 +57,7 @@ Omabib began as a plugin for the [Omarchy](https://omarchy.org) shell, and the r
 - After installing plugin QML, run `omarchy-restart-shell`; a rescan keeps the old compiled code.
 - If the installer reports an unmanaged plugin, it found a plugin folder without the `.omabib-managed` marker. Inspect and move it aside before installing again.
 - The service: `systemctl --user status omabib.service` and `journalctl --user -u omabib.service -n 50 --no-pager`.
-- To remove the plugin and its service: `python3 ~/.config/omarchy/plugins/io.github.atomashevic.omabib/scripts/omabib-plugin remove-backend`, then `omarchy plugin remove io.github.atomashevic.omabib`.
+- To uninstall, run `python3 scripts/omabib-plugin remove-backend`. The installed copy is `python3 ~/.config/omarchy/plugins/io.github.atomashevic.omabib/scripts/omabib-plugin remove-backend`. It quits the app, stops and disables `omabib.service` when the unit is installed, deletes that unit, reloads the user daemon, and removes the desktop file, the icons, `~/.local/lib/omabib`, and the `omabib` commands. The plugin directory is removed only when it contains `.omabib-managed`. A Git checkout stays, and the command prints `omarchy plugin remove io.github.atomashevic.omabib`. `~/.local/share/omabib` and `~/.config/omabib` are left as they are.
 
 ## Tests
 
