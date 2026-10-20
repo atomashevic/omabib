@@ -39,6 +39,13 @@ qt_target_qml_sources(omabib-desktop
     QML_FILES ${ui_qml}
     RESOURCES ${ui_resources}
 )
+# The window icon, for X11 taskbars and window switchers. Wayland compositors
+# and the macOS Dock take it from the launcher entry and the bundle instead.
+qt_add_resources(omabib-desktop "omabib_icon"
+    PREFIX "/"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/icons/hicolor/256x256/apps"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/icons/hicolor/256x256/apps/omabib.png"
+)
 target_include_directories(omabib-desktop PRIVATE Quickshell)
 target_link_libraries(omabib-desktop PRIVATE
     Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 quickshell_compat

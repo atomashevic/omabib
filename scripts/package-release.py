@@ -95,6 +95,7 @@ def main():
                     shutil.copytree(args.app / part, stage / part, dirs_exist_ok=True)
                 copy(ROOT / 'packaging/omabib.desktop', stage / 'share/applications/omabib.desktop')
                 copy(ROOT / 'packaging/omabib.svg', stage / 'share/icons/hicolor/scalable/apps/omabib.svg')
+                shutil.copytree(ROOT / 'packaging/icons/hicolor', stage / 'share/icons/hicolor', dirs_exist_ok=True)
             for file in ('packaging/omabib.service', 'scripts/omabib-plugin', 'manifest.json'):
                 copy(ROOT / file, stage / file)
             for helper in HELPERS:

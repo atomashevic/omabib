@@ -163,15 +163,24 @@ fi
 if [[ -x "$bin_dir/omabib-desktop" ]]; then
   entry="$source_dir/share/applications/omabib.desktop"
   [[ -f "$entry" ]] || entry="$source_dir/packaging/omabib.desktop"
-  icon="$source_dir/share/icons/hicolor/scalable/apps/omabib.svg"
-  [[ -f "$icon" ]] || icon="$source_dir/packaging/omabib.svg"
-  if [[ -f "$entry" && -f "$icon" ]]; then
-    mkdir -p "$data_dir/applications" "$data_dir/icons/hicolor/scalable/apps"
-    install -m644 "$icon" "$data_dir/icons/hicolor/scalable/apps/omabib.svg"
+  icons="$source_dir/share/icons/hicolor"
+  [[ -d "$icons" ]] || icons="$source_dir/packaging/icons/hicolor"
+  if [[ -f "$entry" && -d "$icons" ]]; then
+    mkdir -p "$data_dir/applications"
+    # Every size the launchers and taskbars ask for, and the drawing itself.
+    for file in "$icons"/*/apps/omabib.png "$icons/scalable/apps/omabib.svg" "$source_dir/packaging/omabib.svg"; do
+      [[ -f $file ]] || continue
+      size=$(basename "$(dirname "$(dirname "$file")")")
+      [[ $file == "$source_dir/packaging/omabib.svg" ]] && size=scalable
+      mkdir -p "$data_dir/icons/hicolor/$size/apps"
+      install -m644 "$file" "$data_dir/icons/hicolor/$size/apps/${file##*/}"
+    done
     while IFS= read -r line; do
       [[ $line == Exec=* ]] && line="Exec=$bin_dir/omabib-desktop"
       printf '%s\n' "$line"
     done < "$entry" > "$data_dir/applications/omabib.desktop"
+    # Launchers that cache icons and entries see the new ones without a new login.
+    if command -v gtk-update-icon-cache >/dev/null; then gtk-update-icon-cache -q -f -t "$data_dir/icons/hicolor" || true; fi
     if command -v update-desktop-database >/dev/null; then update-desktop-database -q "$data_dir/applications" || true; fi
   fi
 fi

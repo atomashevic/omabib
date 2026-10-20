@@ -136,6 +136,8 @@ def remove_backend():
     data = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
     (data / 'applications/omabib.desktop').unlink(missing_ok=True)
     (data / 'icons/hicolor/scalable/apps/omabib.svg').unlink(missing_ok=True)
+    for icon in (data / 'icons/hicolor').glob('*/apps/omabib.png'):
+        icon.unlink()
     (Path.home() / '.config/systemd/user/omabib.service').unlink(missing_ok=True)
     checked('systemctl', '--user', 'daemon-reload')
     state_path().unlink()

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Draw Omabib's icon, the citation brackets around a point, at every size the
+# installers use: packaging/omabib.svg and packaging/icons/hicolor/ for Linux
+# launchers, and packaging/macos/omabib.png, which bundle-macos-app turns into
+# the app's .icns. Small sizes get heavier strokes so the brackets survive.
+# Needs ImageMagick with SVG support. Run it after changing the drawing.
+set -euo pipefail
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+command -v magick >/dev/null || { echo "render-icons needs ImageMagick (magick)" >&2; exit 1; }
+
+# The drawing on a 64-unit grid: a rounded tile and the glyph on it. $1 is the
+# tile's margin, $2 the stroke width.
+drawing() {
+  local margin=$1 stroke=$2 size
+  size=$((64 - 2 * margin))
+  cat <<SVG
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
+  <!-- Omabib: the brackets of a citation around a point. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f81f7"/>
+      <stop offset="1" stop-color="#0b5cc9"/>
+    </linearGradient>
+  </defs>
+  <rect x="$margin" y="$margin" width="$size" height="$size" rx="$(( size * 14 / 64 ))" fill="url(#tile)"/>
+  <g transform="translate(32 32) scale($(awk "BEGIN { print $size / 64 }")) translate(-32 -32)">
+    <path d="M23 15h-7v34h7M41 15h7v34h-7" fill="none" stroke="#fff" stroke-width="$stroke" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="32" cy="32" r="5.5" fill="#fff"/>
+  </g>
+</svg>
+SVG
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+drawing 2 5.5 > "$source_dir/packaging/omabib.svg"
+for size in 16 24 32 48 64 128 256 512; do
+  case $size in 16) stroke=8 ;; 24) stroke=7 ;; 32) stroke=6.5 ;; *) stroke=5.5 ;; esac
+  drawing 2 "$stroke" > "$work/$size.svg"
+  mkdir -p "$source_dir/packaging/icons/hicolor/${size}x$size/apps"
+  magick -background none -density $((size * 4)) "$work/$size.svg" -resize "${size}x$size" \
+    -strip "$source_dir/packaging/icons/hicolor/${size}x$size/apps/omabib.png"
+done
+# macOS icons sit on a tile with a margin, as the system's own do.
+drawing 6 5 > "$work/macos.svg"
+magick -background none -density 2048 "$work/macos.svg" -resize 1024x1024 -strip "$source_dir/packaging/macos/omabib.png"
+echo "Rendered packaging/omabib.svg, packaging/icons/hicolor/*/apps/omabib.png and packaging/macos/omabib.png"

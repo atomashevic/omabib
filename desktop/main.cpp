@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLocalSocket>
@@ -155,6 +156,10 @@ int main(int argc, char *argv[]) {
     app.setApplicationName("Omabib");
     app.setApplicationDisplayName("Omabib");
     app.setDesktopFileName("omabib");
+#ifndef Q_OS_MACOS
+    // The Dock already shows the bundle's icon; this one would replace it.
+    app.setWindowIcon(QIcon(":/omabib.png"));
+#endif
     // Closing the window hides it; the next launch shows it again at once.
     app.setQuitOnLastWindowClosed(false);
     // Fusion takes App.qml's custom controls on every platform; the native

@@ -86,6 +86,7 @@ def main():
         assert not (home / '.local/bin/omabib').exists()
         assert not app.is_symlink() and not app.exists() and not (home / '.local/lib/omabib').exists()
         assert not (home / '.local/share/applications/omabib.desktop').exists()
+        assert not list((home / '.local/share/icons').glob('hicolor/*/apps/omabib.*'))
         assert tree_hash(plugin) == original
         assert not call('status')['ready']
         # Validate corrupted downloads and traversal before any installation can run.
