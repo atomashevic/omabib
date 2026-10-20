@@ -16,9 +16,6 @@ on:
         default: ''
   release:
     types: [published]
-  # One push of this branch, so the install can run without workflow_dispatch permission. Removed after that run.
-  push:
-    branches: [cursor/macos-install-test-f41e]
 
 permissions:
   contents: read
@@ -65,8 +62,6 @@ jobs:
           set -euo pipefail
           if [[ $EVENT_NAME == release ]]; then
             tag=$RELEASE_TAG
-          elif [[ $EVENT_NAME == push ]]; then
-            tag=v0.1.0
           else
             tag=$INPUT_TAG
           fi
@@ -223,8 +218,6 @@ jobs:
           set -euo pipefail
           if [[ $EVENT_NAME == release ]]; then
             tag=$RELEASE_TAG
-          elif [[ $EVENT_NAME == push ]]; then
-            tag=v0.1.0
           else
             tag=$INPUT_TAG
           fi
