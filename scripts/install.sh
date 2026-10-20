@@ -53,6 +53,164 @@ path_hint() {
        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
   esac
 }
+# Release builds link fontconfig and freetype for the command, and OpenGL,
+# X11 and xcb for the window. Those come from the distro. Name the packages
+# and stop before any installed file is replaced.
+append_word() {
+  local list=$1 word=$2
+  [[ -n $word ]] || { printf '%s' "$list"; return; }
+  case " $list " in
+    *" $word "*) printf '%s' "$list" ;;
+    *) if [[ -n $list ]]; then printf '%s %s' "$list" "$word"; else printf '%s' "$word"; fi ;;
+  esac
+}
+sonames_missing() {
+  ldd "$1" 2>/dev/null | awk '/not found/ { print $1 }' || true
+}
+package_for() {
+  local soname=$1
+  case $distro in
+    apt)
+      case $soname in
+        libfontconfig.so.1) echo libfontconfig1 ;;
+        libfreetype.so.6) echo libfreetype6 ;;
+        libGL.so.1) echo libgl1 ;;
+        libGLX.so.0) echo libglx0 ;;
+        libOpenGL.so.0) echo libopengl0 ;;
+        libEGL.so.1) echo libegl1 ;;
+        libxkbcommon.so.0) echo libxkbcommon0 ;;
+        libX11.so.6) echo libx11-6 ;;
+        libX11-xcb.so.1) echo libx11-xcb1 ;;
+        libxcb-glx.so.0) echo libxcb-glx0 ;;
+        libxcb-randr.so.0) echo libxcb-randr0 ;;
+        libxcb-render.so.0) echo libxcb-render0 ;;
+        libxcb-shape.so.0) echo libxcb-shape0 ;;
+        libxcb-shm.so.0) echo libxcb-shm0 ;;
+        libxcb-sync.so.1) echo libxcb-sync1 ;;
+        libxcb-xfixes.so.0) echo libxcb-xfixes0 ;;
+        libxcb-xkb.so.1) echo libxcb-xkb1 ;;
+        libxcb.so.1) echo libxcb1 ;;
+        libwayland-client.so.0) echo libwayland-client0 ;;
+        libwayland-cursor.so.0) echo libwayland-cursor0 ;;
+        libwayland-egl.so.1) echo libwayland-egl1 ;;
+        libglib-2.0.so.0 | libgthread-2.0.so.0) echo libglib2.0-0 ;;
+        libdbus-1.so.3) echo libdbus-1-3 ;;
+        libbrotlidec.so.1) echo libbrotli1 ;;
+        libgssapi_krb5.so.2) echo libgssapi-krb5-2 ;;
+        *) echo "$soname" ;;
+      esac ;;
+    dnf)
+      case $soname in
+        libfontconfig.so.1) echo fontconfig ;;
+        libfreetype.so.6) echo freetype ;;
+        libGL.so.1 | libGLX.so.0) echo libglvnd-glx ;;
+        libOpenGL.so.0) echo libglvnd-opengl ;;
+        libEGL.so.1) echo libglvnd-egl ;;
+        libxkbcommon.so.0) echo libxkbcommon ;;
+        libX11.so.6) echo libX11 ;;
+        libX11-xcb.so.1) echo libX11-xcb ;;
+        libxcb*.so.*) echo libxcb ;;
+        libwayland-client.so.0) echo libwayland-client ;;
+        libwayland-cursor.so.0) echo libwayland-cursor ;;
+        libwayland-egl.so.1) echo libwayland-egl ;;
+        libglib-2.0.so.0 | libgthread-2.0.so.0) echo glib2 ;;
+        libdbus-1.so.3) echo dbus-libs ;;
+        libbrotlidec.so.1) echo libbrotli ;;
+        libgssapi_krb5.so.2) echo krb5-libs ;;
+        *) echo "$soname" ;;
+      esac ;;
+    pacman)
+      case $soname in
+        libfontconfig.so.1) echo fontconfig ;;
+        libfreetype.so.6) echo freetype2 ;;
+        libGL.so.1 | libGLX.so.0 | libOpenGL.so.0 | libEGL.so.1) echo libglvnd ;;
+        libxkbcommon.so.0) echo libxkbcommon ;;
+        libX11.so.6 | libX11-xcb.so.1) echo libx11 ;;
+        libxcb*.so.*) echo libxcb ;;
+        libwayland*.so.*) echo wayland ;;
+        libglib-2.0.so.0 | libgthread-2.0.so.0) echo glib2 ;;
+        libdbus-1.so.3) echo dbus ;;
+        libbrotlidec.so.1) echo brotli ;;
+        libgssapi_krb5.so.2) echo krb5 ;;
+        *) echo "$soname" ;;
+      esac ;;
+    *) echo "$soname" ;;
+  esac
+}
+packages_for() {
+  local soname package names=""
+  for soname in $1; do
+    package=$(package_for "$soname")
+    names=$(append_word "$names" "$package")
+  done
+  [[ -n $names ]] || return 0
+  # shellcheck disable=SC2086
+  printf '%s\n' $names | sort -u | paste -sd ' ' -
+}
+install_line() {
+  case $distro in
+    apt) printf 'sudo apt install %s' "$1" ;;
+    dnf) printf 'sudo dnf install %s' "$1" ;;
+    pacman) printf 'sudo pacman -S %s' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+require_system_libraries() {
+  local binary=$1 bundle=${2:-} distro=""
+  [[ $(uname -s) == Linux ]] || return 0
+  command -v ldd >/dev/null 2>&1 || return 0
+  if command -v apt-get >/dev/null 2>&1; then distro=apt
+  elif command -v dnf >/dev/null 2>&1; then distro=dnf
+  elif command -v pacman >/dev/null 2>&1; then distro=pacman
+  fi
+  local cli_sonames="" soname desktop_sonames="" dir paths=()
+  while read -r soname; do
+    [[ -n $soname ]] || continue
+    cli_sonames=$(append_word "$cli_sonames" "$soname")
+  done < <(sonames_missing "$binary" | sort -u)
+  # fontconfig's own dependency. ldd cannot see it until fontconfig is installed.
+  case " $cli_sonames " in
+    *" libfontconfig.so.1 "*) cli_sonames=$(append_word "$cli_sonames" "libfreetype.so.6") ;;
+  esac
+  if [[ -n $bundle ]]; then
+    for dir in "$bundle/bin" "$bundle/lib" "$bundle/plugins" "$bundle/qml"; do
+      [[ -d $dir ]] && paths+=("$dir")
+    done
+    if [[ ${#paths[@]} -gt 0 ]]; then
+      while read -r soname; do
+        [[ -n $soname ]] || continue
+        case " $cli_sonames " in
+          *" $soname "*) ;;
+          *) desktop_sonames=$(append_word "$desktop_sonames" "$soname") ;;
+        esac
+      done < <(find "${paths[@]}" -type f \( -name 'omabib-desktop' -o -name '*.so' -o -name '*.so.*' \) \
+        -exec ldd {} + 2>/dev/null | awk '/not found/ { print $1 }' | sort -u || true)
+    fi
+  fi
+  [[ -n $cli_sonames || -n $desktop_sonames ]] || return 0
+  local cli_packages desktop_packages
+  cli_packages=$(packages_for "$cli_sonames")
+  desktop_packages=$(packages_for "$desktop_sonames")
+  echo "Omabib needs libraries this system does not have. Nothing was installed." >&2
+  if [[ -n $cli_packages ]]; then
+    case " $cli_sonames " in
+      *" libfontconfig.so.1 "* | *" libfreetype.so.6 "*)
+        echo "The omabib command needs fontconfig and freetype:" >&2 ;;
+      *) echo "The omabib command needs:" >&2 ;;
+    esac
+    echo "  $(install_line "$cli_packages")" >&2
+  fi
+  if [[ -n $desktop_packages ]]; then
+    if [[ -n $cli_packages ]]; then
+      echo "The window also needs OpenGL, X11 and xcb:" >&2
+    else
+      echo "The window needs OpenGL, X11 and xcb:" >&2
+    fi
+    echo "  $(install_line "$desktop_packages")" >&2
+  fi
+  echo "Install those packages, then run the installer again." >&2
+  exit 1
+}
 
 if [[ $(uname -s) == Darwin ]]; then
   app="$source_dir/Omabib.app"
@@ -110,6 +268,11 @@ for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null || { echo "Required runtime command missing: $tool" >&2; exit 1; }
 done
 # Check runtime compatibility and package completeness before changing installed files.
+if [[ -f "$source_dir/lib/libQt6Core.so.6" && -x "$source_dir/bin/omabib-desktop" ]]; then
+  require_system_libraries "$binary" "$source_dir"
+else
+  require_system_libraries "$binary"
+fi
 "$binary" --version
 files=(skills/omabib/SKILL.md LICENSE)
 for helper in "${helpers[@]}"; do files+=("scripts/$helper"); done
