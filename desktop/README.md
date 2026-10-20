@@ -1,8 +1,9 @@
-# omabib-desktop (prototype)
+# omabib-desktop
 
-Omabib as an ordinary Qt 6 desktop app, without Omarchy or Quickshell. It runs
+Omabib's window, an ordinary Qt 6 desktop app for Linux and macOS. It runs
 the same `plugin/App.qml` the Omarchy plugin runs, unchanged, compiled into the
-binary as Qt resources (`qrc:/ui`).
+binary as Qt resources (`qrc:/ui`). Releases bundle it with its Qt; see
+[docs/development.md](../docs/development.md).
 
 ## Build and run
 
@@ -62,11 +63,11 @@ copy, a local socket for later launches, window raising and IPC dispatch.
 
 ## Not done yet
 
-- Terminal chat uses `xdg-terminal-exec`, and installing rclone uses
-  `omarchy-pkg-add`.
+- The helpers behind terminal chat need `xdg-terminal-exec`, and desktop chat
+  the `chatgpt` and `claude-desktop` commands, so neither works on macOS yet.
+  The in-app chat works everywhere.
+- **Install rclone** in the Sync dialog runs `omarchy-pkg-add`, so elsewhere
+  rclone has to be installed by hand.
 - On Wayland, raising a window that is shown but unfocused depends on the
   compositor honoring xdg-activation (Hyprland: `misc:focus_on_activate`).
   Showing it from hidden always takes focus.
-- No macOS build yet. `Process`'s `stdout`/`stderr` property names will
-  likely collide with the C library's macros there.
-- No `.desktop` file, icon or package.
