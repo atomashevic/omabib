@@ -60,12 +60,16 @@ def main():
         original = tree_hash(plugin)
         assert call('install', '--archive', str(archive))['ready']
         assert call('status')['ready']
-        assert call('status')['desktop'] == ''
+        # An archive that bundles the app installs it, and the plugin then
+        # hands Omabib to it; without one, it reports the app once it appears.
         app = home / '.local/bin/omabib-desktop'
-        app.write_text('#!/bin/sh\n')
-        app.chmod(0o755)
-        assert call('status')['desktop'] == str(app)
-        app.unlink()
+        bundled = app.exists()
+        assert call('status')['desktop'] == (str(app) if bundled else '')
+        if not bundled:
+            app.write_text('#!/bin/sh\n')
+            app.chmod(0o755)
+            assert call('status')['desktop'] == str(app)
+            app.unlink()
         assert tree_hash(plugin) == original, 'Backend install dirtied the plugin checkout'
         assert (legacy / 'keep.txt').read_text() == 'old UI backup'
         assert 'plugin disable omabib' in (scratch / 'commands.log').read_text()
@@ -80,6 +84,8 @@ def main():
         assert call('remove-backend')['removed']
         assert data.read_bytes() == b'preserve library'
         assert not (home / '.local/bin/omabib').exists()
+        assert not app.is_symlink() and not app.exists() and not (home / '.local/lib/omabib').exists()
+        assert not (home / '.local/share/applications/omabib.desktop').exists()
         assert tree_hash(plugin) == original
         assert not call('status')['ready']
         # Validate corrupted downloads and traversal before any installation can run.
