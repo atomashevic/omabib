@@ -22,6 +22,11 @@ jobs:
     # Manual runs verify packaging without publishing. Push a version tag to publish.
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    env:
+      # Omabib's Google and Dropbox app secrets, built into the binary. Desktop
+      # apps cannot keep them confidential; they live here, not in the source.
+      OMABIB_GOOGLE_CLIENT_SECRET: ${{ secrets.OMABIB_GOOGLE_CLIENT_SECRET }}
+      OMABIB_DROPBOX_APP_SECRET: ${{ secrets.OMABIB_DROPBOX_APP_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - name: Install build dependencies
@@ -119,6 +124,10 @@ jobs:
     timeout-minutes: 90
     env:
       MACOSX_DEPLOYMENT_TARGET: '13.0'
+      # Omabib's Google and Dropbox app secrets, built into the binary. Desktop
+      # apps cannot keep them confidential; they live here, not in the source.
+      OMABIB_GOOGLE_CLIENT_SECRET: ${{ secrets.OMABIB_GOOGLE_CLIENT_SECRET }}
+      OMABIB_DROPBOX_APP_SECRET: ${{ secrets.OMABIB_DROPBOX_APP_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup update stable && rustup default stable

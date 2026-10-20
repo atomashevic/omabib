@@ -28,12 +28,25 @@ struct App {
     waiting: &'static str,
 }
 
-/// Google: the "files Omabib creates" permission (drive.file).
-const GOOGLE_CLIENT_ID: &str = "";
-const GOOGLE_CLIENT_SECRET: &str = "";
+/// A desktop app's secret, built in from the environment at compile time.
+/// Release builds get it from the repository's Actions secrets; a build
+/// without it relies on the override above.
+macro_rules! built_in_secret {
+    ($name:literal) => {
+        match option_env!($name) {
+            Some(secret) => secret,
+            None => "",
+        }
+    };
+}
+
+/// Google: the "files Omabib creates" permission (drive.file), from the
+/// omabib-sync Cloud project's "Omabib Desktop" client.
+const GOOGLE_CLIENT_ID: &str = "262086978682-fo84ireoun2ineqa2oioai3f1ni18e7q.apps.googleusercontent.com";
+const GOOGLE_CLIENT_SECRET: &str = built_in_secret!("OMABIB_GOOGLE_CLIENT_SECRET");
 /// Dropbox: an App Folder app, which only sees Dropbox → Apps → Omabib.
 const DROPBOX_APP_KEY: &str = "p67jtvc00gbcb83";
-const DROPBOX_APP_SECRET: &str = "";
+const DROPBOX_APP_SECRET: &str = built_in_secret!("OMABIB_DROPBOX_APP_SECRET");
 
 /// The app's client id and secret, when this build has them.
 fn credentials(app: &App) -> Option<(String, String)> {
@@ -82,8 +95,8 @@ const PROVIDERS: [Provider; 3] = [
             secret: GOOGLE_CLIENT_SECRET,
             env: "GOOGLE",
             file: "google-client.json",
-            needs_secret: false,
-            waiting: "Waiting for Omabib's Google app registration",
+            needs_secret: true,
+            waiting: "Waiting for Omabib's Google app secret",
         }),
         params: &["scope", "drive.file"],
     },
