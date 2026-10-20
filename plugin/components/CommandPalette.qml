@@ -184,6 +184,7 @@ Popup {
             header: Item { width: list.width; height: root.theme.space(2) }
             footer: Item { width: list.width; height: root.theme.space(8) }
             ScrollBar.vertical: ScrollBar { contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line } }
+            WheelScroll { theme: root.theme }
 
             delegate: Item {
                 id: row

@@ -280,6 +280,7 @@ FocusScope {
                 // Mouse drags select text; the wheel and scroll bar scroll.
                 acceptedButtons: Qt.NoButton
                 flickableDirection: Flickable.VerticalFlick
+                WheelScroll { theme: root.theme }
 
                 function ensureVisible(r) {
                     var y = area.mapToItem(column, 0, r.y).y

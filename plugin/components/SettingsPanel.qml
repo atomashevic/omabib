@@ -15,6 +15,8 @@ ColumnLayout {
 
     spacing: theme.space(8)
 
+    WheelScroll { theme: root.theme }
+
     component Hint: Text {
         Layout.fillWidth: true
         color: root.theme.dim

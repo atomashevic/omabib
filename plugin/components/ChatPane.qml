@@ -272,6 +272,7 @@ FocusScope {
                 bottomMargin: root.theme.space(12)
                 onContentYChanged: root.atBottom = atYEnd || contentHeight <= height
                 ScrollBar.vertical: ScrollBar { contentItem: Rectangle { implicitWidth: root.theme.space(4); color: root.theme.line } }
+                WheelScroll { theme: root.theme }
 
                 delegate: Loader {
                     id: row
