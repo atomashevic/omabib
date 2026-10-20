@@ -2,7 +2,7 @@
 //! is never written. Highlights are not notes, they are not searched, and they
 //! follow the PDF rather than a project.
 use crate::db::{Library, id};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -200,4 +200,128 @@ pub fn delete(lib: &Library, id: &str) -> Result<()> {
 pub fn get(lib: &Library, id: &str) -> Result<Option<Value>> {
     let c = crate::db::read_connection(&lib.path)?;
     row(&c, id)
+}
+
+fn reference_id(c: &Connection, key: &str) -> Result<String> {
+    c.query_row(
+        "SELECT id FROM refs WHERE id=?1 OR citekey=?1",
+        [key],
+        |r| r.get(0),
+    )
+    .context("Reference not found")
+}
+
+fn optional_str<'a>(a: &'a Value, key: &str) -> Result<Option<&'a str>> {
+    match a.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => bail!("{key} must be a string"),
+    }
+}
+
+fn boxes(v: &Value) -> Result<Vec<[f64; 4]>> {
+    let list = v.as_array().context("rects must be an array of boxes")?;
+    let mut out = Vec::with_capacity(list.len());
+    for b in list {
+        let n = b.as_array().context("each highlight box is four numbers")?;
+        ensure!(n.len() == 4, "each highlight box is four numbers");
+        let mut r = [0.0; 4];
+        for (i, x) in n.iter().enumerate() {
+            r[i] = x.as_f64().context("highlight boxes must be numbers")?;
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+/// `list_highlights`. One reference, or the whole library when `ref_id` is
+/// omitted. Newest `updated_at` first, then `id` descending.
+pub fn list(lib: &Library, a: &Value) -> Result<Value> {
+    let limit = match a.get("limit") {
+        None | Some(Value::Null) => 50,
+        Some(v) => v.as_u64().context("limit must be a whole number")?,
+    };
+    ensure!((1..=100).contains(&limit), "limit must be from 1 to 100");
+    let offset = match a.get("cursor") {
+        None | Some(Value::Null) => 0,
+        Some(v) => v.as_u64().context("cursor must be a whole number")?,
+    };
+    let c = crate::db::read_connection(&lib.path)?;
+    let ref_id = match a.get("ref_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.is_empty() => None,
+        Some(Value::String(s)) => Some(reference_id(&c, s)?),
+        Some(_) => bail!("ref_id must be a string"),
+    };
+    let mut stmt = c.prepare(
+        "SELECT h.id, h.ref_id, coalesce(r.citekey, ''), h.attachment_id, h.page, h.quote, \
+         h.color, h.comment, h.created_at, h.updated_at, \
+         CASE WHEN a.fingerprint IS NOT NULL AND a.fingerprint != '' AND a.fingerprint = h.source_sha256 \
+              THEN 0 ELSE 1 END \
+         FROM highlights h \
+         LEFT JOIN refs r ON r.id = h.ref_id \
+         LEFT JOIN attachments a ON a.id = h.attachment_id \
+         WHERE (?1 IS NULL OR h.ref_id = ?1) \
+         ORDER BY h.updated_at DESC, h.id DESC \
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let mut highlights = stmt
+        .query_map(params![ref_id, (limit + 1) as i64, offset as i64], |r| {
+            Ok(json!({
+                "id": r.get::<_, String>(0)?,
+                "ref_id": r.get::<_, String>(1)?,
+                "citekey": r.get::<_, String>(2)?,
+                "attachment_id": r.get::<_, String>(3)?,
+                "page": r.get::<_, i64>(4)?,
+                "quote": r.get::<_, String>(5)?,
+                "color": r.get::<_, String>(6)?,
+                "comment": r.get::<_, String>(7)?,
+                "created_at": r.get::<_, String>(8)?,
+                "updated_at": r.get::<_, String>(9)?,
+                "stale": r.get::<_, i64>(10)? != 0,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = highlights.len() > limit as usize;
+    highlights.truncate(limit as usize);
+    Ok(json!({
+        "highlights": highlights,
+        "next_cursor": if more { json!(offset + limit) } else { Value::Null },
+    }))
+}
+
+/// `add_highlight`. Always stores yellow. The PDF file is not written.
+pub fn add(lib: &Library, a: &Value) -> Result<Value> {
+    if let Some(color) = optional_str(a, "color")? {
+        ensure!(
+            color == "yellow",
+            "A new highlight is yellow; change the color with update_highlight"
+        );
+    }
+    let key = crate::db::required(a, "ref_id")?;
+    let ref_id = reference_id(&crate::db::read_connection(&lib.path)?, key)?;
+    let attachment_id = crate::db::required(a, "attachment_id")?;
+    let page = match a.get("page") {
+        None | Some(Value::Null) => bail!("page is required"),
+        Some(v) => v.as_i64().context("page must be a whole number")?,
+    };
+    let rects = boxes(a.get("rects").context("rects is required")?)?;
+    let quote = a
+        .get("quote")
+        .and_then(Value::as_str)
+        .context("quote is required")?;
+    create(lib, &ref_id, attachment_id, page, &rects, quote)
+}
+
+/// `update_highlight`. Color, comment, or both. Geometry stays.
+pub fn change(lib: &Library, a: &Value) -> Result<Value> {
+    let id = crate::db::required(a, "id")?;
+    update(lib, id, optional_str(a, "color")?, optional_str(a, "comment")?)
+}
+
+/// `delete_highlight`.
+pub fn remove(lib: &Library, a: &Value) -> Result<Value> {
+    let id = crate::db::required(a, "id")?.to_string();
+    delete(lib, &id)?;
+    Ok(json!({"id": id, "deleted": true}))
 }
