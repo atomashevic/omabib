@@ -170,8 +170,9 @@ if [[ -x "$bin_dir/omabib-desktop" ]]; then
     # Every size the launchers and taskbars ask for, and the drawing itself.
     for file in "$icons"/*/apps/omabib.png "$icons/scalable/apps/omabib.svg" "$source_dir/packaging/omabib.svg"; do
       [[ -f $file ]] || continue
-      size=$(basename "$(dirname "$(dirname "$file")")")
-      [[ $file == "$source_dir/packaging/omabib.svg" ]] && size=scalable
+      # The size folder above apps/, such as 48x48; the bare drawing is scalable.
+      size=scalable
+      if [[ $file == */apps/* ]]; then size=${file%/apps/*}; size=${size##*/}; fi
       mkdir -p "$data_dir/icons/hicolor/$size/apps"
       install -m644 "$file" "$data_dir/icons/hicolor/$size/apps/${file##*/}"
     done
