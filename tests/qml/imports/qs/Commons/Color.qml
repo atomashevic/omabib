@@ -4,6 +4,9 @@ import QtQuick
 // Offscreen stand-in for the shell's palette, with the City 783 values the
 // shell resolves on the development desktop.
 QtObject {
+    // Empty unless a colors.toml names light or dark. The offscreen stand-in
+    // has no file, so the window uses the background's luminance.
+    property string mode: ""
     property color background: "#181a1f"
     property color foreground: "#b9bec6"
     property color accent: "#ad2222"

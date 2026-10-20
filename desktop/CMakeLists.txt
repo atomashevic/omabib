@@ -4,6 +4,7 @@ project(omabib-desktop VERSION 0.1.1 LANGUAGES CXX)
 # Omabib as an ordinary desktop app: plugin/App.qml in a plain Qt window,
 # with stand-ins for the Quickshell and Omarchy shell modules it imports.
 find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Network Qml Quick QuickControls2)
+find_package(Qt6 6.5 QUIET COMPONENTS QuickTest)
 qt_standard_project_setup(REQUIRES 6.5)
 
 add_subdirectory(Quickshell)
@@ -62,3 +63,18 @@ if(APPLE)
     )
 endif()
 install(TARGETS omabib-desktop RUNTIME DESTINATION bin BUNDLE DESTINATION .)
+
+# Offscreen check for the Omarchy palette. The modules are static, so the
+# system qmltestrunner cannot load them; this runner is Quick Test linked
+# to the same libraries the app uses.
+if(TARGET Qt6::QuickTest)
+    file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../tests/omarchy_theme" omarchy_theme_tests)
+    qt_add_executable(tst_omarchy_theme ../tests/omarchy_theme/main.cpp)
+    target_compile_definitions(tst_omarchy_theme PRIVATE
+        "QUICK_TEST_SOURCE_DIR=\"${omarchy_theme_tests}\""
+    )
+    target_link_libraries(tst_omarchy_theme PRIVATE
+        Qt6::QuickTest Qt6::Gui Qt6::Network Qt6::Quick
+        quickshell_compat quickshell_compatplugin quickshell_ioplugin qs_commonsplugin
+    )
+endif()

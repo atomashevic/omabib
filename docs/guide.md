@@ -165,7 +165,7 @@ Omabib's own chats are connected already. If you used the old `omabib-mcp` compa
 
 The **Settings** button at the bottom of the sidebar opens them. Changes apply immediately and are saved in `~/.config/omabib/settings.json`; `omabib-settings` prints or changes them from a terminal (`omabib-settings set ai_cli claude`).
 
-- **Theme:** System (follows your desktop's light or dark setting), Light or Dark.
+- **Theme:** System (follows your desktop's light or dark setting), Light, Dark, or Omarchy. Omarchy appears when `~/.local/state/omarchy/current/theme/colors.toml` parses, and a new config chooses it. System, Light or Dark already written in `settings.json` stay as they are. An open window follows a theme change, including when Omarchy replaces the theme directory. `mode` `light` or `dark` in that file decides which; with no `mode`, the background does. A file that does not parse keeps the palette already on screen.
 - **Reading font:** Mona Sans or Source Serif 4, for titles, abstracts and notes.
 - **PDF pages:** **Original colors** or **Theme colors** (see [Theme colors](#theme-colors)).
 - **Terminal chat:** Codex CLI or Claude Code, for chats and **Chat in…** in a terminal. **Connect Codex** is here too.
