@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.3] - 2026-10-20
 
-v0.1.2 was tagged on 2026-10-20 and the release was never published. The notes below are the user-facing changes written for 0.1.2, the mouse-wheel fix, and the install fix.
+v0.1.2 was tagged but never published. This release carries those changes: the Omarchy key and theme, uninstall, the field-merge sync fix, the install preflight, and older rclone, plus the mouse-wheel fix and the Linux package-list fix.
 
 ### Added
 
@@ -57,7 +57,7 @@ v0.1.2 was tagged on 2026-10-20 and the release was never published. The notes b
 - Sync through rclone to Google Drive, Dropbox, OneDrive, or a folder you already sync. Google Drive signs in as Omabib's own app and only sees My Drive → Omabib. Dropbox signs in through Omabib's App Folder and only sees Dropbox → Apps → Omabib.
 - The library stays on the computer, in `~/.local/share/omabib/`. BibTeX goes in and out, and `omabib backup` writes a backup. Free software, AGPL-3.0-or-later.
 
-[Unreleased]: https://github.com/atomashevic/omabib/compare/v0.1.2...HEAD
-[0.1.3]: https://github.com/atomashevic/omabib/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/atomashevic/omabib/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/atomashevic/omabib/compare/v0.1.1...v0.1.3
 [0.1.1]: https://github.com/atomashevic/omabib/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/atomashevic/omabib/releases/tag/v0.1.0
