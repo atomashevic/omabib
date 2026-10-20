@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import "Wheel.js" as Wheel
 
 // A PDF reader tab. The service renders pages with MuPDF; this pane lays them
 // out, selects and searches text, and turns a dragged rectangle into a clip
@@ -189,44 +190,16 @@ FocusScope {
         if (!doc) return
         page = Math.max(1, Math.min(doc.page_count, page))
         var y = pageTop(page) + (offsetPt ? Math.max(0, offsetPt * zoom - pages.height / 3) : 0)
-        wheelGlide.stop()
         pages.contentY = Math.max(0, Math.min(y, pages.contentHeight - pages.height))
         updateCurrentPage()
     }
     function scrollBy(dy) {
-        wheelGlide.stop()
         pages.contentY = Math.max(0, Math.min(pages.contentY + dy, pages.contentHeight - pages.height))
     }
-    // A wheel notch scrolls a fixed step, GTK's: the viewport's height to the
-    // 2/3 power (about 80 px in a 750 px window), eased over a short glide that
-    // further notches extend. A touchpad scrolls by the distance it reports.
-    // Flickable's own wheel handling flicks instead, so the distance depended
-    // on how fast the wheel turned.
+    // Same notch and touchpad rules as every other view.
     function wheelScroll(event) {
-        var dx = event.pixelDelta.x, dy = event.pixelDelta.y
-        var touchpad = dx !== 0 || dy !== 0
-        if (!touchpad) {
-            var step = Math.pow(pages.height, 2 / 3)
-            dx = event.angleDelta.x / 120 * step
-            dy = event.angleDelta.y / 120 * step
-        }
-        // Shift turns a vertical wheel sideways.
-        if ((event.modifiers & Qt.ShiftModifier) && dx === 0) { dx = dy; dy = 0 }
-        if (dx !== 0) pages.contentX = Math.max(0, Math.min(pages.contentX - dx, pages.contentWidth - pages.width))
-        if (dy === 0) return
-        var bottom = Math.max(0, pages.contentHeight - pages.height)
-        if (touchpad) {
-            wheelGlide.stop()
-            pages.contentY = Math.max(0, Math.min(pages.contentY - dy, bottom))
-            return
-        }
-        var to = Math.max(0, Math.min((wheelGlide.running ? wheelGlide.to : pages.contentY) - dy, bottom))
-        wheelGlide.stop()
-        wheelGlide.from = pages.contentY
-        wheelGlide.to = to
-        wheelGlide.start()
+        Wheel.apply(pages, event, Wheel.stepFor(root.theme))
     }
-    NumberAnimation { id: wheelGlide; target: pages; property: "contentY"; duration: 140; easing.type: Easing.OutCubic }
     function updateCurrentPage() {
         if (!doc) return
         var top = pages.contentY, bottom = top + pages.height, probe = top + pages.height / 3
@@ -278,7 +251,6 @@ FocusScope {
         updateCurrentPage()
     }
     function scrollTo(x, y) {
-        wheelGlide.stop()
         pages.contentX = Math.max(0, Math.min(x, pages.contentWidth - pages.width))
         pages.contentY = Math.max(0, Math.min(y, pages.contentHeight - pages.height))
     }
@@ -463,6 +435,8 @@ FocusScope {
                     Layout.fillHeight: true
                     clip: true
                     model: root.doc ? root.doc.outline : []
+                    boundsBehavior: Flickable.StopAtBounds
+                    WheelScroll { theme: root.theme }
                     delegate: Rectangle {
                         required property var modelData
                         width: outlineList.width
@@ -533,6 +507,7 @@ FocusScope {
                 WheelHandler {
                     id: pagesWheel
                     target: null
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                     onWheel: event => {
                         if (event.modifiers & Qt.ControlModifier) root.wheelZoom(event, pagesWheel.point.scenePosition)
                         else root.wheelScroll(event)
@@ -611,6 +586,7 @@ FocusScope {
                 WheelHandler {
                     id: controlsWheel
                     target: null
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                     onWheel: event => {
                         if (event.modifiers & Qt.ControlModifier) root.wheelZoom(event, controlsWheel.point.scenePosition)
                         else root.wheelScroll(event)

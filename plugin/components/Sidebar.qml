@@ -51,6 +51,7 @@ Rectangle {
             clip: true
             contentHeight: column.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
+            WheelScroll { theme: root.theme }
 
             ColumnLayout {
                 id: column

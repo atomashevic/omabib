@@ -87,6 +87,7 @@ Rectangle {
             clip: true
             contentHeight: thumbs.implicitHeight + root.theme.space(12)
             boundsBehavior: Flickable.StopAtBounds
+            WheelScroll { theme: root.theme }
 
             ColumnLayout {
                 id: thumbs

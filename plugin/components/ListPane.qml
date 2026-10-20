@@ -201,6 +201,7 @@ Rectangle {
                 policy: ScrollBar.AsNeeded
                 contentItem: Rectangle { implicitWidth: root.theme.space(4); radius: width / 2; color: root.theme.line }
             }
+            WheelScroll { theme: root.theme }
         }
     }
 

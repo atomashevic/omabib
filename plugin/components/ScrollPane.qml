@@ -43,5 +43,6 @@ Flickable {
         contentY = Math.max(0, Math.min(y + root.topPadding - root.theme.space(8), contentHeight - height))
     }
 
-    Behavior on contentY { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    // A Behavior on contentY would restart on every wheel step and eat the distance.
+    WheelScroll { theme: root.theme }
 }

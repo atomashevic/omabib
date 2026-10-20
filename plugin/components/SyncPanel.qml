@@ -26,6 +26,8 @@ ColumnLayout {
 
     spacing: theme.space(8)
 
+    WheelScroll { theme: root.theme }
+
     function providerIcon(id) {
         return ({drive: "googleDrive", dropbox: "dropbox", onedrive: "onedrive", folder: "folderSync", rclone: "server"})[id] || "cloudSync"
     }

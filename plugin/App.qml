@@ -2260,6 +2260,7 @@ Item {
                             }
                             Keys.onReturnPressed:bibFileDialog.choose(currentIndex)
                             ScrollBar.vertical:ScrollBar{contentItem:Rectangle{implicitWidth:ui.space(4);color:ui.line}}
+                            WheelScroll { theme: ui }
                         }
                         RowLayout {
                             Layout.fillWidth:true;spacing:ui.space(8)
@@ -2310,6 +2311,7 @@ Item {
                         anchors.fill:parent
                         clip:true;model:root.projects;currentIndex:0
                         boundsBehavior:Flickable.StopAtBounds
+                        WheelScroll { theme: ui }
                         delegate:Rectangle {
                             id:projectRow
                             required property var modelData

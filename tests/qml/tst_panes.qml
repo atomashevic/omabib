@@ -406,11 +406,11 @@ Rectangle {
             app.overviewBody = Fixture.overview
         }
         function test_1b_abstract_selectable() {
-            var abstract = find(detail, "abstractText")
-            verify(abstract, "abstract text")
-            abstract.selectAll()
-            verify(abstract.selectedText.indexOf("Transformers for time series") === 0, abstract.selectedText)
-            abstract.deselect()
+            var prose = find(detail, "abstractText")
+            verify(prose, "abstract text")
+            prose.selectAll()
+            verify(prose.selectedText.indexOf("Transformers for time series") === 0, prose.selectedText)
+            prose.deselect()
         }
         function test_2f_settings_panel() {
             app.openSettings()
@@ -642,7 +642,7 @@ Rectangle {
             // nothing keeps moving after them.
             var flick = find(reader, "readerPages")
             reader.goToPage(1)
-            var start = flick.contentY, step = Math.pow(flick.height, 2 / 3)
+            var start = flick.contentY, step = 3 * ui.space(24)
             mouseWheel(flick, flick.width / 2, flick.height / 2, 0, -120)
             mouseWheel(flick, flick.width / 2, flick.height / 2, 0, -120)
             wait(400)
