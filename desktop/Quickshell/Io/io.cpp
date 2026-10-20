@@ -5,8 +5,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QSaveFile>
+#include <QTimer>
 #include <csignal>
+
+// omarchy-theme-set deletes the theme directory and moves the next one in.
+// A short wait covers that gap, so the missing file in the middle is not read.
+static constexpr int kWatchSettleMs = 200;
 
 void SplitParser::setSplitMarker(const QString &marker) {
     if (marker == m_marker) return;
@@ -178,13 +184,66 @@ void FileView::setPath(const QString &path) {
     if (path == m_path) return;
     m_path = path;
     emit pathChanged();
-    if (m_complete) reload();
+    if (m_complete) {
+        armWatch();
+        reload();
+    }
 }
 
 void FileView::setAtomicWrites(bool atomic) {
     if (atomic == m_atomic) return;
     m_atomic = atomic;
     emit atomicWritesChanged();
+}
+
+void FileView::setWatch(bool watch) {
+    if (watch == m_watch) return;
+    m_watch = watch;
+    emit watchChanged();
+    if (m_complete) armWatch();
+}
+
+// Watches the file, the directory that holds it, and that directory's parent.
+// An in-place write notifies the file. Replacing the directory, which is what
+// omarchy-theme-set does, notifies the parent that is still there.
+void FileView::armWatch() {
+    if (!m_watch) {
+        if (m_watcher) {
+            const QStringList watched = m_watcher->files() + m_watcher->directories();
+            if (!watched.isEmpty()) m_watcher->removePaths(watched);
+        }
+        return;
+    }
+    if (!m_watcher) {
+        m_watcher = new QFileSystemWatcher(this);
+        connect(m_watcher, &QFileSystemWatcher::fileChanged, this, &FileView::scheduleWatch);
+        connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, &FileView::scheduleWatch);
+    }
+    const QStringList watched = m_watcher->files() + m_watcher->directories();
+    if (!watched.isEmpty()) m_watcher->removePaths(watched);
+    if (m_path.isEmpty()) return;
+    const QFileInfo file(m_path);
+    QStringList paths;
+    if (file.exists()) paths << file.absoluteFilePath();
+    const QString themeDir = file.absolutePath();
+    if (QFileInfo::exists(themeDir)) paths << themeDir;
+    const QString currentDir = QFileInfo(themeDir).absolutePath();
+    if (currentDir != themeDir && QFileInfo::exists(currentDir)) paths << currentDir;
+    if (!paths.isEmpty()) m_watcher->addPaths(paths);
+}
+
+void FileView::scheduleWatch() {
+    if (!m_watch) return;
+    if (!m_watchTimer) {
+        m_watchTimer = new QTimer(this);
+        m_watchTimer->setSingleShot(true);
+        m_watchTimer->setInterval(kWatchSettleMs);
+        connect(m_watchTimer, &QTimer::timeout, this, [this] {
+            armWatch();
+            reload();
+        });
+    }
+    m_watchTimer->start();
 }
 
 // Loads after the current handler returns, as Quickshell's threaded load does.
@@ -222,6 +281,7 @@ void FileView::setText(const QString &text) {
 
 void FileView::componentComplete() {
     m_complete = true;
+    armWatch();
     reload();
 }
 

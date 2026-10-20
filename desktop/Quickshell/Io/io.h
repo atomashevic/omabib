@@ -167,6 +167,8 @@ class FileView : public QObject, public QQmlParserStatus {
     Q_INTERFACES(QQmlParserStatus)
     Q_PROPERTY(QString path READ path WRITE setPath NOTIFY pathChanged)
     Q_PROPERTY(bool atomicWrites READ atomicWrites WRITE setAtomicWrites NOTIFY atomicWritesChanged)
+    // Reloads when the file changes, including when its directory is replaced.
+    Q_PROPERTY(bool watch READ watch WRITE setWatch NOTIFY watchChanged)
 
 public:
     using QObject::QObject;
@@ -175,6 +177,8 @@ public:
     void setPath(const QString &path);
     bool atomicWrites() const { return m_atomic; }
     void setAtomicWrites(bool atomic);
+    bool watch() const { return m_watch; }
+    void setWatch(bool watch);
 
     Q_INVOKABLE QString text() const { return m_text; }
     Q_INVOKABLE void setText(const QString &text);
@@ -190,12 +194,19 @@ signals:
     void saveFailed(int error);
     void pathChanged();
     void atomicWritesChanged();
+    void watchChanged();
 
 private:
+    void armWatch();
+    void scheduleWatch();
+
     QString m_path;
     QString m_text;
     bool m_atomic = true;
     bool m_complete = false;
+    bool m_watch = false;
+    class QFileSystemWatcher *m_watcher = nullptr;
+    class QTimer *m_watchTimer = nullptr;
 };
 
 // Exposes the functions declared on it in QML to `omabib-desktop ipc`.

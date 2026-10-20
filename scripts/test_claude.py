@@ -14,6 +14,7 @@ binary = str(Path(sys.argv[1]).resolve())
 scripts = Path(__file__).parent
 with tempfile.TemporaryDirectory(prefix='omabib-claude-test-') as directory:
     root = Path(directory)
+    os.environ['HOME'] = str(root)
     os.environ['XDG_CONFIG_HOME'] = str(root / 'config')
     os.environ['XDG_DATA_HOME'] = str(root / 'data')
     os.environ['XDG_DATA_DIRS'] = str(root / 'system')

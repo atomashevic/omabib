@@ -4,7 +4,9 @@
 Preferences live in $XDG_CONFIG_HOME/omabib/settings.json:
 
   theme        "system" (follow light or dark), "light", "dark" or "omarchy"
-               (the active Omarchy theme, when there is one)
+               (the active Omarchy theme). A new config chooses omarchy when
+               ~/.local/state/omarchy/current/theme/colors.toml parses.
+               system, light or dark already written in the file stay there.
   reading_font paper titles, abstracts and notes: "sans" or "serif"
   pdf_colors  PDF pages in reader tabs: "original" or "theme" (the theme's colors)
   ai_cli      terminal chat: "codex" (Codex CLI) or "claude" (Claude Code)
@@ -36,6 +38,7 @@ CHAT_STEPS = ('hidden', 'shown')
 EFFORTS = ('', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 PDF_COLORS = ('original', 'theme')
 THEMES = ('system', 'light', 'dark', 'omarchy')
+COLOR_LINE = re.compile(r"""^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})""")
 READING_FONTS = ('sans', 'serif')
 CLIS = [('codex', 'Codex CLI', 'codex'), ('claude', 'Claude Code', 'claude')]
 DESKTOPS = [('chatgpt', 'ChatGPT Desktop', 'chatgpt'), ('claude', 'Claude Desktop', 'claude-desktop')]
@@ -56,14 +59,38 @@ def claude_desktop_config_path():
     return config_home() / 'Claude/claude_desktop_config.json'
 
 
+def omarchy_colors_path():
+    return Path.home() / '.local/state/omarchy/current/theme/colors.toml'
+
+
+def omarchy_colors_parse(path=None):
+    """True when colors.toml has a background and a foreground, as Color.qml reads them."""
+    path = omarchy_colors_path() if path is None else Path(path)
+    try:
+        text = path.read_text()
+    except OSError:
+        return False
+    values = {}
+    for line in text.splitlines():
+        match = COLOR_LINE.match(line)
+        if match:
+            values[match.group(1)] = match.group(2)
+    return bool((values.get('background') or values.get('color0')) and (values.get('foreground') or values.get('color7')))
+
+
 def load():
     settings = dict(DEFAULTS)
+    explicit_theme = False
     try:
         stored = json.loads(settings_path().read_text())
         if isinstance(stored, dict):
+            theme = stored.get('theme')
+            explicit_theme = isinstance(theme, str) and theme in THEMES
             settings.update({k: v for k, v in stored.items() if k in DEFAULTS and isinstance(v, str)})
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+    if not explicit_theme and omarchy_colors_parse():
+        settings['theme'] = 'omarchy'
     return settings
 
 

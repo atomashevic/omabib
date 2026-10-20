@@ -8,6 +8,8 @@ All operations use `omabib call METHOD` with one JSON object on stdin. On Linux 
 
 A response echoes `v` and `id`, with either `result` or `error.message`. Search requests on one connection supersede earlier searches. `cancel` cancels that connection's active search generation. SQL progress handlers interrupt superseded work. Clients must discard stale results as well.
 
+The window theme is not one of these operations. It is `theme` in `~/.config/omabib/settings.json` (`system`, `light`, `dark`, or `omarchy`), printed and changed with `omabib-settings`. A new config is `omarchy` when `~/.local/state/omarchy/current/theme/colors.toml` parses. An explicit `system`, `light`, or `dark` stays as written. The open window reloads that file when the theme directory is replaced, and uses `mode` when it is `light` or `dark`.
+
 ## Search and reading
 
 | Method | Parameters |

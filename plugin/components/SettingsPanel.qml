@@ -135,7 +135,7 @@ ColumnLayout {
             }
         }
     }
-    Hint { text: root.theme.omarchyAvailable ? "System follows the desktop's light or dark setting. Omarchy uses the current Omarchy theme's colors." : "System follows the desktop's light or dark setting." }
+    Hint { text: root.theme.omarchyAvailable ? "System follows the desktop's light or dark setting. Omarchy uses the open Omarchy theme, and switches with it." : "System follows the desktop's light or dark setting." }
 
     SectionLabel { theme: root.theme; text: "Reading font"; Layout.topMargin: root.theme.space(10) }
     RowLayout {

@@ -39,7 +39,8 @@ QtObject {
     })
     readonly property var omarchyPalette: {
         const bg = Color.background, fg = Color.foreground, ac = Color.accent
-        const dark = luminance(bg) < 0.5
+        // A written mode wins. With none, the background decides.
+        const dark = Color.mode === "dark" || (Color.mode !== "light" && luminance(bg) < 0.5)
         return {
             bg: bg, side: mix(bg, fg, 0.035), raised: dark ? mix(bg, fg, 0.06) : bg,
             hover: mix(bg, fg, 0.07), pressed: mix(bg, fg, 0.12), line: mix(bg, fg, dark ? 0.16 : 0.18),

@@ -42,11 +42,15 @@ OMABIB_UI_DIR=$PWD/plugin build/desktop/omabib-desktop
 ## How it works
 
 The window draws its own light and dark themes (Settings → Theme: System,
-Light, Dark, and Omarchy when an Omarchy theme is present). It bundles its
-typefaces in `plugin/components/fonts`: Mona Sans in three weights, loaded at
-start, Source Serif 4, loaded only for the serif reading font, and Lucide icons
-cut to the glyphs `Icons.js` names (`scripts/subset-icons` redoes the cut).
-Monospace text uses the platform's own monospace font.
+Light, Dark, and Omarchy when `colors.toml` parses). A new config chooses
+Omarchy in that case. System, Light or Dark already saved stay as they are.
+The palette reloads when the theme directory is replaced, which is how
+`omarchy-theme-set` switches themes, and `mode` `light` or `dark` wins over
+the background's luminance. It bundles its typefaces in
+`plugin/components/fonts`: Mona Sans in three weights, loaded at start, Source
+Serif 4, loaded only for the serif reading font, and Lucide icons cut to the
+glyphs `Icons.js` names (`scripts/subset-icons` redoes the cut). Monospace
+text uses the platform's own monospace font.
 
 App.qml imports `Quickshell`, `Quickshell.Io` and `qs.Commons`. This host
 compiles in stand-ins under those names and puts them ahead of any
@@ -55,8 +59,8 @@ installed Quickshell on the import path:
 | Module | Stand-in |
 |---|---|
 | `Quickshell` | `env`, `execDetached` (Omarchy's browser launcher and `xdg-open` fall back to the platform opener), `clipboardText`, `FloatingWindow` as a plain `Window` |
-| `Quickshell.Io` | `Process`, `SplitParser`, `StdioCollector` on QProcess; `Socket` on QLocalSocket; `FileView` on QSaveFile; `IpcHandler` reachable through `omabib-desktop ipc` |
-| `qs.Commons` | `Color`: the current Omarchy theme's colors from `~/.local/state/omarchy/current/theme/colors.toml`, when there is one, for the Omarchy theme choice; `Style.space()` |
+| `Quickshell.Io` | `Process`, `SplitParser`, `StdioCollector` on QProcess; `Socket` on QLocalSocket; `FileView` on QSaveFile, with an optional watch that reloads when the file's directory is replaced; `IpcHandler` reachable through `omabib-desktop ipc` |
+| `qs.Commons` | `Color`: the current Omarchy theme's colors from `~/.local/state/omarchy/current/theme/colors.toml`, reloaded when that theme directory is replaced, including `mode` when it is `light` or `dark`; `Style.space()` |
 
 `DesktopHost` (in `Quickshell/host.*`) takes the shell's place: one running
 copy, a local socket for later launches, window raising and IPC dispatch.

@@ -140,6 +140,8 @@ And a button too, for the mouse. On a Mac, <kbd>⌘</kbd> takes the place of <kb
 
 Closing the window keeps Omabib ready in the background, so it opens instantly. On Omarchy, the installer binds **Super+Alt+B** to `omabib open` in `~/.config/hypr/bindings.lua`. Elsewhere, add a shortcut for `omabib open` in your desktop's keyboard settings. `omabib add` opens straight into the add box.
 
+On Omarchy, a new install follows the theme you have open, and an open window switches with it. `mode` `light` or `dark` in that theme is honored. System, Light or Dark chosen in Settings stay as they are. Titles and notes stay in Mona Sans or Source Serif 4.
+
 ## Your library stays yours
 
 Omabib runs on your computer and keeps your library there. Sync goes straight to storage you already have. See the [privacy policy](https://omabib.github.io/privacy.html).
