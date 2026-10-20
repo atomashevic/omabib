@@ -153,16 +153,15 @@ Omabib runs on your computer and keeps your library there. Sync goes straight to
 
 ## Uninstall
 
-This removes the app and keeps your library. Delete `~/.local/share/omabib` too if you want it gone.
+This removes the app and keeps your library. Delete `~/.local/share/omabib` too if you want it gone. Settings in `~/.config/omabib` stay as well.
 
 **Linux:**
 
 ```bash
-omabib-desktop --quit; pkill -f 'omabib serve'
-rm -rf ~/.local/lib/omabib ~/.local/share/applications/omabib.desktop
-rm -f ~/.local/share/icons/hicolor/*/apps/omabib.{png,svg}
-rm -f ~/.local/bin/omabib ~/.local/bin/omabib-*
+python3 ~/.config/omarchy/plugins/io.github.atomashevic.omabib/scripts/omabib-plugin remove-backend
 ```
+
+From a source checkout, run `python3 scripts/omabib-plugin remove-backend`. The command quits the app, stops and disables `omabib.service` when that unit is installed, and removes the unit, the menu entry, the icons, `~/.local/lib/omabib`, and the `omabib` commands. It removes the shell plugin only when that directory contains `.omabib-managed`. A Git checkout is left in place, and the command prints `omarchy plugin remove io.github.atomashevic.omabib`.
 
 **macOS:**
 

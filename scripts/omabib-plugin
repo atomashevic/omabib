@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the matching release backend without changing Omarchy's plugin checkout."""
+"""Install the release backend, or remove it without touching the library."""
 import argparse
 import fcntl
 import hashlib
@@ -121,27 +121,85 @@ def install(local_archive=None):
     return result
 
 
-def remove_backend():
+def config_home():
+    return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+
+
+def data_home():
+    return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+
+
+def plugin_dir():
+    return config_home() / 'omarchy/plugins' / PLUGIN_ID
+
+
+def unit_path():
+    # install.sh writes the unit here, under $HOME/.config, not $XDG_CONFIG_HOME.
+    return Path.home() / '.config/systemd/user/omabib.service'
+
+
+def quit_desktop():
+    desktop = Path.home() / '.local/bin/omabib-desktop'
+    if not os.access(desktop, os.X_OK):
+        return
+    # A missing window exits non-zero. Uninstall still continues.
     try:
-        owned = json.loads(state_path().read_text()).get('plugin_id') == PLUGIN_ID
-    except (OSError, ValueError):
-        owned = False
-    if not owned:
-        raise ValueError('No plugin-managed backend installation was found')
+        subprocess.run([str(desktop), '--quit'], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def stop_service():
+    unit = unit_path()
+    if not unit.is_file():
+        return
     checked('systemctl', '--user', 'disable', '--now', 'omabib.service')
-    for name in ('omabib', 'omabib-desktop', *HELPERS):
-        (Path.home() / '.local/bin' / name).unlink(missing_ok=True)
+    unit.unlink()
+    checked('systemctl', '--user', 'daemon-reload')
+
+
+def remove_files():
+    bin_dir = Path.home() / '.local/bin'
+    if bin_dir.is_dir():
+        for path in list(bin_dir.iterdir()):
+            if path.name.startswith('omabib') and (path.is_symlink() or path.is_file()):
+                path.unlink()
     # The app and its own Qt, from release archives that bundle them.
     shutil.rmtree(Path.home() / '.local/lib/omabib', ignore_errors=True)
-    data = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+    data = data_home()
     (data / 'applications/omabib.desktop').unlink(missing_ok=True)
-    (data / 'icons/hicolor/scalable/apps/omabib.svg').unlink(missing_ok=True)
-    for icon in (data / 'icons/hicolor').glob('*/apps/omabib.png'):
-        icon.unlink()
-    (Path.home() / '.config/systemd/user/omabib.service').unlink(missing_ok=True)
-    checked('systemctl', '--user', 'daemon-reload')
-    state_path().unlink()
-    return {'removed': True, 'message': 'Omabib backend removed. Your library and settings are preserved.'}
+    icons = data / 'icons/hicolor'
+    if icons.is_dir():
+        for icon in icons.glob('*/apps/omabib.*'):
+            if icon.is_file() and icon.suffix in ('.png', '.svg'):
+                icon.unlink()
+
+
+def remove_plugin():
+    """Remove a plugin this installer wrote. A Git checkout stays."""
+    directory = plugin_dir()
+    if not directory.is_dir() or directory.is_symlink():
+        return ''
+    if (directory / '.git').exists():
+        return f'omarchy plugin remove {PLUGIN_ID}'
+    if (directory / '.omabib-managed').is_file():
+        shutil.rmtree(directory)
+    return ''
+
+
+def remove_backend():
+    # The library (~/.local/share/omabib) and settings (~/.config/omabib) stay.
+    quit_desktop()
+    stop_service()
+    remove_files()
+    hint = remove_plugin()
+    state_path().unlink(missing_ok=True)
+    message = 'Omabib backend removed. Your library and settings are preserved.'
+    if hint:
+        print(hint, file=sys.stderr)
+        message = f'{message} {hint}'
+    return {'removed': True, 'message': message}
 
 
 def main():
