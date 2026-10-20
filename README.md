@@ -32,7 +32,7 @@ Open a terminal and paste:
 curl -fsSL https://github.com/atomashevic/omabib/releases/latest/download/get.sh | sh
 ```
 
-Then open **Omabib** from your applications (Spotlight or Launchpad on a Mac), or run `omabib open`.
+Then open **Omabib** from your applications (Spotlight or Launchpad on a Mac), or run `omabib open`. On Omarchy, **Super+Alt+B** shows or hides the window.
 
 - **Runs on** Linux on x86-64 (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and most others) and macOS 13 or newer on Apple silicon.
 - **No admin password or developer tools.** Everything goes into your home folder, checked against the release's checksums first ([the script](scripts/get.sh)).
@@ -138,7 +138,7 @@ And a button too, for the mouse. On a Mac, <kbd>⌘</kbd> takes the place of <kb
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | ask about the selection |
 | <kbd>Esc</kbd> | back, or hide | <kbd>Ctrl</kbd>+<kbd>R</kbd> | theme or original colors |
 
-Closing the window keeps Omabib ready in the background, so it opens instantly. To show or hide it from anywhere, add a shortcut for `omabib open` in your desktop's keyboard settings; `omabib add` opens straight into the add box.
+Closing the window keeps Omabib ready in the background, so it opens instantly. On Omarchy, the installer binds **Super+Alt+B** to `omabib open` in `~/.config/hypr/bindings.lua`. Elsewhere, add a shortcut for `omabib open` in your desktop's keyboard settings. `omabib add` opens straight into the add box.
 
 ## Your library stays yours
 

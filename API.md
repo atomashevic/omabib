@@ -35,6 +35,15 @@ Blank-query browsing uses `citekey` order by default for API compatibility. `sor
 
 `omabib add ID...` (CLI) calls `add_reference` once per identifier; `omabib add --pdf FILE` calls it with `pdf_path`; `omabib add --dry-run` calls `preview_entry` instead. With no arguments it opens the desktop popup's add box, which does the same lookups interactively.
 
+`omabib open` shows or hides the window. On Omarchy, when `omarchy` is on `PATH`, the installer appends one block to `~/.config/hypr/bindings.lua` if the `-- omabib-keybind` marker is absent:
+
+```lua
+-- omabib-keybind
+o.bind("SUPER + ALT + B", "Omabib", "omabib open")
+```
+
+A second install does not append it again. If the file already uses that chord and does not have the marker, the installer leaves the file unchanged and says so. A missing file is created with Omarchy's header comment and this block. Add does not show this key.
+
 ## Metadata and project writes
 
 | Method | Parameters |

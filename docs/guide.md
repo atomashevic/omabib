@@ -34,7 +34,7 @@ The window has three parts.
 
 The abstract and the AI summary are selectable: drag across paragraphs and press **Ctrl+C**, or use their **Copy** buttons (the AI summary's copies Markdown).
 
-**Esc** hides the window, and so does **q** while the search field is empty. Closing the window keeps Omabib running in the background so it opens instantly; `omabib-desktop --quit` stops it.
+**Esc** hides the window, and so does **q** while the search field is empty. Closing the window keeps Omabib running in the background so it opens instantly; `omabib-desktop --quit` stops it. On Omarchy, **Super+Alt+B** shows or hides the window.
 
 ## Tabs
 
@@ -278,7 +278,7 @@ A backup is a consistent copy, safe to make while Omabib runs; don't copy `libra
 The `omabib` command does most of what the window does. On a minimal Linux system the installer names the fontconfig and freetype packages for this command, and the OpenGL, X11 and xcb packages for the window, then stops with nothing copied.
 
 ```bash
-omabib open                      # show or hide the window
+omabib open                      # show or hide the window (Super+Alt+B on Omarchy)
 omabib add                       # open the add box
 omabib search 'network estimation'
 omabib import references.bib
@@ -288,6 +288,15 @@ omabib schema                    # every operation agents and scripts can call
 ```
 
 `omabib call OPERATION` runs any operation with JSON on standard input; see [API.md](../API.md).
+
+On Omarchy, **Super+Alt+B** runs `omabib open`. When `omarchy` is on your PATH, the installer appends this block to `~/.config/hypr/bindings.lua` if the `-- omabib-keybind` marker is not already there:
+
+```lua
+-- omabib-keybind
+o.bind("SUPER + ALT + B", "Omabib", "omabib open")
+```
+
+A second install does not add another copy. If the file already uses that chord and does not have the marker, the installer leaves it unchanged and says so. If the file is missing, it is created with Omarchy's header comment and this block only. The Add action does not show this key.
 
 ## Projects, notes and agent access
 

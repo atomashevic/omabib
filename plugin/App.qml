@@ -1880,7 +1880,8 @@ Item {
             if(root.openPending){root.openMs=Date.now()-root.openedAt;root.openPending=false}
         }
     }
-    // A normal Hyprland window. `omabib open` (Super+B) shows, focuses or hides it.
+    // A normal Hyprland window. `omabib open` shows, focuses or hides it.
+    // On Omarchy the installer binds that command to Super+Alt+B.
     FloatingWindow {
         id: window
         title: "Omabib"
