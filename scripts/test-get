@@ -5,8 +5,10 @@
 # Fedora and Arch containers and on macOS, each with a throwaway home.
 # Usage: scripts/test-get [--deps | --bare] DIST_DIR [SCREENSHOT.png]
 # --deps first checks a bare container (no library packages), then installs,
-# as root, what any desktop already has: OpenGL, fonts, xkbcommon, Python.
-# --bare only runs that check: the installer must name missing packages,
+# as root, the apt, dnf or pacman packages the installer just named.
+# Those names are scripts/linux-packages. There is no second list here.
+# Python and curl are installed first so the installer can run.
+# --bare only runs the check: the installer must name missing packages,
 # exit non-zero, and leave the home directory unchanged.
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -37,23 +39,31 @@ install_base_tools() {
     pacman -Sy --noconfirm --needed curl ca-certificates python tar gzip >/dev/null
   fi
 }
-install_desktop_libraries() {
+# The packages just printed by the installer. Nothing is added from anywhere else.
+install_named_packages() {
+  local packages=()
+  mapfile -t packages < <(printf '%s\n' "$bare_output" | awk '
+    /^  sudo apt install / || /^  sudo dnf install / || /^  sudo pacman -S / {
+      for (i = 4; i <= NF; i++) print $i
+    }
+  ' | awk 'NF && !seen[$0]++')
+  [[ ${#packages[@]} -gt 0 ]] || { echo "FAIL: the installer named no packages" >&2; exit 1; }
+  echo "Installing only the packages the installer named:"
+  printf '  %s\n' "${packages[@]}"
   if command -v apt-get >/dev/null; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      libgl1 libegl1 libopengl0 libfontconfig1 fonts-dejavu-core libxkbcommon0 libdbus-1-3 libglib2.0-0 \
-      libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-xcb1 libxcb1 >/dev/null
+    # Recommends stay off, so a font package the message did not name cannot slip in.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${packages[@]}" >/dev/null
   elif command -v dnf >/dev/null; then
-    dnf install -y -q libglvnd-opengl libglvnd-egl libglvnd-glx fontconfig \
-      dejavu-sans-fonts libxkbcommon dbus-libs glib2 libwayland-client libwayland-cursor libwayland-egl libX11-xcb libxcb
+    dnf install -y -q --setopt=install_weak_deps=False "${packages[@]}"
   elif command -v pacman >/dev/null; then
-    pacman -Syu --noconfirm --needed libglvnd fontconfig ttf-dejavu libxkbcommon dbus glib2 wayland \
-      libx11 libxcb >/dev/null
+    pacman -Syu --noconfirm --needed "${packages[@]}" >/dev/null
   fi
 }
 # The linux-install job passes --deps. Before those packages are installed,
 # this is the bare-container case: no --deps libraries yet.
 bare_container_refuses() {
   local out status manager="" cli_line window_line
+  bare_output=""
   if [[ -e $HOME/.local/bin/omabib || -e $HOME/.local/lib/omabib || -e ${XDG_DATA_HOME:-$HOME/.local/share}/omabib ]]; then
     echo "FAIL: home already has Omabib, so this is not a bare install" >&2
     exit 1
@@ -102,13 +112,14 @@ bare_container_refuses() {
       ;;
   esac
   echo "PASS: bare container refused install and named $manager packages"
+  bare_output=$out
 }
 if [[ $(uname -s) == Linux && $mode != install ]]; then
   install_base_tools
   bash "$source_dir/scripts/test_missing_libraries.sh"
   bare_container_refuses
   if [[ $mode == bare ]]; then exit 0; fi
-  install_desktop_libraries
+  install_named_packages
 fi
 OMABIB_DOWNLOAD_URL="file://$dist" OMABIB_VERSION="v$version" sh < "$source_dir/scripts/get.sh"
 export PATH="$HOME/.local/bin:$PATH"

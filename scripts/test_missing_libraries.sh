@@ -103,6 +103,7 @@ assert_empty "$home"
 bundle=$root/bundle
 mkdir -p "$bundle/scripts" "$bundle/bin" "$bundle/lib" "$bundle/plugins" "$bundle/qml"
 cp "$source_dir/scripts/install.sh" "$bundle/scripts/install.sh"
+cp "$source_dir/scripts/linux-packages" "$bundle/scripts/linux-packages"
 cp "$bindir/omabib" "$bundle/bin/omabib"
 cp "$bindir/omabib" "$bundle/bin/omabib-desktop"
 printf 'not a library\n' > "$bundle/lib/libQt6Core.so.6"

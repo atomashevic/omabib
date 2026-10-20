@@ -102,7 +102,8 @@ uses_super_alt_b() {
 }
 # Release builds link fontconfig and freetype for the command, and OpenGL,
 # X11 and xcb for the window. Those come from the distro. Name the packages
-# and stop before any installed file is replaced.
+# and stop before any installed file is replaced. The names live in
+# scripts/linux-packages. scripts/test-get --deps installs what this prints.
 append_word() {
   local list=$1 word=$2
   [[ -n $word ]] || { printf '%s' "$list"; return; }
@@ -114,75 +115,42 @@ append_word() {
 sonames_missing() {
   ldd "$1" 2>/dev/null | awk '/not found/ { print $1 }' || true
 }
-package_for() {
-  local soname=$1
-  case $distro in
-    apt)
-      case $soname in
-        libfontconfig.so.1) echo libfontconfig1 ;;
-        libfreetype.so.6) echo libfreetype6 ;;
-        libGL.so.1) echo libgl1 ;;
-        libGLX.so.0) echo libglx0 ;;
-        libOpenGL.so.0) echo libopengl0 ;;
-        libEGL.so.1) echo libegl1 ;;
-        libxkbcommon.so.0) echo libxkbcommon0 ;;
-        libX11.so.6) echo libx11-6 ;;
-        libX11-xcb.so.1) echo libx11-xcb1 ;;
-        libxcb-glx.so.0) echo libxcb-glx0 ;;
-        libxcb-randr.so.0) echo libxcb-randr0 ;;
-        libxcb-render.so.0) echo libxcb-render0 ;;
-        libxcb-shape.so.0) echo libxcb-shape0 ;;
-        libxcb-shm.so.0) echo libxcb-shm0 ;;
-        libxcb-sync.so.1) echo libxcb-sync1 ;;
-        libxcb-xfixes.so.0) echo libxcb-xfixes0 ;;
-        libxcb-xkb.so.1) echo libxcb-xkb1 ;;
-        libxcb.so.1) echo libxcb1 ;;
-        libwayland-client.so.0) echo libwayland-client0 ;;
-        libwayland-cursor.so.0) echo libwayland-cursor0 ;;
-        libwayland-egl.so.1) echo libwayland-egl1 ;;
-        libglib-2.0.so.0 | libgthread-2.0.so.0) echo libglib2.0-0 ;;
-        libdbus-1.so.3) echo libdbus-1-3 ;;
-        libbrotlidec.so.1) echo libbrotli1 ;;
-        libgssapi_krb5.so.2) echo libgssapi-krb5-2 ;;
-        *) echo "$soname" ;;
-      esac ;;
-    dnf)
-      case $soname in
-        libfontconfig.so.1) echo fontconfig ;;
-        libfreetype.so.6) echo freetype ;;
-        libGL.so.1 | libGLX.so.0) echo libglvnd-glx ;;
-        libOpenGL.so.0) echo libglvnd-opengl ;;
-        libEGL.so.1) echo libglvnd-egl ;;
-        libxkbcommon.so.0) echo libxkbcommon ;;
-        libX11.so.6) echo libX11 ;;
-        libX11-xcb.so.1) echo libX11-xcb ;;
-        libxcb*.so.*) echo libxcb ;;
-        libwayland-client.so.0) echo libwayland-client ;;
-        libwayland-cursor.so.0) echo libwayland-cursor ;;
-        libwayland-egl.so.1) echo libwayland-egl ;;
-        libglib-2.0.so.0 | libgthread-2.0.so.0) echo glib2 ;;
-        libdbus-1.so.3) echo dbus-libs ;;
-        libbrotlidec.so.1) echo libbrotli ;;
-        libgssapi_krb5.so.2) echo krb5-libs ;;
-        *) echo "$soname" ;;
-      esac ;;
-    pacman)
-      case $soname in
-        libfontconfig.so.1) echo fontconfig ;;
-        libfreetype.so.6) echo freetype2 ;;
-        libGL.so.1 | libGLX.so.0 | libOpenGL.so.0 | libEGL.so.1) echo libglvnd ;;
-        libxkbcommon.so.0) echo libxkbcommon ;;
-        libX11.so.6 | libX11-xcb.so.1) echo libx11 ;;
-        libxcb*.so.*) echo libxcb ;;
-        libwayland*.so.*) echo wayland ;;
-        libglib-2.0.so.0 | libgthread-2.0.so.0) echo glib2 ;;
-        libdbus-1.so.3) echo dbus ;;
-        libbrotlidec.so.1) echo brotli ;;
-        libgssapi_krb5.so.2) echo krb5 ;;
-        *) echo "$soname" ;;
-      esac ;;
-    *) echo "$soname" ;;
+# A dash in the package list means this family has no one package on that system.
+package_from_row() {
+  local column=$1 apt_name=$2 dnf_name=$3 pacman_name=$4
+  case $column in
+    2) printf '%s' "$apt_name" ;;
+    3) printf '%s' "$dnf_name" ;;
+    4) printf '%s' "$pacman_name" ;;
   esac
+}
+package_for() {
+  local soname=$1 file=$source_dir/scripts/linux-packages
+  local column=0 name apt_name dnf_name pacman_name chosen=""
+  case $distro in
+    apt) column=2 ;;
+    dnf) column=3 ;;
+    pacman) column=4 ;;
+    *) echo "$soname"; return ;;
+  esac
+  while read -r name apt_name dnf_name pacman_name _; do
+    [[ $name == "$soname" ]] || continue
+    chosen=$(package_from_row "$column" "$apt_name" "$dnf_name" "$pacman_name")
+    break
+  done < "$file"
+  if [[ -z $chosen ]]; then
+    while read -r name apt_name dnf_name pacman_name _; do
+      [[ $name == @* ]] || continue
+      case $soname in
+        "${name#@}"*) ;;
+        *) continue ;;
+      esac
+      chosen=$(package_from_row "$column" "$apt_name" "$dnf_name" "$pacman_name")
+      [[ $chosen == - ]] && chosen=""
+      [[ -n $chosen ]] && break
+    done < "$file"
+  fi
+  if [[ -n $chosen ]]; then echo "$chosen"; else echo "$soname"; fi
 }
 packages_for() {
   local soname package names=""
@@ -235,6 +203,10 @@ require_system_libraries() {
     fi
   fi
   [[ -n $cli_sonames || -n $desktop_sonames ]] || return 0
+  if [[ -n $distro && ! -f $source_dir/scripts/linux-packages ]]; then
+    echo "Omabib's package list is missing ($source_dir/scripts/linux-packages)." >&2
+    exit 1
+  fi
   local cli_packages desktop_packages
   cli_packages=$(packages_for "$cli_sonames")
   desktop_packages=$(packages_for "$desktop_sonames")
