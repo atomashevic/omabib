@@ -119,7 +119,7 @@ jobs:
             [[ $version == "omabib ${INSTALL_TAG#v}" ]]
           fi
           omabib status > status.json
-          omabib sync status --json > sync.json
+          omabib call sync_status '{}' > sync.json
           printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
@@ -173,7 +173,7 @@ jobs:
           [[ ! -e $HOME/.config/rclone/rclone.conf ]]
           [[ ! -e ${XDG_CONFIG_HOME}/omabib/rclone.conf ]]
           omabib status > status.json
-          omabib sync status --json > sync.json
+          omabib call sync_status '{}' > sync.json
           python3 - <<'PY'
           import json, os
           status = json.load(open("status.json"))
