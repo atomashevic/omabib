@@ -237,7 +237,6 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
             }
             (Some(mut current), base) => {
                 let mut b = base.unwrap_or_default();
-                let migrated = kind == "ref" && records::expand_legacy(&mut b.data, &mut b.clocks);
                 if kind == "ref" && !b.data.is_empty() {
                     // A shared citekey or DOI shown differently here is not an edit.
                     let (citekey, doi) = shown(c, &key, &b.data)?;
@@ -252,18 +251,9 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
                     regroup.push(claims(&current));
                 }
                 let mut changed = Map::new();
-                for (f, v) in &current {
-                    if b.data.get(f) != Some(v) {
-                        changed.insert(f.clone(), v.clone());
-                    }
-                }
-                // A BibTeX field that disappeared is an edit. Null keeps the
-                // clock, so an older copy of the field cannot come back.
-                if kind == "ref" {
-                    for (f, v) in &b.data {
-                        if !current.contains_key(f) && !v.is_null() {
-                            changed.insert(f.clone(), Value::Null);
-                        }
+                for (f, v) in current {
+                    if b.data.get(&f) != Some(&v) {
+                        changed.insert(f, v);
                     }
                 }
                 if kind == "attachment" {
@@ -300,9 +290,6 @@ pub fn flush(c: &Connection, me: &str, clock: &mut Hlc) -> Result<Vec<Change>> {
                     queue_upload(c, &format!("clips/{sha}.png"), &kind, &key)?;
                 }
                 if changed.is_empty() {
-                    if migrated {
-                        save_base(c, &kind, &key, &b)?;
-                    }
                     continue;
                 }
                 *clock = clock.tick(edited, me);
@@ -464,18 +451,10 @@ impl Applier<'_> {
     }
 
     fn upsert(&mut self, ch: &Change) -> Result<()> {
-        let mut owned = ch.clone();
-        if owned.kind == "ref" {
-            records::expand_legacy(&mut owned.fields, &mut owned.clocks);
-        }
-        let ch = &owned;
         let c = self.c;
         let kind = ch.kind.as_str();
         let (key, fields) = self.resolved(ch)?;
         let mut b = load_base(c, kind, &key)?.unwrap_or_default();
-        if kind == "ref" {
-            records::expand_legacy(&mut b.data, &mut b.clocks);
-        }
         if b.deleted.is_some() {
             return Ok(());
         }
@@ -503,6 +482,14 @@ impl Applier<'_> {
                 accepted.insert(f, v);
             }
         }
+        // The clock each accepted field takes: its own, unless it restates the entry.
+        let mut stamps: BTreeMap<String, String> = accepted
+            .keys()
+            .map(|f| (f.clone(), ch.clocks[f].clone()))
+            .collect();
+        if kind == "ref" {
+            follow_entry(ch, &mut accepted, &mut stamps);
+        }
         let present = records::exists(c, kind, &key)?;
         if accepted.is_empty() && present {
             return Ok(());
@@ -518,7 +505,7 @@ impl Applier<'_> {
         }
         let before = claims(&b.data);
         for (f, v) in accepted {
-            b.clocks.insert(f.clone(), ch.clocks[&f].clone());
+            b.clocks.insert(f.clone(), stamps[&f].clone());
             b.data.insert(f, v);
         }
         let key = if kind == "project" {
@@ -541,14 +528,10 @@ impl Applier<'_> {
         }
         if kind == "ref" {
             // The citekey and DOI are handed out by `reconcile`, since another
-            // reference may claim the same ones. The entry text is built first,
-            // from the real key, so the parked column does not leak into it.
+            // reference may claim the same ones.
             let mut data = b.data.clone();
-            let (fields, bibtex) = records::render_ref(&data)?;
             data.insert("citekey".into(), json!(format!("~{key}")));
             data.insert("doi".into(), Value::Null);
-            data.insert("fields".into(), serde_json::from_str::<Value>(&fields)?);
-            data.insert("bibtex".into(), json!(bibtex));
             records::write(c, kind, &key, &data, self.clips)?;
             save_base(c, kind, &key, &b)?;
             let touched = reconcile(c, &[before, claims(&b.data)])?;
@@ -819,6 +802,63 @@ impl Applier<'_> {
         )?;
         self.out.conflicts += 1;
         Ok(())
+    }
+}
+
+/// The columns and `fields` of a reference that restate its BibTeX entry.
+const ENTRY_COLUMNS: [&str; 7] = [
+    "entry_type",
+    "title",
+    "authors",
+    "abstract",
+    "year",
+    "doi",
+    "fields",
+];
+
+/// A reference's BibTeX entry is one fact: the editor saves it whole, and the
+/// columns and `fields` are read out of it. So they follow the entry. When a
+/// change's entry is taken, they are rebuilt from that entry rather than merged
+/// one by one, and when its entry loses to the one already here, they lose with
+/// it. Otherwise a title from one computer could sit over an entry from another,
+/// and the export would disagree with the library.
+fn follow_entry(
+    ch: &Change,
+    accepted: &mut Map<String, Value>,
+    stamps: &mut BTreeMap<String, String>,
+) {
+    let Some(entry) = ch.fields.get("bibtex").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(clock) = ch.clocks.get("bibtex") else {
+        return;
+    };
+    if !accepted.contains_key("bibtex") {
+        for f in ENTRY_COLUMNS {
+            accepted.remove(f);
+            stamps.remove(f);
+        }
+        return;
+    }
+    let Some(cols) = crate::db::parse_bibtex(entry)
+        .ok()
+        .and_then(|b| b.iter().next().map(crate::db::entry_columns))
+    else {
+        // An entry this version cannot read keeps the sender's columns.
+        return;
+    };
+    let doi = cols.doi.map_or(Value::Null, Value::String);
+    for (f, v) in [
+        ("entry_type", json!(cols.kind)),
+        ("title", json!(cols.title)),
+        ("authors", json!(cols.authors)),
+        ("abstract", json!(cols.abstract_text)),
+        ("year", json!(cols.year)),
+        ("doi", doi),
+        ("fields", json!(cols.fields)),
+    ] {
+        accepted.insert(f.into(), v);
+        stamps.insert(f.into(), clock.clone());
     }
 }
 

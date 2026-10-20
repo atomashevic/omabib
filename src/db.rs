@@ -1041,6 +1041,40 @@ fn import(c: &Connection, a: &Value) -> Result<Value> {
         json!({"import_id":import_id,"items":imported,"conflicts":conflicts,"repairs":repairs,"duplicates_merged":duplicates_merged}),
     )
 }
+/// What an entry stores in the `refs` columns, besides its key and text.
+pub(crate) struct EntryColumns {
+    pub kind: String,
+    pub title: String,
+    pub authors: String,
+    pub abstract_text: String,
+    pub year: String,
+    pub doi: Option<String>,
+    pub fields: BTreeMap<String, String>,
+}
+pub(crate) fn entry_columns(e: &biblatex::Entry) -> EntryColumns {
+    let fields: BTreeMap<String, String> = e
+        .fields
+        .iter()
+        .map(|(k, v)| (k.clone(), v.format_verbatim()))
+        .collect();
+    let text = |name: &str| e.get(name).map(|x| x.format_verbatim()).unwrap_or_default();
+    EntryColumns {
+        kind: e.entry_type.to_string().to_lowercase(),
+        title: text("title"),
+        authors: text("author"),
+        abstract_text: text("abstract"),
+        year: fields
+            .get("year")
+            .cloned()
+            .or_else(|| fields.get("date").map(|s| clip(s, 4)))
+            .unwrap_or_default(),
+        doi: fields
+            .get("doi")
+            .map(|s| normalize_doi(s))
+            .filter(|s| !s.is_empty()),
+        fields,
+    }
+}
 pub(crate) fn save_entry(
     c: &Connection,
     rid: &str,
@@ -1048,33 +1082,16 @@ pub(crate) fn save_entry(
     new: bool,
     source: &str,
 ) -> Result<()> {
-    let fields: BTreeMap<String, String> = e
-        .fields
-        .iter()
-        .map(|(k, v)| (k.clone(), v.format_verbatim()))
-        .collect();
-    let title = e
-        .get("title")
-        .map(|x| x.format_verbatim())
-        .unwrap_or_default();
-    let authors = e
-        .get("author")
-        .map(|x| x.format_verbatim())
-        .unwrap_or_default();
-    let ab = e
-        .get("abstract")
-        .map(|x| x.format_verbatim())
-        .unwrap_or_default();
-    let doi = fields
-        .get("doi")
-        .map(|s| normalize_doi(s))
-        .filter(|s| !s.is_empty());
-    let year = fields
-        .get("year")
-        .cloned()
-        .or_else(|| fields.get("date").map(|s| clip(s, 4)))
-        .unwrap_or_default();
-    let kind = e.entry_type.to_string().to_lowercase();
+    let cols = entry_columns(e);
+    let (kind, title, authors, ab, year, doi, fields) = (
+        cols.kind,
+        cols.title,
+        cols.authors,
+        cols.abstract_text,
+        cols.year,
+        cols.doi,
+        cols.fields,
+    );
     let bib = serialize_entry(e);
     if new {
         c.execute("INSERT INTO refs(id,citekey,entry_type,title,authors,abstract,year,doi,fields,bibtex,source) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![rid,e.key,kind,title,authors,ab,year,doi,json!(fields).to_string(),bib,source])?;
