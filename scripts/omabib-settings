@@ -50,6 +50,9 @@ def settings_path():
 
 
 def claude_desktop_config_path():
+    # Claude Desktop on macOS reads Application Support, not XDG.
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library/Application Support/Claude/claude_desktop_config.json'
     return config_home() / 'Claude/claude_desktop_config.json'
 
 

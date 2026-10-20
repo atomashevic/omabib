@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='omabib-claude-test-') as directory:
         print('PASS: Claude Desktop link prompts for the entry through Omabib tools', flush=True)
 
         # Settings: defaults and validation. An old pdf_viewer key is ignored.
-        chat_defaults = dict(chat_steps='hidden', claude_model='', claude_effort='', codex_model='', codex_effort='')
+        chat_defaults = dict(theme='system', reading_font='sans', chat_steps='hidden', claude_model='', claude_effort='', codex_model='', codex_effort='')
         assert settings['load']() == dict(pdf_colors='original', ai_cli='codex', ai_desktop='chatgpt', **chat_defaults)
         (root / 'config/omabib').mkdir(parents=True, exist_ok=True)
         (root / 'config/omabib/settings.json').write_text(json.dumps(dict(pdf_viewer='org.pwmt.zathura.desktop')))
