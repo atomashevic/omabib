@@ -37,7 +37,15 @@ omabib status >/dev/null
 if [[ $(uname -s) == Linux ]]; then
   [[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/omabib.desktop" ]] || { echo "FAIL: no launcher entry" >&2; exit 1; }
   echo "Libraries the bundled Qt plugins load that this system lacks (a desktop has them):"
-  find "$HOME/.local/lib/omabib" -name '*.so*' -exec ldd {} + 2>/dev/null | awk '/not found/ { print "  " $1 }' | sort -u || true
+  lacking=$(find "$HOME/.local/lib/omabib" -name '*.so*' -exec ldd {} + 2>/dev/null | awk '/not found/ { print $1 }' | sort -u || true)
+  for library in $lacking; do
+    echo "  $library"
+    # One the app bundles should be found where it is.
+    if [[ -e "$HOME/.local/lib/omabib/lib/$library" ]]; then
+      echo "FAIL: the bundled $library is not found" >&2
+      exit 1
+    fi
+  done
   export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software
 fi
 log=$(mktemp)

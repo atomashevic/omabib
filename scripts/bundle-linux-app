@@ -86,7 +86,11 @@ for library in $libraries; do
   case $library in
     "$qt"/lib/*) cp -L "$library" "$out/lib/" ;;
     */libxcb-cursor.so.* | */libxcb-icccm.so.* | */libxcb-image.so.* | */libxcb-keysyms.so.* | \
-      */libxcb-render-util.so.* | */libxcb-util.so.* | */libxkbcommon-x11.so.*) cp -L "$library" "$out/lib/" ;;
+      */libxcb-render-util.so.* | */libxcb-util.so.* | */libxkbcommon-x11.so.*)
+      cp -L "$library" "$out/lib/"
+      # A search path applies to a library's own dependencies only, so these
+      # need one to find each other (libxcb-cursor needs libxcb-image).
+      patchelf --set-rpath '$ORIGIN' "$out/lib/${library##*/}" ;;
   esac
 done
 missing=$(LD_LIBRARY_PATH="$out/lib" ldd_all "$out" | awk '/not found/ { print $1 }' | sort -u)
