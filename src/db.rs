@@ -251,7 +251,6 @@ impl Library {
         }
         let c = read_connection(&path)?;
         let version: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        let fresh = version == 0;
         ensure!(
             version <= 1,
             "Database schema {version} is newer than this Omabib version"
@@ -274,9 +273,8 @@ impl Library {
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
         crate::chat::migrate(&c)?;
-        // Backup an existing library before the table exists, then create it.
-        // user_version stays 1.
-        crate::highlights::ensure_table(&c, &path, fresh)?;
+        // user_version stays 1. The table starts empty, so creating it cannot lose data.
+        crate::highlights::ensure_table(&c)?;
         crate::sync::migrate(&c)?;
         crate::sync::annotations::drop_orphans(&c)?;
         use std::os::unix::fs::PermissionsExt;

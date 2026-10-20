@@ -271,25 +271,36 @@ fn upsert(c: &Connection, ch: &Change) -> Result<()> {
     if b.deleted.is_some() {
         return Ok(());
     }
-    let ref_id = ch
+    let carried = ch
         .fields
         .get("ref_id")
-        .or_else(|| b.data.get("ref_id"))
         .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if !ref_id.is_empty() {
-        match ref_state(c, &ref_id)? {
-            "tomb" => return tombstone(c, &ch.key, &latest(ch)),
-            "missing" => {
-                c.execute(
-                    "INSERT INTO ann_parked(change) VALUES(?)",
-                    [serde_json::to_string(ch)?],
-                )?;
-                return Ok(());
-            }
-            _ => {}
+        .filter(|s| !s.is_empty());
+    let based = b
+        .data
+        .get("ref_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let Some(ref_id) = carried.or(based) else {
+        // No reference on the change and none stored yet. Park it; an empty
+        // ref_id would be an orphan row.
+        c.execute(
+            "INSERT INTO ann_parked(change) VALUES(?)",
+            [serde_json::to_string(ch)?],
+        )?;
+        return Ok(());
+    };
+    let ref_id = ref_id.to_string();
+    match ref_state(c, &ref_id)? {
+        "tomb" => return tombstone(c, &ch.key, &latest(ch)),
+        "missing" => {
+            c.execute(
+                "INSERT INTO ann_parked(change) VALUES(?)",
+                [serde_json::to_string(ch)?],
+            )?;
+            return Ok(());
         }
+        _ => {}
     }
     let mut accepted = Map::new();
     for (f, v) in &ch.fields {
@@ -406,6 +417,7 @@ fn latest_snapshot(store: &dyn Store) -> Result<Option<String>> {
 
 /// The join sidecar, or every annotation batch when there is no sidecar yet.
 pub fn absorb(c: &Connection, store: &dyn Store, me: &str, clock: &mut Hlc) -> Result<()> {
+    // Newest sidecar from any device, not the main snapshot this join used; parking holds a highlight whose reference has not arrived.
     if let Some(name) = latest_snapshot(store)? {
         let bytes = store.read(&format!("annotations/snapshots/{name}"))?;
         let (header, changes) = format::read_snapshot(&bytes)?;

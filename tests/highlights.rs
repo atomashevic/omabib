@@ -1,9 +1,11 @@
 //! Highlight storage and the annotation sidecar. Temp directories only.
 use omabib::db::{Library, read_connection};
 use omabib::highlights;
+use omabib::sync::apply::Change;
 use omabib::sync::format;
 use rusqlite::Connection;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn one_page_pdf(path: &Path, text: &str) {
@@ -96,7 +98,7 @@ fn user_version_stays_1_and_a_new_library_skips_the_backup() {
 }
 
 #[test]
-fn existing_library_gains_the_table_only_after_the_backup() {
+fn existing_library_gains_the_highlights_table_without_a_backup() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
     {
@@ -106,37 +108,53 @@ fn existing_library_gains_the_table_only_after_the_backup() {
         .unwrap()
         .execute_batch("DROP TABLE highlights")
         .unwrap();
+    assert!(before_highlights(dir.path()).is_empty());
+    let _lib = Library::open_with_vocabulary(&path, false).unwrap();
     assert!(
         before_highlights(dir.path()).is_empty(),
-        "dropping the table is not itself the backup"
-    );
-    let _lib = Library::open_with_vocabulary(&path, false).unwrap();
-    let backups = before_highlights(dir.path());
-    assert_eq!(backups.len(), 1, "the one-time backup");
-    let backup = Connection::open(&backups[0]).unwrap();
-    let backup_version: i64 = backup
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(backup_version, 1);
-    let backed_up: i64 = backup
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='highlights'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        backed_up, 0,
-        "the backup file must be the library from before the table was created"
+        "adding the empty table does not write a backup"
     );
     assert_eq!(table_count(&path, "highlights"), 1);
     assert_eq!(user_version(&path), 1);
     drop(_lib);
     let _again = Library::open_with_vocabulary(&path, false).unwrap();
-    assert_eq!(
-        before_highlights(dir.path()).len(),
-        1,
-        "a later open leaves the backup in place and does not take another"
+    assert!(before_highlights(dir.path()).is_empty());
+    assert_eq!(user_version(&path), 1);
+}
+
+#[test]
+fn existing_library_opens_when_the_backups_folder_is_unwritable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    {
+        let _lib = Library::open_with_vocabulary(&path, false).unwrap();
+    }
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TABLE highlights")
+        .unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    let mut perms = std::fs::metadata(&backups).unwrap().permissions();
+    perms.set_mode(0o500);
+    std::fs::set_permissions(&backups, perms).unwrap();
+    struct WritableOnDrop<'a>(&'a Path);
+    impl Drop for WritableOnDrop<'_> {
+        fn drop(&mut self) {
+            if let Ok(meta) = std::fs::metadata(self.0) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(self.0, perms);
+            }
+        }
+    }
+    let _restore = WritableOnDrop(&backups);
+    let _lib = Library::open_with_vocabulary(&path, false).unwrap();
+    assert_eq!(table_count(&path, "highlights"), 1);
+    assert_eq!(user_version(&path), 1);
+    assert!(
+        before_highlights(dir.path()).is_empty(),
+        "an unwritable backups folder must not block open and must not be required"
     );
 }
 
@@ -534,5 +552,325 @@ fn pdf_bytes_stay_untouched_by_creating_editing_and_deleting_a_highlight() {
     highlights::update(&lib, id, Some("blue"), Some("a comment")).unwrap();
     highlights::delete(&lib, id).unwrap();
     assert_eq!(std::fs::read(&pdf).unwrap(), before);
+    assert_eq!(user_version(&path), 1);
+}
+
+fn add_highlight_on(c: &Computer, citekey: &str, title: &str) -> (String, String, String) {
+    let rid = c.import(&format!("@article{{{citekey},title={{{title}}}}}"));
+    let pdf = c.dir.path().join(format!("{citekey}.pdf"));
+    one_page_pdf(&pdf, title);
+    let attachment = c.call("add_pdf", json!({"ref_id": &rid, "path": &pdf}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id = highlights::create(
+        &c.lib,
+        &rid,
+        &attachment,
+        1,
+        &[[72.0, 680.0, 240.0, 710.0]],
+        title,
+    )
+    .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (rid, attachment, id)
+}
+
+fn count_sql(path: &Path, sql: &str) -> i64 {
+    read_connection(path)
+        .unwrap()
+        .query_row(sql, [], |r| r.get(0))
+        .unwrap()
+}
+
+fn stamped(kind: &str, key: &str, device: &str, hlc: &str, fields: Map<String, Value>) -> Change {
+    let clocks = fields
+        .keys()
+        .map(|k| (k.clone(), hlc.to_string()))
+        .collect();
+    Change {
+        kind: kind.into(),
+        key: key.into(),
+        fields,
+        clocks,
+        device: device.into(),
+        ..Default::default()
+    }
+}
+
+fn highlight_fields(ref_id: Option<&str>, quote: &str) -> Map<String, Value> {
+    let mut fields = Map::new();
+    if let Some(ref_id) = ref_id {
+        fields.insert("ref_id".into(), json!(ref_id));
+    }
+    fields.insert("attachment_id".into(), json!("att-1"));
+    fields.insert("source_sha256".into(), json!("abc"));
+    fields.insert("page".into(), json!(1));
+    fields.insert("rects".into(), json!([[10.0, 20.0, 30.0, 40.0]]));
+    fields.insert("quote".into(), json!(quote));
+    fields.insert("color".into(), json!("yellow"));
+    fields.insert("comment".into(), json!(""));
+    fields.insert("created_at".into(), json!("2026-01-01T00:00:00.000Z"));
+    fields.insert("updated_at".into(), json!("2026-01-01T00:00:00.000Z"));
+    fields
+}
+
+/// Writes `main` and `ann` only when provided, then sets this device's manifest.
+fn write_remote(
+    shared: &Path,
+    device: &str,
+    seq: i64,
+    ann_seq: i64,
+    main: Option<&[Change]>,
+    ann: Option<&[Change]>,
+) {
+    let root = shared.join("Omabib");
+    if let Some(main) = main {
+        let dir = root.join(format!("changes/{device}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = format::write_batch(device, seq, "now", main).unwrap();
+        std::fs::write(dir.join(format!("{seq:010}.jsonl.gz")), bytes).unwrap();
+    }
+    if let Some(ann) = ann {
+        let dir = root.join(format!("annotations/changes/{device}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = format::write_batch(device, ann_seq, "now", ann).unwrap();
+        std::fs::write(dir.join(format!("{ann_seq:010}.jsonl.gz")), bytes).unwrap();
+    }
+    std::fs::write(
+        root.join(format!("devices/{device}.json")),
+        json!({
+            "device": device,
+            "name": device,
+            "seq": seq,
+            "ann_seq": ann_seq,
+            "hlc": format!("0000000009000.00000.{device}"),
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn join_through_the_sidecar_snapshot_exchanges_later_edits() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let (_rid, _attachment, id) = add_highlight_on(&a, "before", "Before join");
+    a.call("sync_start", json!({"mode": "new"}));
+    let snaps = std::fs::read_dir(shared.path().join("Omabib/annotations/snapshots")).unwrap();
+    assert!(
+        snaps
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".jsonl.gz")),
+        "the highlight is in the sidecar snapshot"
+    );
+    let b = Computer::new(shared.path());
+    b.call("sync_start", json!({"mode": "join"}));
+    let joined = highlights::get(&b.lib, &id)
+        .unwrap()
+        .expect("join absorbs the sidecar snapshot");
+    assert_eq!(joined["quote"], "Before join");
+    assert_eq!(joined["color"], "yellow");
+    let rid = joined["ref_id"].as_str().unwrap().to_string();
+    let attachment = joined["attachment_id"].as_str().unwrap().to_string();
+
+    highlights::update(&a.lib, &id, Some("green"), None).unwrap();
+    let second = highlights::create(
+        &b.lib,
+        &rid,
+        &attachment,
+        1,
+        &[[10.0, 10.0, 40.0, 20.0]],
+        "From B",
+    )
+    .unwrap();
+    let second_id = second["id"].as_str().unwrap().to_string();
+    settle(&[&a, &b]);
+    for c in [&a, &b] {
+        let first = highlights::get(&c.lib, &id).unwrap().unwrap();
+        let other = highlights::get(&c.lib, &second_id).unwrap().unwrap();
+        assert_eq!(first["color"], "green", "{}", c.device());
+        assert_eq!(first["quote"], "Before join");
+        assert_eq!(other["quote"], "From B");
+        assert_eq!(other["ref_id"], rid);
+    }
+    assert!(a.state_i64(&format!("awm:{}", b.device())) >= 1);
+    assert!(b.state_i64(&format!("awm:{}", a.device())) >= 1);
+}
+
+#[test]
+fn merge_keeps_highlights_from_both_libraries() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    let (_rid_a, _, id_a) = add_highlight_on(&a, "alpha", "Alpha paper");
+    a.call("sync_start", json!({"mode": "new"}));
+    let b = Computer::new(shared.path());
+    let (_rid_b, _, id_b) = add_highlight_on(&b, "beta", "Beta paper");
+    b.call("sync_start", json!({"mode": "merge"}));
+    settle(&[&a, &b]);
+    for c in [&a, &b] {
+        assert_eq!(
+            highlights::get(&c.lib, &id_a).unwrap().unwrap()["quote"],
+            "Alpha paper"
+        );
+        assert_eq!(
+            highlights::get(&c.lib, &id_b).unwrap().unwrap()["quote"],
+            "Beta paper"
+        );
+    }
+}
+
+#[test]
+fn a_highlight_for_a_missing_reference_stays_parked_until_it_arrives() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    a.call("sync_start", json!({"mode": "new"}));
+    let ref_id = "ref-arrives-later";
+    let hid = "hl-waiting";
+    let hlc = "0000000005000.00000.other";
+    let highlight = stamped(
+        "highlight",
+        hid,
+        "other",
+        hlc,
+        highlight_fields(Some(ref_id), "waiting"),
+    );
+    write_remote(shared.path(), "other", 0, 1, None, Some(&[highlight]));
+    a.sync();
+    assert!(highlights::get(&a.lib, hid).unwrap().is_none());
+    assert_eq!(count_sql(&a.lib.path, "SELECT count(*) FROM highlights"), 0);
+    assert_eq!(count_sql(&a.lib.path, "SELECT count(*) FROM ann_parked"), 1);
+
+    let mut ref_fields = Map::new();
+    ref_fields.insert("citekey".into(), json!("arriveslater"));
+    ref_fields.insert(
+        "bibtex".into(),
+        json!("@article{arriveslater,title={Arrives later},author={Doe, J.},year={2024}}"),
+    );
+    ref_fields.insert("title".into(), json!("Arrives later"));
+    ref_fields.insert("entry_type".into(), json!("article"));
+    ref_fields.insert("authors".into(), json!("Doe, J."));
+    ref_fields.insert("abstract".into(), json!(""));
+    ref_fields.insert("year".into(), json!("2024"));
+    ref_fields.insert("source".into(), json!(""));
+    ref_fields.insert("fields".into(), json!({}));
+    let reference = stamped(
+        "ref",
+        ref_id,
+        "other",
+        "0000000006000.00000.other",
+        ref_fields,
+    );
+    write_remote(shared.path(), "other", 1, 1, Some(&[reference]), None);
+    a.sync();
+    let row = highlights::get(&a.lib, hid).unwrap().expect("the highlight lands");
+    assert_eq!(row["ref_id"], ref_id);
+    assert_eq!(row["quote"], "waiting");
+    assert_eq!(count_sql(&a.lib.path, "SELECT count(*) FROM ann_parked"), 0);
+    assert_eq!(
+        a.call("get_reference", json!({"id": ref_id}))["title"],
+        "Arrives later"
+    );
+}
+
+#[test]
+fn a_highlight_change_with_no_reference_is_parked() {
+    let shared = tempfile::tempdir().unwrap();
+    let a = Computer::new(shared.path());
+    a.call("sync_start", json!({"mode": "new"}));
+    let hid = "hl-no-ref";
+    let highlight = stamped(
+        "highlight",
+        hid,
+        "other",
+        "0000000005000.00000.other",
+        highlight_fields(None, "orphan"),
+    );
+    write_remote(shared.path(), "other", 0, 1, None, Some(&[highlight]));
+    a.sync();
+    assert!(highlights::get(&a.lib, hid).unwrap().is_none());
+    assert_eq!(
+        count_sql(&a.lib.path, "SELECT count(*) FROM highlights WHERE ref_id=''"),
+        0
+    );
+    assert_eq!(count_sql(&a.lib.path, "SELECT count(*) FROM ann_parked"), 1);
+}
+
+#[test]
+fn a_recording_library_tombstones_highlights_deleted_the_old_way() {
+    let shared = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let pdf = dir.path().join("paper.pdf");
+    one_page_pdf(&pdf, "Recorded");
+    let (rid, highlight_id) = {
+        let lib = Library::open_with_vocabulary(&path, false).unwrap();
+        lib.call(
+            "sync_connect",
+            &json!({"provider": "folder", "path": shared.path()}),
+        )
+        .unwrap();
+        let rid = lib
+            .call(
+                "import_bibtex",
+                &json!({"bibtex": "@article{oldway,title={Recorded}}"}),
+            )
+            .unwrap()["items"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let attachment = lib
+            .call("add_pdf", &json!({"ref_id": &rid, "path": &pdf}))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let id = highlights::create(
+            &lib,
+            &rid,
+            &attachment,
+            1,
+            &[[10.0, 10.0, 40.0, 20.0]],
+            "Recorded",
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        lib.call("sync_start", &json!({"mode": "new"})).unwrap();
+        (rid, id)
+    };
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        c.execute("DELETE FROM docs WHERE ref_id=?", [&rid]).unwrap();
+        c.execute("DELETE FROM attachments WHERE ref_id=?", [&rid])
+            .unwrap();
+        assert_eq!(
+            c.execute("DELETE FROM refs WHERE id=?", [&rid]).unwrap(),
+            1
+        );
+        let left: i64 = c
+            .query_row("SELECT count(*) FROM highlights", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1, "the older client leaves the highlight row behind");
+    }
+    let lib = Library::open_with_vocabulary(&path, false).unwrap();
+    assert!(highlights::get(&lib, &highlight_id).unwrap().is_none());
+    lib.call("sync_now", &json!({})).unwrap();
+    let tombstoned = batch_files(&shared.path().join("Omabib/annotations/changes"))
+        .iter()
+        .any(|p| {
+            let (_, changes) = format::read_batch(&std::fs::read(p).unwrap()).unwrap();
+            changes
+                .iter()
+                .any(|c| c.kind == "highlight" && c.key == highlight_id && c.deleted.is_some())
+        });
+    assert!(
+        tombstoned,
+        "the next sync writes a highlight tombstone into annotations/changes/"
+    );
     assert_eq!(user_version(&path), 1);
 }
