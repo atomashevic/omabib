@@ -1,6 +1,7 @@
 //! Sync through an rclone older than 1.66, which rejects `--no-update-dir-modtime`.
 //! A stand-in rclone reports 1.60.1, fails on that flag like the real one, and
-//! passes everything else to the installed rclone.
+//! passes everything else to the installed rclone. It runs without the test
+//! harness (see Cargo.toml), so nothing else reads the environment it sets.
 use omabib::db::Library;
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
@@ -10,8 +11,7 @@ fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-#[test]
-fn a_pdf_syncs_through_rclone_1_60() {
+fn main() {
     let Some(real) = omabib::sync::store::rclone_binary() else {
         eprintln!("rclone not installed; skipped");
         return;
@@ -40,7 +40,7 @@ fn a_pdf_syncs_through_rclone_1_60() {
         format!("[shared]\ntype = alias\nremote = {}\n", cloud.display()),
     )
     .unwrap();
-    // The only test in this binary, so nothing else reads these meanwhile.
+    // No other thread runs yet, so setting the environment is sound.
     unsafe {
         std::env::set_var("OMABIB_RCLONE_BIN", &fake);
         std::env::set_var("OMABIB_RCLONE_CONFIG", &config);

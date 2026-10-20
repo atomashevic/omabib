@@ -3,7 +3,7 @@
 //! (`rclone authorize … --auth-no-open-browser`) and hands the sign-in link to
 //! the window, which opens it. The connection is always the `omabib` remote in
 //! Omabib's own rclone config.
-use super::store::{RCLONE_MINIMUM, rclone_binary, rclone_version as version_of};
+use super::store::{rclone_binary, rclone_version, too_old_to_sign_in};
 use super::{Sync, rclone_config};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -125,21 +125,10 @@ const PROVIDERS: [Provider; 3] = [
     },
 ];
 
-fn rclone_version() -> Option<String> {
-    let out = Command::new(rclone_binary()?)
-        .arg("version")
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .map(str::to_owned)
-}
-
 /// The choices the Sync dialog offers, and what each one needs.
 pub fn providers() -> Value {
-    let version = rclone_version();
+    let version = rclone_binary().and_then(|b| rclone_version(&b));
+    let too_old = too_old_to_sign_in(version.as_deref());
     let mut list: Vec<Value> = PROVIDERS
         .iter()
         .map(|p| {
@@ -147,7 +136,8 @@ pub fn providers() -> Value {
                 .app
                 .as_ref()
                 .filter(|app| credentials(app).is_none())
-                .map(|app| app.waiting);
+                .map(|app| app.waiting.to_string())
+                .or(too_old.clone());
             json!({"id":p.id,"label":p.label,"folder":p.folder,"needs_rclone":true,
                 "available": version.is_some() && blocked.is_none(), "blocked": blocked})
         })
@@ -273,15 +263,8 @@ pub fn start(sync: Arc<Sync>, provider: &str) -> Result<Arc<Connecting>> {
         .find(|p| p.id == provider)
         .with_context(|| format!("Unknown storage {provider}"))?;
     let binary = rclone_binary().context("Install rclone first")?;
-    if let Some((major, minor)) = version_of(&binary)
-        && (major, minor) < RCLONE_MINIMUM
-    {
-        bail!(
-            "Signing in needs rclone {}.{} or newer, and this computer has {major}.{minor}. \
-             Install the current version from https://rclone.org/install/",
-            RCLONE_MINIMUM.0,
-            RCLONE_MINIMUM.1
-        );
+    if let Some(message) = too_old_to_sign_in(rclone_version(&binary).as_deref()) {
+        bail!(message);
     }
     let mut params: Vec<String> = p.params.iter().map(|v| v.to_string()).collect();
     if let Some(app) = &p.app {
