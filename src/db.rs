@@ -614,6 +614,9 @@ impl Library {
             "attach" => {
                 let path = PathBuf::from(required(a, "path")?);
                 ensure!(path.is_absolute(), "Attachment path must be absolute");
+                // Resolved when the file is here, as add_pdf stores it and the
+                // PDF lookup resolves it; on macOS /tmp and /var are links.
+                let path = std::fs::canonicalize(&path).unwrap_or(path);
                 attach_within(
                     &tx,
                     required(a, "ref_id")?,

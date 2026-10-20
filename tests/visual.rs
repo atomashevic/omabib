@@ -55,3 +55,17 @@ fn pdf_lookup_uses_full_path_and_rejects_ambiguity() {
     lib.call("attach", &json!({"ref_id":refs["items"][1]["id"],"path":path,"file_type":"pdf"})).unwrap();
     assert!(lib.call("find_reference_by_pdf", &json!({"path":path})).is_err());
 }
+
+#[test]
+fn pdf_attached_through_a_linked_folder_is_found_by_its_real_path() {
+    // Any folder can be a link; on macOS /tmp and /var always are.
+    let dir = tempfile::tempdir().unwrap();
+    let lib = Library::open(dir.path().join("db")).unwrap();
+    let refs = lib.call("import_bibtex", &json!({"bibtex":"@article{a,title={A}}"})).unwrap();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::fs::write(dir.path().join("real/paper.pdf"), b"%PDF-1.4\n").unwrap();
+    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("linked")).unwrap();
+    let a = &refs["items"][0]["id"];
+    lib.call("attach", &json!({"ref_id":a,"path":dir.path().join("linked/paper.pdf"),"file_type":"pdf"})).unwrap();
+    assert_eq!(lib.call("find_reference_by_pdf", &json!({"path":dir.path().join("real/paper.pdf")})).unwrap()["ref_id"], *a);
+}
