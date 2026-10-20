@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.3] - 2026-10-20
 
-v0.1.2 was tagged on 2026-10-20 and the release was never published. The notes below are the user-facing changes written for 0.1.2, plus the install fix.
+v0.1.2 was tagged on 2026-10-20 and the release was never published. The notes below are the user-facing changes written for 0.1.2, the mouse-wheel fix, and the install fix.
 
 ### Added
 
