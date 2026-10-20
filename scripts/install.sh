@@ -53,6 +53,53 @@ path_hint() {
        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
   esac
 }
+# On Omarchy, Super+Alt+B shows or hides the window. One marked block in the
+# user's bindings file. A second install does not add another. A file that
+# already uses the chord, without our marker, is left as it is.
+install_omarchy_key() {
+  command -v omarchy >/dev/null 2>&1 || return 0
+  local file="$HOME/.config/hypr/bindings.lua"
+  local marker="-- omabib-keybind"
+  local line='o.bind("SUPER + ALT + B", "Omabib", "omabib open")'
+  local told="Show or hide Omabib with Super + Alt + B: $line"
+  if [[ -f $file ]] && grep -qF -- "$marker" "$file"; then
+    echo "$told"
+    return 0
+  fi
+  if uses_super_alt_b "$file"; then
+    echo "Left $file unchanged: it already uses Super + Alt + B and has no Omabib marker."
+    return 0
+  fi
+  mkdir -p "$(dirname -- "$file")"
+  if [[ ! -f $file ]]; then
+    # Opening comment from Omarchy's config/hypr/bindings.lua, and nothing else.
+    printf '%s\n' \
+      '-- Keep only your personal keybinding overrides here. Add new bindings with' \
+      '-- o.bind or replace defaults with o.rebind.' \
+      '' \
+      "$marker" \
+      "$line" > "$file"
+  else
+    # Keep a missing final newline from gluing the block onto the last line.
+    if [[ -s $file && -n $(tail -c1 "$file") ]]; then
+      printf '\n' >> "$file"
+    fi
+    if [[ -s $file ]]; then
+      printf '\n%s\n%s\n' "$marker" "$line" >> "$file"
+    else
+      printf '%s\n%s\n' "$marker" "$line" > "$file"
+    fi
+  fi
+  echo "$told"
+}
+# True when a non-comment line binds SUPER + ALT + B. A longer chord such as
+# SUPER + SHIFT + ALT + B does not count, and a full-line comment does not.
+uses_super_alt_b() {
+  local file=$1
+  [[ -f $file ]] || return 1
+  grep -vE '^[[:space:]]*--' "$file" \
+    | grep -qiE 'SUPER[[:space:]]*\+[[:space:]]*ALT[[:space:]]*\+[[:space:]]*B([^[:alnum:]_]|$)'
+}
 # Release builds link fontconfig and freetype for the command, and OpenGL,
 # X11 and xcb for the window. Those come from the distro. Name the packages
 # and stop before any installed file is replaced.
@@ -349,6 +396,7 @@ if [[ -x "$bin_dir/omabib-desktop" ]]; then
   fi
 fi
 install_shared
+install_omarchy_key
 if [[ $omarchy == false ]]; then
   echo "Installed Omabib. Open it from your applications, or run: omabib open"
   path_hint

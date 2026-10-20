@@ -20,7 +20,7 @@ The first launch stays running; closing the window only hides it. Later
 launches hand their request to the running copy:
 
 ```bash
-omabib-desktop --toggle            # show and focus, or hide when focused (bind to Super+B)
+omabib-desktop --toggle            # show and focus, or hide when focused (Omarchy: Super+Alt+B)
 omabib-desktop --add               # the add box
 omabib-desktop --query "polarization"
 omabib-desktop --pdf REF_ID        # a PDF reader tab
