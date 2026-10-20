@@ -152,7 +152,7 @@ On Linux, **⋯ → Chat in Codex CLI** (or Claude Code) opens the agent in a te
 
 ## Connecting other agents
 
-Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes and clips, get a PDF's path, and save notes when you ask.
+Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask.
 
 - **Codex:** **Settings → Connect Codex**, or `omabib-settings register-codex`. This registers Omabib's MCP server and installs the Omabib skill in `~/.codex/skills/omabib`. Reopen running Codex sessions afterwards. An existing connection to another library is left alone.
 - **Claude Desktop:** **Settings → Add Omabib to Claude Desktop**, then restart Claude Desktop. This adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
@@ -325,5 +325,6 @@ For agents:
 - Omabib never runs a language model itself and never indexes PDF text. It returns paths; reading the paper is up to the agent.
 - The MCP server handles up to eight calls at once, plus eight queued; beyond that, calls get a retryable busy error. Responses can arrive out of order.
 - Deleting a reference or a note goes through a preview first (`delete_reference_preview`, `delete_note_preview`), and the deletion must match it.
+- Text highlights are listed with `list_highlights` (one reference, or the whole library). `add_highlight` saves a yellow highlight, `update_highlight` changes its color or comment, and `delete_highlight` removes it. A replaced PDF is marked stale. They are not part of `get_reference`.
 
 `omabib schema get_reference search` prints those tools' schemas. See [API.md](../API.md) for the rest.

@@ -68,7 +68,7 @@ Claude Code or Codex, on your own login, with no API keys. It reads the paper, y
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/agents-dark.webp"><img src="https://omabib.github.io/img/features/agents-light.webp" alt="Agents found on this computer"></picture>
 
 **First-class MCP, built in**<br>
-One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes and clips, and open PDFs.
+One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes, clips and text highlights, and open PDFs.
 
 </td>
 <td width="50%" valign="top">

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Agents can list, save, change, and delete PDF text highlights with `list_highlights`, `add_highlight`, `update_highlight`, and `delete_highlight`, through `omabib call` and the MCP server. A new highlight is yellow. The PDF file is not changed.
+
 ## [0.1.2] - 2026-10-20
 
 ### Added

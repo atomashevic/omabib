@@ -73,6 +73,21 @@ Attachments are pointers, not file copies. Missing paths remain visible and can 
 
 Supply all note fields being retained when updating. Note bodies are limited to 64 KiB. Use `idempotency_key` for retried writes; MCP requires that parameter. Adding a project-specific note also associates the reference with that project.
 
+## Text highlights
+
+Highlights are text on a PDF page. They belong to the library, not to a project, and they are not notes. Search does not return them, and `get_reference` does not include them. The PDF file is never written.
+
+| Method | Parameters |
+|---|---|
+| `list_highlights` | Optional `ref_id` (UUID or citation key). Omit it for the whole library. Optional `limit` (1–100, default 50) and `cursor` (the previous `next_cursor`). |
+| `add_highlight` | `ref_id`, `attachment_id`, `page` (1-based), `rects` (one `[x0, y0, x1, y1]` box per line, in PDF points from the top left), `quote`. Stores yellow. A `color` other than yellow is refused. |
+| `update_highlight` | `id`, and `color`, `comment`, or both. `color` is `yellow`, `red`, `green`, `purple`, or `blue`. The boxes, the quote, and `created_at` stay. |
+| `delete_highlight` | `id`. Removes that highlight. |
+
+`list_highlights` returns `highlights` and `next_cursor` (`null` on the last page). Each item has `id`, `ref_id`, `citekey`, `attachment_id`, `page`, `quote`, `color`, `comment`, `created_at`, `updated_at`, and `stale`. Newest `updated_at` comes first, then `id` descending. `stale` is true when that attachment's fingerprint is missing or no longer matches the PDF the boxes were taken from; the row stays. Quote and comment are capped at 8 KiB. The color names are only colors.
+
+`add_highlight` and `update_highlight` return the stored highlight, including `rects` and `source_sha256`. `delete_highlight` returns `id` and `deleted: true`. All four are `omabib call` operations and MCP tools. `delete_highlight` is marked destructive, as `delete_note` is.
+
 ## Export and backup
 
 - `export_bibtex`: `ids` or `project_id`; includes crossref/xref/xdata dependencies and returns `bibtex` plus `count`.
