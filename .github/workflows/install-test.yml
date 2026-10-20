@@ -16,9 +16,6 @@ on:
         default: ''
   release:
     types: [published]
-  # Temporary, so GitHub records this file. Removed before review.
-  push:
-    branches: [cursor/macos-install-test-f41e]
 
 permissions:
   contents: read
@@ -33,15 +30,7 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
 
 jobs:
-  register:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - run: echo "Registering Install test so a workflow_dispatch can target this branch."
-
   macos:
-    if: github.event_name != 'push'
     name: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -207,7 +196,6 @@ jobs:
           if-no-files-found: ignore
 
   macos-intel:
-    if: github.event_name != 'push'
     name: Intel refusal
     runs-on: macos-15-intel
     timeout-minutes: 10
