@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3] - 2026-10-20
+## [0.1.3] - 2026-10-21
 
 v0.1.2 was tagged but never published. This release carries those changes: the Omarchy key and theme, uninstall, the field-merge sync fix, the install preflight, and older rclone, plus the mouse-wheel fix and the Linux package-list fix.
 
