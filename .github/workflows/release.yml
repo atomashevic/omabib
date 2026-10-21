@@ -176,6 +176,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -199,3 +200,9 @@ jobs:
           gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS get.sh \
             --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
             --title "Omabib $RELEASE_TAG" "${release_flags[@]}"
+      # A release created with GITHUB_TOKEN does not start other workflows, so
+      # install-test.yml's release trigger never runs. Dispatch it with the tag.
+      - name: Dispatch the install test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run install-test.yml --repo "$GITHUB_REPOSITORY" -f tag="${GITHUB_REF_NAME}"
