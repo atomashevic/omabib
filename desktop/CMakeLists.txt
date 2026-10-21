@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(omabib-desktop VERSION 0.1.2 LANGUAGES CXX)
+project(omabib-desktop VERSION 0.1.3 LANGUAGES CXX)
 
 # Omabib as an ordinary desktop app: plugin/App.qml in a plain Qt window,
 # with stand-ins for the Quickshell and Omarchy shell modules it imports.
