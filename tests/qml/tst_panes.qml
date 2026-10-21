@@ -75,12 +75,28 @@ Rectangle {
         // The reader's service calls, answered from fixtures.
         function rpc(method, params, callback, onError) {
             note(method + ":" + (params.page || params.query || params.ref_id || ""))
+            rpcLog = rpcLog.concat([{method: method, params: params}])
             var page = function (i) { return {x0: 0, y0: 0, w: 612, h: 792} }
             var answer = null
-            if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
+            if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", ref_id: params.ref_id, attachment_id: "a1", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
             else if (method === "pdf_render") answer = {path: String(Qt.resolvedUrl("page.png")).replace(/^file:\/\//, ""), width: 306, height: 396, scale: params.scale, links: params.page === 1 ? [{rect: [72, 300, 300, 330], page: 3, uri: null}] : []}
             else if (method === "pdf_text") answer = {page: params.page, words: [["Sparse", 72, 66, 148, 99, 0, 0], ["attention", 154, 66, 246, 99, 0, 0], ["Table", 72, 129, 110, 145, 1, 0], ["headline", 176, 129, 221, 145, 1, 0]]}
             else if (method === "pdf_search") answer = {query: params.query, hits: [{page: 2, rects: [[176, 129, 221, 145]]}], total: 1, truncated: false}
+            else if (method === "pdf_highlights") answer = {highlights: []}
+            else if (method === "add_highlight") {
+                var id = "h" + (++highlightSeq)
+                answer = {id: id, ref_id: params.ref_id, attachment_id: params.attachment_id, page: params.page, rects: params.rects, quote: params.quote, color: "yellow", comment: ""}
+                var added = Object.assign({}, highlightStore)
+                added[id] = answer
+                highlightStore = added
+            } else if (method === "update_highlight") {
+                answer = Object.assign({}, highlightStore[params.id])
+                if (params.color !== undefined) answer.color = params.color
+                if (params.comment !== undefined) answer.comment = params.comment
+                var edited = Object.assign({}, highlightStore)
+                edited[params.id] = answer
+                highlightStore = edited
+            } else if (method === "delete_highlight") answer = {id: params.id, deleted: true}
             if (!answer) { if (onError) onError("unsupported"); return 1 }
             Qt.callLater(callback, answer)
             return 1
@@ -101,6 +117,9 @@ Rectangle {
         property string actionDigits: ""
         property bool overflowOpen: overflowMenu.opened
         property var calls: []
+        property var rpcLog: []
+        property var highlightStore: ({})
+        property int highlightSeq: 0
         readonly property int maxTabs: 10
         property var paperTabs: []
         property int activeTab: -1
@@ -406,11 +425,11 @@ Rectangle {
             app.overviewBody = Fixture.overview
         }
         function test_1b_abstract_selectable() {
-            var abstract = find(detail, "abstractText")
-            verify(abstract, "abstract text")
-            abstract.selectAll()
-            verify(abstract.selectedText.indexOf("Transformers for time series") === 0, abstract.selectedText)
-            abstract.deselect()
+            var passage = find(detail, "abstractText")
+            verify(passage, "abstract text")
+            passage.selectAll()
+            verify(passage.selectedText.indexOf("Transformers for time series") === 0, passage.selectedText)
+            passage.deselect()
         }
         function test_2f_settings_panel() {
             app.openSettings()
@@ -828,6 +847,105 @@ Rectangle {
             compare(app.settings.pdf_colors, "original")
             } finally {
                 reader.showOutline = false
+                readerSheet.visible = false
+                reader.tab = null
+                app.paperTabs = []
+                app.activeTab = -1
+            }
+        }
+        function test_11b_highlights() {
+            function callsNamed(method) {
+                var n = 0
+                for (var i = 0; i < app.rpcLog.length; i++) if (app.rpcLog[i].method === method) n++
+                return n
+            }
+            function findShown(name) {
+                var top = stage
+                while (top.parent) top = top.parent
+                return find(top, name)
+            }
+            function near(got, want) { return Math.abs(got - want) < 0.01 }
+            var r = Fixture.ref
+            app.selected = r
+            app.detailTab = "notes"
+            app.highlightStore = ({})
+            app.highlightSeq = 0
+            app.rpcLog = []
+            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, kind: "pdf", detail_tab: "notes", page: 1, zoom_mode: "custom", zoom: 1}]
+            app.activeTab = 0
+            readerSheet.visible = true
+            reader.tab = app.activePaper
+            try {
+                tryCompare(reader, "status", "ready")
+                tryVerify(function () { return !!reader.words[1] })
+                reader.setZoom(1)
+                compare(reader.zoom, 1)
+                wait(50)
+                var mouse1 = find(find(reader, "readerPage1"), "readerPageMouse")
+                verify(mouse1 !== null)
+
+                // A click on empty text does not save a highlight.
+                var before = callsNamed("add_highlight")
+                mouseClick(mouse1, 400, 200)
+                wait(50)
+                compare(callsNamed("add_highlight"), before)
+                compare(reader.highlights.length, 0)
+                compare(reader.selection, null)
+
+                // A double-click on one word saves a yellow highlight of that word.
+                mouseDoubleClickSequence(mouse1, 198, 137)
+                tryVerify(function () { return reader.highlights.length === 1 })
+                compare(reader.highlights[0].color, "yellow")
+                compare(reader.highlights[0].quote, "headline")
+                compare(reader.highlights[0].comment, "")
+                compare(reader.highlights[0].rects.length, 1)
+                verify(near(reader.highlights[0].rects[0][0], 176) && near(reader.highlights[0].rects[0][1], 129))
+                verify(near(reader.highlights[0].rects[0][2], 221) && near(reader.highlights[0].rects[0][3], 145))
+                compare(reader.selection.page, 1)
+                compare(reader.selection.from, 3)
+                compare(reader.selection.to, 3)
+                var word = app.rpcLog.filter(function (c) { return c.method === "add_highlight" })
+                compare(word.length, 1)
+                verify(word[0].params.color === undefined)
+                compare(word[0].params.quote, "headline")
+                compare(word[0].params.attachment_id, "a1")
+                verify(find(find(reader, "readerPage1"), "readerHighlight") !== null)
+
+                // A drag saves a yellow highlight and leaves the selection in place.
+                mouseDrag(mouse1, 91, 137, 110, 0)
+                tryVerify(function () { return reader.highlights.length === 2 })
+                var dragged = reader.highlights[1]
+                compare(dragged.color, "yellow")
+                compare(dragged.quote, "Table headline")
+                compare(dragged.rects.length, 1)
+                verify(near(dragged.rects[0][0], 72) && near(dragged.rects[0][2], 221))
+                verify(near(dragged.rects[0][1], 129) && near(dragged.rects[0][3], 145))
+                compare(reader.selection.page, 1)
+                compare(Math.min(reader.selection.from, reader.selection.to), 2)
+                compare(Math.max(reader.selection.from, reader.selection.to), 3)
+
+                // The popover changes color, edits the comment, and deletes.
+                mouseClick(mouse1, 91, 137)
+                tryVerify(function () { return reader.highlightMenuOpen })
+                verify(findShown("highlightSwatchYellow") !== null)
+                verify(findShown("highlightSwatchRed") !== null)
+                verify(findShown("highlightSwatchGreen") !== null)
+                verify(findShown("highlightSwatchPurple") !== null)
+                verify(findShown("highlightSwatchBlue") !== null)
+                mouseClick(findShown("highlightSwatchRed"))
+                tryVerify(function () { return reader.highlights[1].color === "red" })
+                compare(reader.highlights[0].color, "yellow")
+                var field = findShown("highlightComment")
+                mouseClick(field)
+                field.forceActiveFocus()
+                keyClick(Qt.Key_N); keyClick(Qt.Key_O); keyClick(Qt.Key_T); keyClick(Qt.Key_E)
+                keyClick(Qt.Key_Return)
+                tryVerify(function () { return reader.highlights[1].comment === "note" })
+                mouseClick(findShown("highlightDelete"))
+                tryVerify(function () { return reader.highlights.length === 1 && !reader.highlightMenuOpen })
+                compare(reader.highlights[0].quote, "headline")
+                compare(reader.highlights[0].color, "yellow")
+            } finally {
                 readerSheet.visible = false
                 reader.tab = null
                 app.paperTabs = []

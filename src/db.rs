@@ -385,6 +385,7 @@ impl Library {
             "pdf_render" => crate::pdf::render(self, a),
             "pdf_text" => crate::pdf::text(self, a),
             "pdf_search" => crate::pdf::search(self, a),
+            "pdf_highlights" => crate::highlights::for_pdf(self, a),
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(a),
             "lookup_abstract" => lookup_abstract(self, a),

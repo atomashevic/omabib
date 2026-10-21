@@ -256,6 +256,39 @@ pub fn list(lib: &Library, a: &Value) -> Result<Value> {
     }))
 }
 
+/// Highlights to draw on the open PDF. A row is included only when that
+/// attachment's fingerprint still matches the file the boxes were taken from.
+/// The PDF is not read or written.
+pub fn for_pdf(lib: &Library, a: &Value) -> Result<Value> {
+    let key = crate::db::required(a, "ref_id")?;
+    let attachment_id = crate::db::required(a, "attachment_id")?;
+    let c = crate::db::read_connection(&lib.path)?;
+    let ref_id = reference_id(&c, key)?;
+    let mut stmt = c.prepare(
+        "SELECT h.id, h.page, h.rects, h.quote, h.color, h.comment \
+         FROM highlights h \
+         JOIN attachments a ON a.id = h.attachment_id \
+         WHERE h.ref_id=?1 AND h.attachment_id=?2 \
+           AND a.fingerprint IS NOT NULL AND a.fingerprint != '' \
+           AND a.fingerprint = h.source_sha256 \
+         ORDER BY h.page, h.id",
+    )?;
+    let highlights = stmt
+        .query_map(params![ref_id, attachment_id], |r| {
+            let rects: String = r.get(2)?;
+            Ok(json!({
+                "id": r.get::<_, String>(0)?,
+                "page": r.get::<_, i64>(1)?,
+                "rects": serde_json::from_str::<Value>(&rects).unwrap_or(Value::Null),
+                "quote": r.get::<_, String>(3)?,
+                "color": r.get::<_, String>(4)?,
+                "comment": r.get::<_, String>(5)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!({ "highlights": highlights }))
+}
+
 /// `add_highlight`. Always stores yellow. The PDF file is not written.
 pub fn add(lib: &Library, a: &Value) -> Result<Value> {
     if let Some(color) = optional_str(a, "color")? {
