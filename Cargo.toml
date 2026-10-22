@@ -1,6 +1,6 @@
 [package]
 name = "omabib"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 description = "Instant bibliography search and project-aware research notes for Omarchy"

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.atomashevic.omabib",
   "name": "Omabib",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "author": "Aleksandar",
   "license": "AGPL-3.0-or-later",
   "description": "Fast bibliography management with first-class agent support",
