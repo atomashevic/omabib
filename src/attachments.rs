@@ -76,7 +76,8 @@ fn sanitize_filename(name: &str) -> String {
 /// after the reference's citation key (e.g. `pdfs/watts1998collective.pdf`)
 /// rather than its content hash, so a person can find it by browsing.
 /// A same-named file with different bytes gets a short hash suffix instead
-/// of being overwritten.
+/// of being overwritten. The returned path is canonical, the same form
+/// `attach` and PDF lookup store and compare.
 pub(crate) fn finish(lib: &Library, path: &Path, citekey: &str) -> Result<(PathBuf, String)> {
     let hash = inspect(path)?;
     let dir = lib.path.parent().unwrap().join("pdfs");
@@ -92,6 +93,10 @@ pub(crate) fn finish(lib: &Library, path: &Path, citekey: &str) -> Result<(PathB
     } else {
         std::fs::rename(path, &target)?;
     }
+    // A library opened through a symlink (macOS `/var` → `/private/var`) must
+    // match one opened through the real path. Callers store this string and
+    // look it up as text.
+    let target = target.canonicalize().context("Cannot resolve the stored PDF")?;
     Ok((target, hash))
 }
 /// Download a PDF from an HTTPS URL into managed storage under a
