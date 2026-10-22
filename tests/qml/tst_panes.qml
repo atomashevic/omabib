@@ -179,11 +179,18 @@ Rectangle {
             settings: settings, path: "/home/reader/.config/omabib/settings.json", claude_desktop_mcp: false,
             codex_mcp: {state: "missing", message: "Connect Codex to use your library in any Codex session."},
             clis: [{id: "codex", name: "Codex CLI", available: true}, {id: "claude", name: "Claude Code", available: true}],
-            desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: false}]
+            desktops: [{id: "chatgpt", name: "ChatGPT Desktop", available: true}, {id: "claude", name: "Claude Desktop", available: false}],
+            agents: [{id: "claude-code", name: "Claude Code", state: "connected", message: "Claude Code is connected. Start a new session to load the tools."},
+                     {id: "codex", name: "Codex", state: "missing", message: "Connect Codex to use your library in any Codex session."},
+                     {id: "claude-desktop", name: "Claude Desktop", state: "unavailable", message: "Install Claude Desktop to connect your library."}]
         })
         function setSetting(key, value) { var next = Object.assign({}, settings); next[key] = value; settings = next; note("setSetting:" + key + "=" + value) }
-        function registerCodex() { note("registerCodex"); settingsInfo = Object.assign({}, settingsInfo, {codex_mcp: {state: "connected", message: "Codex is connected. Reopen existing sessions to load the tools."}}) }
-        function registerClaudeDesktop() { note("registerClaudeDesktop") }
+        function connectAgent(id) {
+            note("connectAgent:" + id)
+            var agents = settingsInfo.agents.map(function (a) { return a.id === id ? Object.assign({}, a, {state: "connected", message: a.name + " is connected."}) : a })
+            settingsInfo = Object.assign({}, settingsInfo, {agents: agents})
+        }
+        property bool agentsConnecting: false
         function openSettings() { settingsSheet.visible = true }
 
         // Chat stand-in: a store the pane reads, and the calls it makes.
@@ -474,11 +481,15 @@ Rectangle {
             wait(50)
             mouseClick(find(settingsPanel, "aiDesktop:claude"))
             compare(app.settings.ai_desktop, "claude")
-            var connect = find(settingsPanel, "connectCodex")
-            verify(connect.enabled)
+            // Each agent outside Omabib, with Connect for one that is installed and not connected.
+            verify(!find(settingsPanel, "connect:claude-code").visible, "a connected agent has no Connect")
+            verify(!find(settingsPanel, "connect:claude-desktop").visible, "an agent that isn't installed has no Connect")
+            var connect = find(settingsPanel, "connect:codex")
+            verify(connect.visible && connect.enabled)
             mouseClick(connect)
-            compare(app.settingsInfo.codex_mcp.state, "connected")
-            verify(!connect.enabled)
+            verify(app.calls.indexOf("connectAgent:codex") >= 0, app.calls)
+            compare(app.settingsInfo.agents[1].state, "connected")
+            verify(!connect.visible)
             shot("2f-settings")
             settingsSheet.visible = false
             app.settings = ({ai_cli: "codex", ai_desktop: "chatgpt"})
@@ -609,8 +620,22 @@ Rectangle {
             verify(app.calls.indexOf("openZotero") >= 0, app.calls)
             mouseClick(find(list, "welcomeBibtexButton"))
             verify(app.calls.indexOf("openBibPicker") >= 0, app.calls)
+            // The agents card pushes the sync line below the fold.
+            var welcome = find(list, "welcome")
+            welcome.contentY = Math.max(0, welcome.contentHeight - welcome.height)
+            wait(50)
             mouseClick(find(list, "welcomeSyncButton"))
             verify(app.calls.indexOf("openSync") >= 0, app.calls)
+            // The agents found were connected as the page showed; it says which.
+            verify(find(list, "welcomeAgent:claude-code").visible)
+            compare(find(list, "welcomeAgent:claude-desktop").text, "Claude Desktop · not installed")
+            compare(find(list, "welcomeAgents").title, "Your agents can use this library")
+            compare(find(list, "welcomeAgent:codex").text, "Codex · not connected")
+            shot("15g-welcome-agents")
+            mouseClick(find(list, "welcomeAgentSettings"))
+            verify(settingsSheet.visible, "agent settings open")
+            settingsSheet.visible = false
+            welcome.contentY = 0
             app.zotero = {found: false}
             wait(50)
             shot("15b-welcome-no-zotero")

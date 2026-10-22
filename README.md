@@ -112,10 +112,7 @@ Google Drive, Dropbox, OneDrive or a folder you already sync. Edits merge, PDFs 
 
 - Open a paper and click **Ask Claude** (or **Ask Codex**, chosen in **Settings**). Select a passage in the PDF and press <kbd>c</kbd> to ask about just that part.
 - It uses your own [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) login: install one and sign in once. The rest of Omabib works without any AI account.
-- To use your library from other agents too:
-  - **Codex:** in **Settings**, click **Connect Codex**.
-  - **Claude Desktop:** in **Settings**, click **Add Omabib to Claude Desktop**, then restart it.
-  - **Claude Code:** run `claude mcp add --scope user omabib -- ~/.local/bin/omabib mcp`.
+- Your other agents get your library too. A new library connects the Claude Code, Codex and Claude Desktop it finds, adding Omabib's MCP server and its skill, and the welcome page shows which. Later, **Settings → Your library in other agents** connects one you install afterwards. Any other MCP client can run `omabib mcp`.
 
 ### Sync between your computers
 
