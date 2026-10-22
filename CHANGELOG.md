@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A paper and its PDF share one tab. **Info** and **PDF** at the top of a paper tab switch between the paper's details and its PDF, and so does **Ctrl+O**. The PDF keeps its page and zoom while the details show. Tabs saved by an earlier version with a paper and its PDF open separately come back as one tab.
 - Identifying a PDF no longer needs `pdftotext` or `pdfinfo` from poppler-utils. Omabib reads the PDF with MuPDF, which it already includes, so `omabib add --pdf` also works on a Mac.
 - `add_reference` with `pdf_path` copies the PDF into the library unless `copy_pdf` is false. With `pdf_path` alone it adds only a sure match, or the PDF's own entry when nothing was found online. `identify_pdf` returns candidates in one shape, each with `match_kind` and `confident`, plus `existing`. `omabib add --pdf FILE --dry-run` lists the candidates.
 

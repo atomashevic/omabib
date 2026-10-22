@@ -150,11 +150,15 @@ Rectangle {
         function openInTab(ref, background) {
             note("openInTab:" + (ref ? ref.citekey : "current") + ":" + (background ? "background" : "front"))
             if (!ref || tabIds.indexOf(ref.id) >= 0 || paperTabs.length >= maxTabs) return
-            paperTabs = paperTabs.concat([{id: ref.id, citekey: ref.citekey, title: ref.title, detail_tab: "overview"}])
+            paperTabs = paperTabs.concat([{id: ref.id, citekey: ref.citekey, title: ref.title, view: "info", detail_tab: "overview"}])
             if (!background) activeTab = paperTabs.length - 1
         }
+        // A tab's two views, the paper's details and its PDF.
+        function setView(view) { var tabs = paperTabs.slice(); tabs[activeTab] = Object.assign({}, tabs[activeTab], {view: view}); paperTabs = tabs }
+        function showInfo() { note("showInfo"); setView("info") }
+        function showPdf() { note("showPdf"); setView("pdf") }
         function findInLibrary() { note("findInLibrary") }
-        readonly property bool inPdfTab: inPaperTab && !!activePaper && activePaper.kind === "pdf"
+        readonly property bool inPdfTab: inPaperTab && !!activePaper && activePaper.view === "pdf"
         property bool sidebarOpen: true
         readonly property string placeLabel: projectName
         readonly property string backLabel: placeLabel + (queryText !== "" ? " · \u201c" + queryText + "\u201d" : "")
@@ -501,6 +505,20 @@ Rectangle {
             verify(!sidebar.visible && rail.visible && readerBar.visible && !toolbar.visible, "a paper swaps the sidebar for the rail")
             compare(find(readerBar, "backToLibrary").visible, true)
             shot("9b-paper-tab")
+            // The paper and its PDF share the tab: the bar's switch shows one or the other.
+            var toPdf = find(readerBar, "tabView:pdf"), toInfo = find(readerBar, "tabView:info")
+            verify(toInfo.current && !toPdf.current, "a tab opened from the list shows the paper's details")
+            mouseClick(toInfo)
+            verify(app.calls.indexOf("showInfo") < 0, "the current view does nothing")
+            mouseClick(toPdf)
+            verify(app.calls.indexOf("showPdf") >= 0, app.calls)
+            compare(app.paperTabs.length, 2, "the PDF opens in the same tab")
+            verify(app.inPdfTab && toPdf.current && !toInfo.current)
+            mouseClick(toInfo)
+            verify(app.calls.indexOf("showInfo") >= 0, app.calls)
+            verify(!app.inPdfTab)
+            // Switching rewrites the tab list, and the rail lays out its thumbnails again on the next frame.
+            wait(50)
             // The rail's thumbnails switch papers; its library button goes back.
             mouseClick(find(rail, "paperTab:" + Fixture.hits[0].citekey))
             compare(app.activeTab, 0)
@@ -745,7 +763,7 @@ Rectangle {
             try {
             app.selected = r
             app.detailTab = "notes"
-            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, kind: "pdf", detail_tab: "notes", page: 2, zoom_mode: "width", zoom: 1}]
+            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, view: "pdf", detail_tab: "notes", page: 2, zoom_mode: "width", zoom: 1}]
             app.activeTab = 0
             readerSheet.visible = true
             reader.tab = app.activePaper
@@ -967,7 +985,7 @@ Rectangle {
             app.highlightStore = ({})
             app.highlightSeq = 0
             app.rpcLog = []
-            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, kind: "pdf", detail_tab: "notes", page: 1, zoom_mode: "custom", zoom: 1}]
+            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, view: "pdf", detail_tab: "notes", page: 1, zoom_mode: "custom", zoom: 1}]
             app.activeTab = 0
             readerSheet.visible = true
             reader.tab = app.activePaper

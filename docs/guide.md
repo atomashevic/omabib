@@ -40,14 +40,14 @@ The abstract and the AI summary are selectable: drag across paragraphs and press
 
 ## Tabs
 
-The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it, each showing that paper's details at full width, and PDFs open in **reader tabs**.
+The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it. A paper and its PDF share one tab: **Info** and **PDF** at the top of the tab switch between the paper's details, at full width, and its PDF in the reader. **Ctrl+O** switches too. The PDF keeps its place while you look at the details.
 
-- **Open:** double-click a result, press **Ctrl+T** or **Ctrl+Enter** in the search field, or choose **Open in a tab** in **⋯**. Middle-click a result to open it in the background. A paper that's already open switches to its tab.
+- **Open:** double-click a result, press **Ctrl+T** or **Ctrl+Enter** in the search field, or choose **Open in a tab** in **⋯**; the tab shows the paper's details. **Enter** or **Open PDF** opens it at its PDF. Middle-click a result to open it in the background. A paper that's already open switches to its tab.
 - **Switch:** click a tab or its entry in the sidebar, press **Ctrl+PgUp**/**Ctrl+PgDn** to cycle, **Alt+0** for the library tab and **Alt+1**–**Alt+9** for the others. **Ctrl+F**, or simply typing while a paper tab is showing, takes you back to the search. In a paper tab, **Esc** goes back to the library as you left it.
 - **Close:** tabs stay open until you close them, including after you hide the window or restart the computer. Close one with its ×, a middle-click or **Ctrl+W**. Deleting a reference closes its tabs.
-- **Limits:** up to 12 paper and reader tabs together. Tabs shrink as the strip fills, then overlap with the active tab on top.
+- **Limits:** up to 12 paper tabs. Tabs shrink as the strip fills, then overlap with the active tab on top.
 
-Each paper tab remembers its section, and each reader tab its page and zoom. Tabs are saved in `~/.local/state/omabib/tabs.json`, which holds only reference IDs, citation keys, titles, sections, pages and zoom levels.
+Each paper tab remembers which view it shows, the section open in each (the details' section, and the one beside the PDF), and the PDF's page and zoom. Tabs are saved in `~/.local/state/omabib/tabs.json`, which holds only reference IDs, citation keys, titles, sections, pages and zoom levels.
 
 ## The command palette
 
@@ -142,7 +142,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 
 ## Reading PDFs
 
-**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
+**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper's PDF in its tab, beside the **Info** view of its details. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
 
 | Keys | |
 |---|---|
@@ -163,6 +163,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **c** | quote the selection in the chat, or open the chat |
 | **Ctrl+R** | theme or original page colors |
 | **Esc** | put down the highlighter, cancel the clip, selection or search; again to go back |
+| **Ctrl+O** | the paper's details (**Info**), and back to the PDF |
 | **Ctrl+W** | close the tab |
 
 Dragging across words, or double-clicking one, selects them. **Ctrl+C** copies the passage with its lines run together, a word hyphenated across a line break closed up, and paragraphs kept apart. To highlight, press **m** or click the highlighter in the toolbar. Then a drag or a double-click saves a highlight in the color shown beside it (click the dot for another: yellow, red, green, purple or blue), and the highlighter stays in hand until **m** or **Esc**. With words selected, **m** highlights them.

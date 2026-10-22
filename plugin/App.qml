@@ -172,9 +172,14 @@ Item {
     property int activeTab: -1
     readonly property bool inPaperTab: activeTab >= 0 && activeTab < paperTabs.length
     readonly property var activePaper: inPaperTab ? paperTabs[activeTab] : null
-    // Tab identity: a reference can be open both as a paper tab and as a PDF tab.
-    readonly property var tabIds: paperTabs.map(function(t){return tabKey(t)})
-    readonly property bool inPdfTab: inPaperTab && activePaper.kind==="pdf"
+    // One tab per reference. Its view is the reference's details ("info") or its PDF ("pdf").
+    readonly property var tabIds: paperTabs.map(function(t){return t.id})
+    readonly property bool inPdfTab: inPaperTab && activePaper.view==="pdf"
+    // The reference whose PDF the reader keeps open, so a tab switched to
+    // Info and back shows its PDF where it was without opening it again.
+    property string readerKeepId: ""
+    onInPdfTabChanged: if(inPdfTab)readerKeepId=activePaper.id
+    onActivePaperChanged: if(inPdfTab)readerKeepId=activePaper.id
     // The library tab's detail while a paper tab is showing.
     property var searchView: ({selected: null, detailTab: "overview"})
     property var paperCache: ({})
@@ -484,7 +489,7 @@ Item {
     function enterPaper(index) {
         var tab=paperTabs[index]
         activeTab=index
-        detailTab=tab.detail_tab||(tab.kind==="pdf"?"notes":"overview")
+        detailTab=sectionOf(tab)
         selected=paperCache[tab.id]||null
         loadPaper(index)
         Qt.callLater(focusActiveTab)
@@ -494,7 +499,6 @@ Item {
         if(inPdfTab)readerPane.focusPages()
         else paperKeys.forceActiveFocus()
     }
-    function tabKey(tab) { return (tab.kind==="pdf"?"pdf:":"")+tab.id }
     function activateTab(index) {
         if(index<-1 || index>=paperTabs.length)return
         closeMenus()
@@ -531,35 +535,61 @@ Item {
         paperTabs=tabs
         saveTabs()
     }
-    // Opens a paper beside the library tab, or shows its existing tab.
+    // Opens a paper's details beside the library tab, or shows its tab at Info.
     function openInTab(ref, background) {
         ref=ref||targetRef()
         if(!ref)return
         var at=tabIds.indexOf(ref.id)
         if(at>=0){
             if(background)flash(ref.citekey+" is already open in a tab")
-            else activateTab(at)
+            else showTab(at,{view:"info"})
             return
         }
         if(paperTabs.length>=maxTabs){flash(maxTabs+" tabs are open. Close one to open another.");return}
         var current=!inPaperTab && selected && selected.id===ref.id
         if(current)paperCache[ref.id]=selected
-        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,detail_tab:current?detailTab:"overview"}])
+        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,view:"info",detail_tab:current?detailTab:"overview",side_tab:"notes"}])
         if(background){saveTabs();flash("Opened "+ref.citekey+" in a tab")}
         else activateTab(paperTabs.length-1)
     }
-    // Opens a reference's PDF in a reader tab, or shows its existing reader tab.
+    // Opens a reference's PDF in its tab, which opens if it isn't already.
     function openPdfTab(ref, background, page) {
         ref=ref||targetRef()
         if(!ref)return
-        var at=tabIds.indexOf("pdf:"+ref.id)
-        if(at>=0){ if(!background)activateTab(at); return }
+        var at=tabIds.indexOf(ref.id)
+        if(at>=0){
+            var changes={view:"pdf"}
+            if(!paperTabs[at].page)Object.assign(changes,{page:1,zoom_mode:"width",zoom:1})
+            if(page>0)changes.page=page
+            if(background)updateTab(at,changes)
+            else showTab(at,changes)
+            return
+        }
         if(paperTabs.length>=maxTabs){flash(maxTabs+" tabs are open. Close one to open another.");return}
         if(selected && selected.id===ref.id)paperCache[ref.id]=selected
-        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,kind:"pdf",detail_tab:"notes",page:page>0?page:1,zoom_mode:"width",zoom:1}])
+        paperTabs=paperTabs.concat([{id:ref.id,citekey:ref.citekey,title:ref.title||ref.citekey,view:"pdf",detail_tab:"overview",side_tab:"notes",page:page>0?page:1,zoom_mode:"width",zoom:1}])
         if(background)saveTabs()
         else activateTab(paperTabs.length-1)
     }
+    // Brings tab `index` forward with `changes` (its view, a page) applied.
+    function showTab(index, changes) {
+        updateTab(index,changes)
+        if(index!==activeTab){activateTab(index);return}
+        if(changes.view)detailTab=sectionOf(paperTabs[index])
+        Qt.callLater(focusActiveTab)
+    }
+    // Each view keeps its own section: the details' (detail_tab) and the
+    // PDF's side pane (side_tab).
+    function sectionOf(tab) { return tab.view==="pdf" ? tab.side_tab||"notes" : tab.detail_tab||"overview" }
+    // A tab's two views: the reference's details, and its PDF. A PDF the
+    // reader still has open shows at once; otherwise it is found first.
+    function showInfo() { if(inPdfTab)showTab(activeTab,{view:"info"}) }
+    function showPdf() {
+        if(!inPaperTab || inPdfTab)return
+        if(readerKeepId===activePaper.id)showTab(activeTab,{view:"pdf"})
+        else getPdf()
+    }
+    function toggleTabView() { if(inPdfTab)showInfo(); else showPdf() }
     function openPdfTabById(refId) {
         rpc("get_reference",{id:refId,include_metadata:false},function(r){root.openPdfTab(r,false)})
     }
@@ -609,17 +639,34 @@ Item {
     function applyTabs() {
         if(!tabsRestored)return
         var entry=tabsStore[serviceSocket]||{}
-        var tabs=(Array.isArray(entry.tabs)?entry.tabs:[]).filter(function(t){return t && typeof t.id==="string" && typeof t.citekey==="string"})
-            .slice(0,maxTabs).map(function(t){
-                var tab={id:t.id,citekey:t.citekey,title:String(t.title||t.citekey),detail_tab:detailTabs.indexOf(t.detail_tab)>=0?t.detail_tab:"overview"}
-                if(t.kind==="pdf"){tab.kind="pdf";tab.page=Number.isInteger(t.page)&&t.page>0?t.page:1;tab.zoom_mode=["width","page","custom"].indexOf(t.zoom_mode)>=0?t.zoom_mode:"width";tab.zoom=typeof t.zoom==="number"&&t.zoom>0?t.zoom:1}
-                return tab
-            })
+        var saved=Array.isArray(entry.tabs)?entry.tabs:[], tabs=[], byId={}, activeId=null
+        var savedActive=Number.isInteger(entry.active)?entry.active:-1
+        saved.forEach(function(t,i){
+            if(!t || typeof t.id!=="string" || typeof t.citekey!=="string")return
+            // Earlier versions opened a reference's details and its PDF in two
+            // tabs (kind "pdf"); they come back as one tab.
+            var pdf=t.view==="pdf" || t.kind==="pdf"
+            var tab=byId[t.id]
+            if(!tab){
+                if(tabs.length>=maxTabs)return
+                tab={id:t.id,citekey:t.citekey,title:String(t.title||t.citekey),view:pdf?"pdf":"info",detail_tab:"overview",side_tab:"notes"}
+                byId[t.id]=tab
+                tabs.push(tab)
+            }
+            // An old reader tab's section was its side pane's.
+            if(t.kind==="pdf"){if(detailTabs.indexOf(t.detail_tab)>=0)tab.side_tab=t.detail_tab}
+            else{
+                if(detailTabs.indexOf(t.detail_tab)>=0)tab.detail_tab=t.detail_tab
+                if(detailTabs.indexOf(t.side_tab)>=0)tab.side_tab=t.side_tab
+            }
+            if(pdf || Number.isInteger(t.page)){tab.page=Number.isInteger(t.page)&&t.page>0?t.page:1;tab.zoom_mode=["width","page","custom"].indexOf(t.zoom_mode)>=0?t.zoom_mode:"width";tab.zoom=typeof t.zoom==="number"&&t.zoom>0?t.zoom:1}
+            if(i===savedActive){activeId=t.id;tab.view=pdf?"pdf":"info"}
+        })
         if(inPaperTab){activeTab=-1;selected=searchView.selected;detailTab=searchView.detailTab||"overview";searchView={selected:null,detailTab:"overview"}}
         paperCache=({})
         paperTabs=tabs
-        var active=Number.isInteger(entry.active)?entry.active:-1
-        if(active>=0 && active<tabs.length){searchView={selected:selected,detailTab:detailTab};enterPaper(active)}
+        var active=tabIds.indexOf(activeId)
+        if(active>=0){searchView={selected:selected,detailTab:detailTab};enterPaper(active)}
     }
     FileView {
         id:tabsFile
@@ -833,7 +880,14 @@ Item {
         var i=keys.indexOf(detailTab)
         selectTab(keys[(i+delta+keys.length)%keys.length])
     }
-    onDetailTabChanged: if(inPaperTab && activePaper.detail_tab!==detailTab) updateTab(activeTab,{detail_tab:detailTab})
+    onDetailTabChanged: {
+        if(!inPaperTab)return
+        var key=inPdfTab?"side_tab":"detail_tab"
+        if(activePaper[key]===detailTab)return
+        var changes={}
+        changes[key]=detailTab
+        updateTab(activeTab,changes)
+    }
     onSelectedChanged: {
         var id=selected?selected.id:""
         if(id!==lastSelectedId){
@@ -1749,14 +1803,10 @@ Item {
         var page=m?Number(m[1]):file.page
         if(inPdfTab){if(page)readerPane.goToPage(page);return}
         if(!ref)return
-        var at=tabIds.indexOf("pdf:"+ref.id)
-        if(at>=0){
-            if(page)updateTab(at,{page:page})
-            activateTab(at)
-            if(page)Qt.callLater(function(){readerPane.goToPage(page)})
-            return
-        }
+        // A PDF the reader still has open keeps its place, so go to the page.
+        var kept=readerKeepId===ref.id && tabIds.indexOf(ref.id)>=0
         openPdfTab(ref,false,page)
+        if(kept && page)Qt.callLater(function(){readerPane.goToPage(page)})
     }
     function saveAnswerAsNote(text) {
         if(!selected)return
@@ -1968,6 +2018,7 @@ Item {
         function openTab(): void { root.openInTab(null, false) }
         function openPdf(refId: string): void { root.open(JSON.stringify({action: "pdf", ref_id: refId})) }
         function activateTab(index: int): void { root.activateTab(index) }
+        function toggleTabView(): void { root.toggleTabView() }
         function closeTab(index: int): void { root.closeTab(index) }
         function openChatGPT(): void { root.openCodex(true) }
         function openDelete(): void { root.requestDelete() }
@@ -1979,7 +2030,7 @@ Item {
         function importZotero(): void { root.importZotero() }
         function setZoteroOption(key: string, value: string): void { root.setZoteroOption(key, value === "true" ? true : value === "false" ? false : value) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence?evidence.text:"",note_scope:noteScope?noteScope.currentIndex:0,editor_focused:!!root.activeEditor()&&root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,library_empty:root.libraryEmpty,zotero:root.zotero?{found:!!root.zotero.found,running:!!root.zotero.running}:null,zotero_open:zoteroDialog.opened,zotero_importing:root.zoteroImporting,zotero_progress:root.zoteroProgress,zotero_result:root.zoteroResult,zotero_error:root.zoteroError,pdf_import:root.pdfImport?{name:root.pdfImport.name,busy:root.pdfImport.busy,choice:root.pdfImport.choice,candidates:root.pdfImport.result?root.pdfImport.result.candidates.length:0,error:root.pdfImport.error}:null,pdf_queue:root.pdfQueue.length,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath?filePath.text:"",picker_matches:bibFileDialog.item?bibFileDialog.item.matches.map(function(m){return m.name}):[],picker_index:fileList?fileList.currentIndex:-1,picker_focused:!!filePath&&filePath.activeFocus,picker_chosen:bibFileDialog.item?bibFileDialog.item.lastChosen:"",edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence?evidence.text:"",note_scope:noteScope?noteScope.currentIndex:0,editor_focused:!!root.activeEditor()&&root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_views:root.paperTabs.map(function(t){return t.view||"info"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,library_empty:root.libraryEmpty,zotero:root.zotero?{found:!!root.zotero.found,running:!!root.zotero.running}:null,zotero_open:zoteroDialog.opened,zotero_importing:root.zoteroImporting,zotero_progress:root.zoteroProgress,zotero_result:root.zoteroResult,zotero_error:root.zoteroError,pdf_import:root.pdfImport?{name:root.pdfImport.name,busy:root.pdfImport.busy,choice:root.pdfImport.choice,candidates:root.pdfImport.result?root.pdfImport.result.candidates.length:0,error:root.pdfImport.error}:null,pdf_queue:root.pdfQueue.length,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath?filePath.text:"",picker_matches:bibFileDialog.item?bibFileDialog.item.matches.map(function(m){return m.name}):[],picker_index:fileList?fileList.currentIndex:-1,picker_focused:!!filePath&&filePath.activeFocus,picker_chosen:bibFileDialog.item?bibFileDialog.item.lastChosen:"",edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     // Changes from other computers refresh the list and open papers, gently.
@@ -2192,7 +2243,7 @@ Item {
                                         visible: root.inPdfTab
                                         theme: ui
                                         app: root
-                                        tab: root.inPdfTab ? root.activePaper : null
+                                        tab: root.inPaperTab && (root.inPdfTab || root.activePaper.id === root.readerKeepId) ? root.activePaper : null
                                     }
                                 }
                             }
@@ -2205,7 +2256,7 @@ Item {
                     theme: ui
                     notice: root.notice
                     hints: root.inPdfTab
-                        ? [["Esc", "back to the library"], ["Alt+1–9", "switch paper"], ["j k", "scroll"], ["/", "search"], ["r", "clip"], ["a", "page note"], ["]", "notes"], ["Ctrl+W", "close"]]
+                        ? [["Esc", "back to the library"], [root.pdfShortcut, "info"], ["Alt+1–9", "switch paper"], ["j k", "scroll"], ["/", "search"], ["m", "highlight"], ["r", "clip"], ["]", "notes"], ["Ctrl+W", "close"]]
                         : root.inPaperTab
                         ? [["Esc", "back to the library"], [root.pdfShortcut, "PDF"], ["Ctrl+U", "link"], ["Ctrl+1–5", "sections"], ["Alt+1–9", "switch paper"], ["Ctrl+W", "close"]]
                         : root.expanded
@@ -2243,7 +2294,8 @@ Item {
             }
             CommandPalette { id: commandDialog; theme: ui; app: root }
         }
-        Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.getPdf()}
+        // In a paper tab it switches between the paper's details and its PDF.
+        Shortcut {sequence:root.pdfShortcut;enabled:root.opened&&!editorDialog.opened;onActivated:root.inPaperTab?root.toggleTabView():root.getPdf()}
         Shortcut {sequence:"Ctrl+U";enabled:root.opened&&!editorDialog.opened;onActivated:root.openLink()}
         Shortcut {sequence:"Ctrl+S";enabled:root.opened&&!root.modalOpen&&!root.inPaperTab;onActivated:root.toggleBrowseSort()}
         Shortcut {sequence:"Ctrl+R";enabled:root.opened&&!root.modalOpen&&root.inPdfTab;onActivated:root.togglePdfColors()}

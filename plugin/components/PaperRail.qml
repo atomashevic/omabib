@@ -101,8 +101,8 @@ Rectangle {
                         required property var modelData
                         required property int index
                         readonly property bool active: root.app.activeTab === index
-                        readonly property bool pdf: modelData.kind === "pdf"
-                        objectName: (pdf ? "pdfTab:" : "paperTab:") + modelData.citekey
+                        readonly property bool pdf: modelData.view === "pdf"
+                        objectName: "paperTab:" + modelData.citekey
                         Layout.alignment: Qt.AlignHCenter
                         implicitWidth: root.theme.space(38)
                         implicitHeight: root.theme.space(50)
