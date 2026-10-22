@@ -68,8 +68,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "add_reference",
-            "Add a reference from a DOI, arXiv ID, URL or BibTeX entry (input), or from a local PDF file (pdf_path, read to identify it). Fetches an abstract and an open-access PDF when available. Existing references are filled, not duplicated. Requires idempotency_key.",
-            json!({"input":string,"pdf_path":string,"project_id":{"type":["string","null"]},"download_pdf":boolean,"idempotency_key":string}),
+            "Add a reference from a DOI, arXiv ID, URL or BibTeX entry (input), or from a local PDF file (pdf_path). A PDF alone is identified from its own pages (an arXiv ID, DOI or ISBN printed in it, else its title on Crossref, Semantic Scholar, arXiv and Europe PMC) and is added only when the match is sure; otherwise the error says so. pdf_path with input attaches that PDF to the reference input names. The PDF is copied into Omabib's library unless copy_pdf is false. Fetches an abstract and an open-access PDF when available. Existing references are filled, not duplicated. Requires idempotency_key.",
+            json!({"input":string,"pdf_path":string,"copy_pdf":boolean,"source":string,"project_id":{"type":["string","null"]},"download_pdf":boolean,"idempotency_key":string}),
             vec!["idempotency_key"],
             true,
         ),

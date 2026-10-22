@@ -9,6 +9,8 @@ pub mod math;
 pub mod mcp;
 pub mod metadata;
 pub mod pdf;
+pub mod recognize;
 pub mod search;
 pub mod transport;
 pub mod visual;
+pub mod zotero;

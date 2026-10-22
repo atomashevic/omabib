@@ -1,24 +1,32 @@
 use omabib::db::Library;
 use omabib::pdf::Pdf;
+use omabib::recognize::Clues;
 use serde_json::json;
 use std::path::Path;
 
-/// A two-page PDF with Helvetica text: US Letter, then A4.
-fn fixture(path: &Path) {
-    let content = b"BT /F1 24 Tf 72 700 Td (Sparse attention is enough) Tj ET\nBT /F1 12 Tf 72 650 Td (Table 2 reports the headline result.) Tj ET\n0 0 1 rg 72 400 200 100 re f\n";
-    let objects: Vec<Vec<u8>> = vec![
+/// A PDF of `pages` (content stream, width, height) set in Helvetica (F1)
+/// and Helvetica-Bold (F2), with `info` as its document information.
+fn write_pdf(path: &Path, pages: &[(&[u8], u32, u32)], info: &str) {
+    // 1 catalog, 2 page tree, 3 and 4 fonts, 5 info, then each page and its contents.
+    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 6 + 2 * i)).collect();
+    let mut objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 4 0 R >>".to_vec(),
-        [
-            format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
-            content.to_vec(),
-            b"\nendstream".to_vec(),
-        ]
-        .concat(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".to_vec(),
+        info.as_bytes().to_vec(),
     ];
+    for (i, (content, width, height)) in pages.iter().enumerate() {
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {} 0 R >>", 7 + 2 * i).into_bytes());
+        objects.push(
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
+                content.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        );
+    }
     let mut data = b"%PDF-1.4\n".to_vec();
     let mut offsets = vec![];
     for (i, object) in objects.iter().enumerate() {
@@ -34,12 +42,107 @@ fn fixture(path: &Path) {
     }
     data.extend(
         format!(
-            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            "trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref}\n%%EOF\n",
             objects.len() + 1
         )
         .bytes(),
     );
     std::fs::write(path, data).unwrap();
+}
+
+/// A two-page PDF with Helvetica text: US Letter, then A4.
+fn fixture(path: &Path) {
+    let content: &[u8] = b"BT /F1 24 Tf 72 700 Td (Sparse attention is enough) Tj ET\nBT /F1 12 Tf 72 650 Td (Table 2 reports the headline result.) Tj ET\n0 0 1 rg 72 400 200 100 re f\n";
+    write_pdf(path, &[(content, 612, 792), (content, 595, 842)], "<< >>");
+}
+
+/// A paper's first pages: a two-line title, authors, an abstract, an arXiv
+/// stamp up the margin, a diagonal watermark, and a cited DOI on page two.
+fn paper(path: &Path) {
+    let first: &[u8] = b"BT /F2 20 Tf 72 700 Td (Sparse Attention Is Enough for Long) Tj 0 -24 Td (Document Retrieval) Tj ET
+BT /F1 11 Tf 72 640 Td (Ada Okafor and Bea Lindqvist) Tj ET
+BT /F2 10 Tf 72 600 Td (Abstract) Tj ET
+BT /F1 10 Tf 72 586 Td (We show that sparse attention retrieves long documents as well as dense attention) Tj 0 -12 Td (does, at a fraction of the cost, across four benchmarks and three languages, and) Tj 0 -12 Td (explain why with a simple model of where relevant passages sit in a document.) Tj ET
+BT /F1 10 Tf 72 530 Td (Keywords: attention, retrieval) Tj ET
+BT /F1 9 Tf 0 1 -1 0 30 250 Tm (arXiv:2401.01234v2 [cs.IR] 3 Jan 2024) Tj ET
+BT /F2 72 Tf 0.707 0.707 -0.707 0.707 150 150 Tm (ARTICLE IN PRESS) Tj ET";
+    let second: &[u8] = b"BT /F1 10 Tf 72 700 Td (As Watts and Strogatz showed, doi:10.1038/30918, small worlds are common.) Tj ET";
+    write_pdf(
+        path,
+        &[(first, 612, 792), (second, 612, 792)],
+        "<< /Title (Sparse Attention Is Enough for Long Document Retrieval) /Author (Ada Okafor; Bea Lindqvist) /doi (10.5555/sparse.2024.1) >>",
+    );
+}
+
+#[test]
+fn reads_a_papers_first_pages_to_identify_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("paper.pdf");
+    paper(&path);
+    let reading = Pdf::new(dir.path().join("cache")).read_paper(&path).unwrap();
+    assert_eq!(reading.page_count, 2);
+    assert!(reading.info.contains(&("doi".into(), "10.5555/sparse.2024.1".into())));
+    let title = reading.pages[0].lines.iter().find(|l| l.text.starts_with("Sparse")).unwrap();
+    assert_eq!(title.size, 20.0);
+    // The arXiv stamp runs up the margin: it is text, but not a layout line.
+    assert!(reading.pages[0].text.contains("arXiv:2401.01234v2"));
+    assert!(reading.pages[0].lines.iter().all(|l| !l.text.contains("arXiv")));
+    // So is a watermark set diagonally across the page, larger than the title.
+    assert!(reading.pages[0].lines.iter().all(|l| !l.text.contains("PRESS")));
+
+    let clues = Clues::read(&reading);
+    assert_eq!(clues.arxiv.as_deref(), Some("2401.01234"));
+    assert_eq!(clues.info_doi.as_deref(), Some("10.5555/sparse.2024.1"));
+    assert_eq!(clues.dois, vec!["10.1038/30918"]);
+    assert_eq!(clues.titles[0].text, "Sparse Attention Is Enough for Long Document Retrieval");
+    assert_eq!(clues.authors[0], ("Okafor".to_string(), "Ada".to_string()));
+    assert!(clues.abstract_text.as_deref().unwrap().starts_with("We show that sparse attention"));
+    assert!(clues.printed("Sparse attention is enough for long document retrieval", &["Okafor".into()]));
+    assert!(!clues.printed("Collective dynamics of small-world networks", &["Watts".into()]));
+}
+
+#[test]
+fn imports_a_pdf_as_a_new_reference_with_a_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut lib = Library::open(dir.path().join("library.db")).unwrap();
+    lib.pdf = Pdf::new(dir.path().join("cache"));
+    std::fs::create_dir(dir.path().join("Downloads")).unwrap();
+    let original = dir.path().join("Downloads/paper.pdf");
+    paper(&original);
+
+    let found = lib
+        .call("identify_pdf", &json!({"path":original,"online":false}))
+        .unwrap();
+    assert_eq!(found["pages"], 2);
+    assert_eq!(found["existing"], json!(null));
+    let candidates = found["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    let own = &candidates[0];
+    assert_eq!(own["match_kind"], "read from the PDF itself");
+    assert_eq!(own["confident"], false);
+    assert_eq!(own["title"], "Sparse Attention Is Enough for Long Document Retrieval");
+    assert_eq!(own["authors"], "Okafor, Ada and Lindqvist, Bea");
+    assert_eq!(own["abstract_source"], "the PDF");
+
+    let added = lib
+        .call(
+            "add_reference",
+            &json!({"input":own["bibtex"],"source":own["source"],"pdf_path":original,"download_pdf":false,"idempotency_key":"pdf-1"}),
+        )
+        .unwrap();
+    assert_eq!(added["citekey"], "okafor_sparse");
+    let stored = dir.path().canonicalize().unwrap().join("pdfs/okafor_sparse.pdf");
+    assert_eq!(added["attachment"]["path"], json!(stored));
+    assert!(original.exists());
+    let r = lib.call("get_reference", &json!({"id":added["id"]})).unwrap();
+    assert!(r["source"].as_str().unwrap().contains("PDF file paper.pdf"), "{}", r["source"]);
+    assert!(r["abstract"].as_str().unwrap().starts_with("We show"));
+
+    // The same file again is one the library already has.
+    let again = lib
+        .call("identify_pdf", &json!({"path":original,"online":false}))
+        .unwrap();
+    assert_eq!(again["existing"]["citekey"], "okafor_sparse");
 }
 
 #[test]

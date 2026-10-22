@@ -35,6 +35,29 @@ enum Command {
     },
     /// Import a BibTeX file without overwriting existing values.
     Import { file: PathBuf },
+    /// Bring a Zotero library over: references under their citation keys,
+    /// PDFs, notes and annotations, and collections as projects. Reads a copy
+    /// of Zotero's database, so Zotero can stay open.
+    Zotero {
+        /// Zotero's data folder, the one with zotero.sqlite; found when omitted.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Link to Zotero's PDF files where they are instead of copying them.
+        #[arg(long)]
+        link_pdfs: bool,
+        /// Leave group libraries out.
+        #[arg(long)]
+        no_groups: bool,
+        /// Leave notes and annotations out.
+        #[arg(long)]
+        no_notes: bool,
+        /// Don't turn collections into projects.
+        #[arg(long)]
+        no_projects: bool,
+        /// Show what would be imported without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Add one or more DOIs, arXiv IDs, URLs or BibTeX entries; with no
     /// arguments, open the universal add box in the desktop popup.
     Add {
@@ -289,6 +312,34 @@ fn run() -> Result<()> {
             "import_bibtex",
             &json!({"bibtex":std::fs::read_to_string(&file)?,"source":file.to_string_lossy()}),
         )?,
+        Command::Zotero {
+            dir,
+            link_pdfs,
+            no_groups,
+            no_notes,
+            no_projects,
+            dry_run,
+        } => {
+            let mut a = json!({
+                "pdfs": if link_pdfs { "link" } else { "copy" },
+                "groups": !no_groups,
+                "notes": !no_notes,
+                "projects": !no_projects,
+            });
+            if let Some(dir) = dir {
+                a["path"] = json!(std::path::absolute(dir)?);
+            }
+            if dry_run {
+                omabib::transport::request("zotero_detect", &a)?
+            } else {
+                // Copying a large library's PDFs can take a while.
+                omabib::transport::request_with_timeout(
+                    "zotero_import",
+                    &a,
+                    std::time::Duration::from_secs(4 * 3600),
+                )?
+            }
+        }
         Command::Add {
             identifiers,
             pdf,
@@ -308,11 +359,12 @@ fn run() -> Result<()> {
                 }
                 return Ok(());
             }
-            if dry_run {
-                anyhow::ensure!(
-                    pdf.is_none(),
-                    "--dry-run does not support --pdf; run `omabib call identify_pdf` directly"
-                );
+            if dry_run && let Some(pdf) = &pdf {
+                omabib::transport::request(
+                    "identify_pdf",
+                    &json!({"path":std::fs::canonicalize(pdf)?}),
+                )?
+            } else if dry_run {
                 omabib::transport::request(
                     "preview_entry",
                     &json!({"input":identifiers.join(" ")}),
@@ -606,7 +658,7 @@ fn run() -> Result<()> {
             json!({"tools":found})
         }
         Command::Schema { .. } => {
-            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","sync_status","sync_providers","sync_connect","sync_connect_cancel","sync_inspect","sync_start","sync_now","sync_conflicts","sync_resolve","sync_download_all","sync_disconnect","sync_nudge","identify_pdf","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
+            json!({"tools":omabib::mcp::tools(),"cli_only":["preview_entry","lookup_metadata","supplement_metadata","apply_metadata","open_target","sync_status","sync_providers","sync_connect","sync_connect_cancel","sync_inspect","sync_start","sync_now","sync_conflicts","sync_resolve","sync_download_all","sync_disconnect","sync_nudge","identify_pdf","zotero_detect","zotero_import","lookup_abstract","missing_abstracts","get_attachment","import_bibtex","upsert_reference","create_project","update_project","associate","attach","preview_doi","export_notes","backup","status"]})
         }
     };
     println!("{}", serde_json::to_string_pretty(&result)?);

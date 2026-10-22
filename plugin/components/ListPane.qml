@@ -205,12 +205,32 @@ Rectangle {
         }
     }
 
+    // A new, empty library: the ways to fill it.
+    Flickable {
+        id: welcomeScroll
+        objectName: "welcome"
+        visible: root.app.libraryEmpty
+        anchors { fill: parent; topMargin: root.theme.space(40) }
+        contentHeight: welcome.implicitHeight + root.theme.space(48)
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        Welcome {
+            id: welcome
+            theme: root.theme
+            app: root.app
+            width: Math.min(welcomeScroll.width - root.theme.space(48), root.theme.space(620))
+            x: (welcomeScroll.width - width) / 2
+            y: Math.max(root.theme.space(16), (welcomeScroll.height - implicitHeight) / 2 - root.theme.space(20))
+        }
+        WheelScroll { theme: root.theme }
+    }
+
     EmptyState {
         theme: root.theme
         anchors.centerIn: parent
         anchors.verticalCenterOffset: root.theme.space(20)
         width: Math.min(parent.width - root.theme.space(40), root.theme.space(460))
-        visible: root.app.hits.length === 0 && !root.app.searchPending
+        visible: root.app.hits.length === 0 && !root.app.searchPending && !root.app.libraryEmpty
         readonly property string typed: root.app.query ? root.app.query.text : ""
         readonly property bool identifier: root.app.looksLikeIdentifier(typed)
         icon: identifier ? "plus" : root.app.attentionView !== "" && typed === "" ? "check" : root.app.referenceCount === 0 ? "book" : "search"
@@ -219,7 +239,7 @@ Rectangle {
             : root.app.referenceCount === 0 ? "Your library is empty"
             : "No matching references"
         hint: identifier ? "Press Enter to look it up and add it"
-            : root.app.referenceCount === 0 ? "Paste a DOI, arXiv ID or URL in the search field, or press Add"
+            : root.app.referenceCount === 0 ? "Paste a DOI, arXiv ID or URL in the search field, press Add, or drop a PDF here"
             : root.app.attentionView !== "" && typed === "" ? ""
             : "Try fewer words, another project, or clear the filters"
         detail: identifier ? "Fetches metadata, the abstract and an open-access PDF when available" : ""

@@ -111,6 +111,22 @@ Item {
     property var editingNote: null
     property var pendingImport: null
     property bool previewShowBibtex: false
+    // The PDF being imported in the add preview ({path, name, busy, result,
+    // choice, error}; result is identify_pdf's) and the dropped ones waiting.
+    property var pdfImport: null
+    property var pdfQueue: []
+    // Moving from Zotero: what zotero_detect found (null until asked), the
+    // choices for the import, and its progress and outcome.
+    property var zotero: null
+    property bool zoteroLooking: false
+    property var zoteroOptions: ({pdfs: "copy", groups: true, notes: true, projects: true})
+    property bool zoteroImporting: false
+    property var zoteroProgress: null
+    property var zoteroResult: null
+    property string zoteroError: ""
+    // The reference count has come in, so an empty library really is empty.
+    property bool statusLoaded: false
+    readonly property bool libraryEmpty: statusLoaded && referenceCount === 0 && queryText === "" && projectId === "" && attentionView === ""
     property real openedAt: 0
     property real searchedAt: 0
     property real lastPaintMs: -1
@@ -200,7 +216,7 @@ Item {
     readonly property var filePath: bibFileDialog.item ? bibFileDialog.item.pathField : null
     readonly property var fileList: bibFileDialog.item ? bibFileDialog.item.listField : null
     readonly property var readerPane: readerLoader.item
-    readonly property bool modalOpen: settingsDialog.opened || syncDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || bibFileDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
+    readonly property bool modalOpen: settingsDialog.opened || syncDialog.opened || editorDialog.opened || commandDialog.opened || projectDialog.opened || previewDialog.opened || zoteroDialog.opened || bibFileDialog.opened || metadataDialog.opened || deleteDialog.opened || noteDeleteDialog.opened || projectMenu.opened || attentionMenu.opened || overflowMenu.opened
 
     Theme {
         id: ui
@@ -911,7 +927,8 @@ Item {
     }
     // The single identifier being added, when the preview can show it as a
     // card rather than a text report.
-    readonly property var previewItem: pendingImport && (pendingImport.items||[]).length===1 && pendingImport.items[0].recognized!=="bibtex" ? pendingImport.items[0] : null
+    readonly property var previewItem: pdfImport ? (pdfImport.result ? pdfImport.result.candidates[pdfImport.choice] : null)
+        : pendingImport && (pendingImport.items||[]).length===1 && pendingImport.items[0].recognized!=="bibtex" ? pendingImport.items[0] : null
     function applyMetadata() {
         if(!metadataChoice || metadataBusy)return
         metadataBusy=true
@@ -961,7 +978,12 @@ Item {
         // Opening Omabib is a good moment to pick up other computers' changes.
         rpc("sync_nudge",{},function(r){syncStatus=r;if(r.configured)loadSyncConflicts()})
         rpc("list_projects", {}, function(r) { projects = r.projects; updateProjectName() })
-        rpc("status", {}, function(r) { referenceCount = r.references })
+        rpc("status", {}, function(r) {
+            referenceCount = r.references
+            statusLoaded = true
+            // A new library offers to bring Zotero's over, so look for it.
+            if (r.references === 0 && zotero === null && !zoteroLooking) detectZotero("")
+        })
         search(false)
         if(inPaperTab) loadPaper(activeTab)
     }
@@ -1327,10 +1349,132 @@ Item {
         var hit=targetRef();if(!hit)return
         attachmentRefId=hit.id;pickerKind="pdf";bibFileDialog.open()
     }
+    function openPdfPicker() {
+        pickerKind="importPdf";bibFileDialog.open()
+    }
+    // Local PDF paths among dropped URLs.
+    function droppedPdfs(urls) {
+        var out=[]
+        for(var i=0;i<urls.length;++i){
+            var url=String(urls[i])
+            if(url.startsWith("file://")&&/\.pdf$/i.test(url))out.push(decodeURIComponent(url.slice(7)))
+        }
+        return out
+    }
+    // Zotero-style import: each PDF is identified from its own pages and
+    // shown in the add preview, one after the other.
+    function importPdfs(paths) {
+        if(!paths.length)return
+        pdfQueue=pdfQueue.concat(paths)
+        if(!pdfImport)nextPdfImport()
+    }
+    function nextPdfImport() {
+        if(!pdfQueue.length){pdfImport=null;return}
+        var path=pdfQueue[0]
+        pdfQueue=pdfQueue.slice(1)
+        editToken="ui-"+Date.now()+"-"+Math.random().toString(36).slice(2)
+        pdfImport={path:path,name:Format.basename(path),busy:true,result:null,choice:0,error:""}
+        pendingImport=null
+        previewShowBibtex=false
+        closeMenus();commandDialog.close();editorDialog.close()
+        previewDialog.open()
+        rpc("identify_pdf",{path:path},function(r){
+            if(!pdfImport||pdfImport.path!==path)return
+            pdfImport=Object.assign({},pdfImport,{busy:false,result:r})
+            pendingImport={items:[r.candidates[0]],warnings:r.warnings||[]}
+        },function(m){
+            if(pdfImport&&pdfImport.path===path)pdfImport=Object.assign({},pdfImport,{busy:false,error:m})
+        })
+    }
+    function choosePdfCandidate(index) {
+        if(!pdfImport||!pdfImport.result)return
+        pdfImport=Object.assign({},pdfImport,{choice:index})
+        pendingImport={items:[pdfImport.result.candidates[index]],warnings:pdfImport.result.warnings||[]}
+    }
+    function addImportedPdf() {
+        var item=previewItem
+        if(!item||noteSaving)return
+        var imported=pdfImport
+        noteSaving=true
+        noteSaveRequest=rpc("add_reference",{input:item.bibtex,source:item.source,pdf_path:imported.path,copy_pdf:true,download_pdf:false,project_id:projectId||null,idempotency_key:editToken+"-pdf"},function(r){
+            refresh()
+            root.focusOnReference(r.citekey)
+            flash("Added "+r.citekey+(r.merged?" (filled an existing reference)":"")+" · PDF copied into your library"+(item.abstract_source?" · abstract via "+item.abstract_source:""))
+            if(pdfImport===imported)previewDialog.close()
+        },function(m){
+            if(pdfImport===imported)pdfImport=Object.assign({},pdfImport,{error:m})
+        })
+        if(noteSaveRequest<0)noteSaving=false
+    }
+    function previewClosed() {
+        if(!pdfImport)return
+        pdfImport=null
+        pendingImport=null
+        if(pdfQueue.length)Qt.callLater(nextPdfImport)
+    }
+    function openBibPicker() {
+        settingsDialog.close()
+        pickerKind="bib";bibFileDialog.open()
+    }
+    function detectZotero(path) {
+        zoteroLooking=true
+        zoteroError=""
+        rpc("zotero_detect",path?{path:path}:{},function(r){zoteroLooking=false;zotero=r},function(m){zoteroLooking=false;zoteroError=m})
+    }
+    function setZoteroOption(key, value) {
+        var o=Object.assign({},zoteroOptions)
+        o[key]=value
+        zoteroOptions=o
+    }
+    function openZotero() {
+        closeMenus();commandDialog.close();settingsDialog.close()
+        if(!zoteroImporting){
+            zoteroResult=null
+            detectZotero(zotero&&zotero.found?zotero.path:"")
+        }
+        zoteroDialog.open()
+    }
+    function chooseZoteroFolder() {
+        settingsDialog.close()
+        pickerKind="zotero";bibFileDialog.open()
+    }
+    function importZotero() {
+        if(!zotero||!zotero.found||zoteroImporting)return
+        // Progress arrives as events on the chat subscription.
+        subscribeChats()
+        zoteroImporting=true
+        zoteroProgress=null
+        zoteroError=""
+        var o=zoteroOptions
+        rpc("zotero_import",{path:zotero.path,pdfs:o.pdfs,groups:o.groups,notes:o.notes,projects:o.projects},function(r){
+            zoteroImporting=false
+            zoteroProgress=null
+            zoteroResult=r
+            refresh()
+            if(!zoteroDialog.opened)flash("Zotero import done: "+r.references+" references added")
+        },function(m){
+            zoteroImporting=false
+            zoteroProgress=null
+            zoteroError=m
+            if(!zoteroDialog.opened)error=m
+        })
+    }
+    // Back to everything in the library, newest first.
+    function showLibrary() {
+        activateTab(-1)
+        attentionView=""
+        if(projectId!=="")chooseProject(0)
+        query.text=""
+        refresh()
+    }
     function acceptFile(url) {
+        if(pickerKind==="importPdf"){importPdfs([decodeURIComponent(url.slice(7))]);return}
+        if(pickerKind==="zotero"){detectZotero(decodeURIComponent(url.slice(7)));zoteroResult=null;zoteroDialog.open();return}
         if(pickerKind!=="pdf"){importBibFile(url);return}
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");reloadDetail()})
     }
+    // Typed digits reach actions 1 to actionCount; later ones (Import PDF…,
+    // Import from Zotero…) run from the palette only, so typing 3 doesn't wait for a second digit.
     readonly property int actionCount: 29
     function actionDigit(digit) {
         actionTimer.stop()
@@ -1358,7 +1502,7 @@ Item {
         case 4:copyFormat("pandoc");break
         case 5:copyFormat("bibtex");break
         case 6:edit("import");break
-        case 7:pickerKind="bib";bibFileDialog.open();break
+        case 7:openBibPicker();break
         case 8:edit("doi");break
         case 9:detailThenEdit("note");break
         case 10:choosePdf();break
@@ -1381,6 +1525,8 @@ Item {
         case 27:togglePdfColors();break
         case 28:focusChat();break
         case 29:askAboutReaderSelection();break
+        case 30:openPdfPicker();break
+        case 31:openZotero();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
@@ -1624,6 +1770,7 @@ Item {
     }
     function importPreview() {
         if(!pendingImport || noteSaving)return
+        if(pdfImport){addImportedPdf();return}
         var items=pendingImport.items||[]
         if(items.length===1 && items[0].recognized!=="bibtex") {
             var item=items[0]
@@ -1812,8 +1959,14 @@ Item {
         function openChatGPT(): void { root.openCodex(true) }
         function openDelete(): void { root.requestDelete() }
         function openNoteDelete(id: string): void { root.requestNoteDelete(id) }
+        function importPdf(path: string): void { root.importPdfs([path]) }
+        function choosePdfMatch(index: int): void { root.choosePdfCandidate(index) }
+        function addPreview(): void { root.importPreview() }
+        function openZotero(): void { root.openZotero() }
+        function importZotero(): void { root.importZotero() }
+        function setZoteroOption(key: string, value: string): void { root.setZoteroOption(key, value === "true" ? true : value === "false" ? false : value) }
         function loadOverview(): void { root.selectTab("ai") }
-        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence?evidence.text:"",note_scope:noteScope?noteScope.currentIndex:0,editor_focused:!!root.activeEditor()&&root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath?filePath.text:"",picker_matches:bibFileDialog.item?bibFileDialog.item.matches.map(function(m){return m.name}):[],picker_index:fileList?fileList.currentIndex:-1,picker_focused:!!filePath&&filePath.activeFocus,picker_chosen:bibFileDialog.item?bibFileDialog.item.lastChosen:"",edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
+        function state(): string { return JSON.stringify({opened:root.opened,window_focused:window.active,composer:root.composer?{kind:root.composer.note?"edit":root.composer.clip&&root.composer.clip.rect_pt?"clip":"note",page:root.composer.clip?root.composer.clip.page:null,saving:root.composerSaving,error:root.composerError}:null,note_target_id:root.noteTargetId,note_evidence:evidence?evidence.text:"",note_scope:noteScope?noteScope.currentIndex:0,editor_focused:!!root.activeEditor()&&root.activeEditor().activeFocus,expanded:root.expanded,query:query.text,project_id:root.projectId,project_name:root.projectName,project_select_index:root.projectSelectIndex(),assign_open:projectDialog.opened,delete_open:deleteDialog.opened,delete_preview:root.deletePreview?root.deletePreview.citekey:null,note_delete_open:noteDeleteDialog.opened,note_delete_preview:root.noteDeletePreview?root.noteDeletePreview.id:null,assign_enabled:root.selected!==null&&root.projects.length>0,detail_tab:root.detailTab,tabs:root.paperTabs.map(function(t){return t.citekey}),tab_kinds:root.paperTabs.map(function(t){return t.kind||"paper"}),active_tab:root.activeTab,pdf:root.inPdfTab?{status:readerPane.status,page:readerPane.currentPage,pages:readerPane.doc?readerPane.doc.page_count:0,zoom:readerPane.zoom,zoom_mode:readerPane.zoomMode,tool:readerPane.tool,rendered:Object.keys(readerPane.renders).length,clips:readerPane.clips.length,message:readerPane.message}:null,tabs_restored:root.tabsRestored,settings_open:settingsDialog.opened,sync:{open:syncDialog.opened,configured:!!root.syncStatus.configured,connected:!!root.syncStatus.connected,state:root.syncStatus.state||null,pending:root.syncStatus.pending||0,conflicts:root.syncStatus.conflicts||0,found:root.syncFound?root.syncFound.exists:null,working:root.syncWorking,error:root.syncError},pdf_colors:root.settings.pdf_colors,chat:root.activeChatId&&root.chats[root.activeChatId]?{id:root.activeChatId,agent:root.chats[root.activeChatId].chat.agent,status:root.chats[root.activeChatId].status,busy:root.chats[root.activeChatId].busy,events:root.chats[root.activeChatId].events.length,kinds:root.chats[root.activeChatId].events.map(function(e){return e.kind}),draft_chars:root.chatDraft.length,sending:root.chatSending,error:root.chatError,model:root.chats[root.activeChatId].chat.model||null,effort:root.chats[root.activeChatId].chat.effort||null,steps_shown:root.chatStepsShown,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null}:{id:null,agent:root.chatAgent,model:root.settings[root.chatAgent+"_model"]||null,effort:root.settings[root.chatAgent+"_effort"]||null,steps_shown:root.chatStepsShown,sending:root.chatSending,error:root.chatError,attachment:root.chatAttachment?(root.chatAttachment.clip?"clip":"selection"):null},ai_cli:root.settings.ai_cli,ai_desktop:root.settings.ai_desktop,attention_view:root.attentionView,overflow_open:overflowMenu.opened,project_menu_open:projectMenu.opened,overview_visible:root.detailTab==="ai"&&root.overviewState==="ready"&&!!root.selected&&root.overviewRefId===root.selected.id,overview_state:root.overviewState,overview_busy:root.overviewBusy,overview_ref_id:root.overviewRefId,overview_chars:root.overviewBody.length,browse_sort:root.browseSort,results:root.hits.map(function(h){return h.citekey}),result_index:results.currentIndex,selected:root.selected?root.selected.id:null,error:root.error,notice:root.notice,editor_open:editorDialog.opened,commands_open:commandDialog.opened,file_picker_open:bibFileDialog.visible,action_digits:root.actionDigits,metadata_open:metadataDialog.opened,import_preview_open:previewDialog.opened,library_empty:root.libraryEmpty,zotero:root.zotero?{found:!!root.zotero.found,running:!!root.zotero.running}:null,zotero_open:zoteroDialog.opened,zotero_importing:root.zoteroImporting,zotero_progress:root.zoteroProgress,zotero_result:root.zoteroResult,zotero_error:root.zoteroError,pdf_import:root.pdfImport?{name:root.pdfImport.name,busy:root.pdfImport.busy,choice:root.pdfImport.choice,candidates:root.pdfImport.result?root.pdfImport.result.candidates.length:0,error:root.pdfImport.error}:null,pdf_queue:root.pdfQueue.length,metadata_busy:root.metadataBusy,metadata_candidates:root.metadataLookup?root.metadataLookup.candidates.length:0,pdf_busy:root.pdfBusy,sync_busy:root.syncWorking,picker_kind:root.pickerKind,picker_path:filePath?filePath.text:"",picker_matches:bibFileDialog.item?bibFileDialog.item.matches.map(function(m){return m.name}):[],picker_index:fileList?fileList.currentIndex:-1,picker_focused:!!filePath&&filePath.activeFocus,picker_chosen:bibFileDialog.item?bibFileDialog.item.lastChosen:"",edit_kind:root.editKind,query_focused:query.activeFocus,response_ms:root.responseMs,paint_ms:root.lastPaintMs,open_ms:root.openMs,search_pending:root.searchPending,paint_pending:root.paintPending,open_pending:root.openPending}) }
     }
     Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice="" }
     // Changes from other computers refresh the list and open papers, gently.
@@ -1856,6 +2009,7 @@ Item {
                     if(message.event==="chat"){root.onChatMessage(message);return}
                     if(message.event==="sync"){root.onSyncEvent(message.status);return}
                     if(message.event==="library"){root.onLibraryChanged(message);return}
+                    if(message.event==="zotero"){if(root.zoteroImporting)root.zoteroProgress=message.progress;return}
                     var callback=root.pending[message.id]
                     delete root.pending[message.id]
                     if(message.id===root.metadataRequest)root.metadataBusy=false
@@ -1899,6 +2053,40 @@ Item {
             color: ui.app
             clip: true
             MouseArea { anchors.fill:parent;onClicked:root.inPaperTab?root.focusActiveTab():query.forceActiveFocus() }
+            // PDFs dropped from a file manager are imported like Import PDF….
+            DropArea {
+                id: pdfDrop
+                anchors.fill: parent
+                z: 10
+                onEntered: drag => { drag.accepted = drag.hasUrls && root.droppedPdfs(drag.urls).length > 0 }
+                onDropped: drop => {
+                    var paths = root.droppedPdfs(drop.urls)
+                    if (!paths.length) return
+                    drop.accept(Qt.CopyAction)
+                    root.importPdfs(paths)
+                }
+            }
+            Rectangle {
+                visible: pdfDrop.containsDrag
+                anchors.fill: parent
+                z: 11
+                color: ui.scrim
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: ui.space(16)
+                    color: "transparent"
+                    radius: ui.radiusLarge
+                    border.width: 2
+                    border.color: ui.accent
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: ui.space(10)
+                        Icon { theme: ui; name: "pdf"; size: ui.space(40); color: ui.accentText; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text { text: "Drop to add to your library"; color: ui.bright; font.family: ui.sans; font.pixelSize: ui.heading; font.weight: Font.DemiBold; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text { text: "Omabib reads each PDF's DOI, arXiv ID, ISBN or title"; color: ui.muted; font.family: ui.sans; font.pixelSize: ui.body; anchors.horizontalCenter: parent.horizontalCenter }
+                    }
+                }
+            }
             // Keyboard focus while a paper tab shows: typing starts a search in the library tab.
             Item {
                 id: paperKeys
@@ -2152,8 +2340,8 @@ Item {
                     property alias pathField: filePath
                     property alias listField: fileList
                     id:bibFileDialog
-                    title:root.pickerKind==="pdf"?"Attach PDF to reference":"Import BibTeX file"
-                    iconName:root.pickerKind==="pdf"?"pdf":"braces"
+                    title:root.pickerKind==="pdf"?"Attach PDF to reference":root.pickerKind==="importPdf"?"Import PDF":root.pickerKind==="zotero"?"Find your Zotero library (zotero.sqlite)":"Import BibTeX file"
+                    iconName:root.pickerKind==="bib"?"braces":root.pickerKind==="zotero"?"book":"pdf"
                     anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(620,window.height-60);modal:true
                     property string basePath: Quickshell.env("HOME")+"/"
                     property string wantedFolder: ""
@@ -2181,7 +2369,7 @@ Item {
                             var name=folders.get(i,"fileName")
                             var lower=name.toLocaleLowerCase()
                             var isDir=folders.get(i,"fileIsDir")
-                            if(!isDir && !(root.pickerKind==="pdf"?lower.endsWith(".pdf"):(lower.endsWith(".bib")||lower.endsWith(".bibtex"))))continue
+                            if(!isDir && !(root.pickerKind==="zotero"?lower==="zotero.sqlite":root.pickerKind!=="bib"?lower.endsWith(".pdf"):(lower.endsWith(".bib")||lower.endsWith(".bibtex"))))continue
                             if(!words.every(function(w){return lower.indexOf(w)>=0}))continue
                             found.push({name:name,url:folders.get(i,"fileUrl").toString(),isDir:folders.get(i,"fileIsDir")})
                         }
@@ -2252,7 +2440,7 @@ Item {
                                 RowLayout {
                                     anchors{fill:parent;leftMargin:ui.space(10);rightMargin:ui.space(10)}
                                     spacing:ui.space(10)
-                                    Icon {theme:ui;name:fileRow.modelData.isDir?"folder":root.pickerKind==="pdf"?"pdf":"braces";size:ui.title;color:fileRow.modelData.isDir?ui.muted:ui.accentText}
+                                    Icon {theme:ui;name:fileRow.modelData.isDir?"folder":root.pickerKind==="bib"?"braces":root.pickerKind==="zotero"?"book":"pdf";size:ui.title;color:fileRow.modelData.isDir?ui.muted:ui.accentText}
                                     Text {Layout.fillWidth:true;text:fileRow.modelData.name;color:fileList.currentIndex===fileRow.index?ui.bright:ui.text;font.family:ui.mono;font.pixelSize:ui.body;elide:Text.ElideMiddle;textFormat:Text.PlainText}
                                     Icon {theme:ui;visible:fileRow.modelData.isDir;name:"chevronRight";size:ui.title;color:ui.dim}
                                 }
@@ -2266,7 +2454,7 @@ Item {
                             Layout.fillWidth:true;spacing:ui.space(8)
                             BibLabel{text:ui.keys("Type to filter · ↑↓ select · ↵ open · Ctrl+L path");color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
                             BibButton{variant:"ghost";text:"Cancel";onClicked:bibFileDialog.close()}
-                            BibButton{variant:"primary";text:fileList.currentIndex>=0&&bibFileDialog.matches[fileList.currentIndex]&&!bibFileDialog.matches[fileList.currentIndex].isDir?(root.pickerKind==="pdf"?"Attach PDF":"Import file"):"Open folder";enabled:bibFileDialog.matches.length>0;onClicked:bibFileDialog.choose(fileList.currentIndex)}
+                            BibButton{variant:"primary";text:fileList.currentIndex>=0&&bibFileDialog.matches[fileList.currentIndex]&&!bibFileDialog.matches[fileList.currentIndex].isDir?(root.pickerKind==="pdf"?"Attach PDF":root.pickerKind==="importPdf"?"Import PDF":root.pickerKind==="zotero"?"Use this library":"Import file"):"Open folder";enabled:bibFileDialog.matches.length>0;onClicked:bibFileDialog.choose(fileList.currentIndex)}
                         }
                     }
                     Shortcut {sequence:"Ctrl+L";enabled:bibFileDialog.opened;onActivated:{filePath.forceActiveFocus();filePath.selectAll()}}
@@ -2296,6 +2484,34 @@ Item {
                             BibButton{variant:"primary";text:"Done";onClicked:syncDialog.close()}
                         }
                     }
+                }
+            }
+        }
+        LazyPopup {
+            id: zoteroDialog
+            host: card
+            popup: Component {
+                BibDialog {
+                    id:zoteroDialog;title:"Import from Zotero";iconName:"book";anchors.centerIn:parent
+                    width:Math.min(640,window.width-60);height:Math.min(zoteroScroll.contentHeight+ui.space(130),window.height-60);modal:true
+                    ColumnLayout {
+                        anchors.fill:parent;spacing:ui.space(10)
+                        ScrollView {
+                            id:zoteroScroll
+                            Layout.fillWidth:true;Layout.fillHeight:true
+                            contentWidth:availableWidth
+                            ZoteroPanel {id:zoteroPanel;objectName:"zoteroPanel";width:zoteroScroll.availableWidth;theme:ui;app:root}
+                        }
+                        RowLayout {
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            BibButton{variant:"ghost";visible:zoteroPanel.page==="found";iconName:"folder";text:"Another library…";onClicked:root.chooseZoteroFolder()}
+                            Item{Layout.fillWidth:true}
+                            BibButton{variant:"ghost";text:root.zoteroImporting?"Hide":root.zoteroResult?"Close":"Cancel";onClicked:zoteroDialog.close()}
+                            BibButton{variant:"primary";visible:zoteroPanel.canImport;iconName:"download";text:"Import "+zoteroPanel.countText;onClicked:root.importZotero()}
+                            BibButton{variant:"primary";visible:!!root.zoteroResult;text:"Show my library";onClicked:{zoteroDialog.close();root.showLibrary()}}
+                        }
+                    }
+                    Shortcut {sequence:"Ctrl+Return";enabled:zoteroDialog.opened&&zoteroPanel.canImport;onActivated:root.importZotero()}
                 }
             }
         }
@@ -2353,7 +2569,7 @@ Item {
                     ColumnLayout {
                         anchors.fill:parent;spacing:ui.space(8)
                         Text {visible:root.editKind==="note";text:root.noteTargetTitle;color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.subtitle;font.weight:Font.DemiBold;elide:Text.ElideRight;maximumLineCount:1;Layout.fillWidth:true;textFormat:Text.PlainText}
-                        BibLabel {visible:root.editKind==="quick";text:"Paste a DOI, arXiv ID or URL (several at once work too), or a whole BibTeX entry. Omabib looks up the metadata, abstract and an open-access PDF.";color:ui.muted;Layout.fillWidth:true}
+                        BibLabel {visible:root.editKind==="quick";text:"Paste a DOI, arXiv ID or URL (several at once work too), or a whole BibTeX entry. Omabib looks up the metadata, abstract and an open-access PDF. Have the PDF already? Choose it, or drop it on the window.";color:ui.muted;wrapMode:Text.Wrap;Layout.fillWidth:true}
                         RowLayout {
                             visible:root.editKind==="note"
                             Layout.fillWidth:true;spacing:ui.space(8)
@@ -2380,6 +2596,7 @@ Item {
                         BibLabel{visible:root.error!=="";text:root.error;color:ui.urgent;Layout.fillWidth:true}
                         RowLayout {
                             Layout.fillWidth:true;spacing:ui.space(8)
+                            BibButton{variant:"ghost";visible:root.editKind==="quick";iconName:"pdf";text:"Choose PDF…";onClicked:{editorDialog.close();root.openPdfPicker()}}
                             BibLabel{text:"";Layout.fillWidth:true}
                             BibButton{variant:"ghost";text:"Cancel";onClicked:editorDialog.close()}
                             BibButton{variant:"primary";text:(root.editKind==="doi"||root.editKind==="quick")?(root.noteSaving?"Looking up…":"Preview"):(root.noteSaving?"Saving…":"Save");shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.saveEditor()}
@@ -2430,10 +2647,60 @@ Item {
                     property alias bodyField: previewBody
                     id:previewDialog
                     Shortcut {sequence:"Ctrl+Return";enabled:previewDialog.opened&&root.pendingImport!==null;onActivated:root.importPreview()}
-                    title:root.pendingImport?"Add to library":"Import report";iconName:root.pendingImport?"plus":"check"
+                    title:root.pdfImport?"Import PDF":root.pendingImport?"Add to library":"Import report";iconName:root.pdfImport?"pdf":root.pendingImport?"plus":"check"
+                    onClosed:root.previewClosed()
                     anchors.centerIn:parent;width:Math.min(760,window.width-60);height:Math.min(root.previewItem?660:600,window.height-60);modal:true
                     ColumnLayout {
                         anchors.fill:parent;spacing:ui.space(12)
+                        RowLayout {
+                            visible:root.pdfImport!==null
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            Icon {theme:ui;visible:!!root.pdfImport&&root.pdfImport.busy;name:"refresh";size:ui.title;color:ui.accentText;RotationAnimation on rotation {running:!!root.pdfImport&&root.pdfImport.busy;from:0;to:360;duration:900;loops:Animation.Infinite}}
+                            Icon {theme:ui;visible:!root.pdfImport||!root.pdfImport.busy;name:"pdf";size:ui.title;color:ui.accentText}
+                            Text {Layout.fillWidth:true;text:!root.pdfImport?"":root.pdfImport.busy?"Reading "+root.pdfImport.name+" and looking it up…":root.pdfImport.name+(root.pdfImport.result?"  ·  "+root.pdfImport.result.pages+(root.pdfImport.result.pages===1?" page":" pages"):"");color:ui.muted;font.family:ui.sans;font.pixelSize:ui.small;elide:Text.ElideMiddle;textFormat:Text.PlainText}
+                            BibLabel {visible:root.pdfQueue.length>0;text:root.pdfQueue.length+" more waiting";color:ui.dim;font.pixelSize:ui.small}
+                        }
+                        BibLabel {visible:!!root.pdfImport&&root.pdfImport.error!=="";text:root.pdfImport?root.pdfImport.error:"";color:ui.urgent;wrapMode:Text.Wrap;Layout.fillWidth:true}
+                        RowLayout {
+                            readonly property var existing: root.pdfImport&&root.pdfImport.result?root.pdfImport.result.existing:null
+                            visible:!!existing
+                            Layout.fillWidth:true;spacing:ui.space(8)
+                            Icon {theme:ui;name:"alert";size:ui.title;color:ui.urgent}
+                            BibLabel {Layout.fillWidth:true;text:parent.existing?"This PDF is already in your library as "+parent.existing.citekey+".":"";color:ui.text;wrapMode:Text.Wrap}
+                            BibButton {variant:"ghost";text:"Show it";onClicked:{var key=parent.existing.citekey;previewDialog.close();root.focusOnReference(key)}}
+                        }
+                        // Several matches, or a match the PDF doesn't confirm: the person picks.
+                        ColumnLayout {
+                            readonly property var candidates: root.pdfImport&&root.pdfImport.result?root.pdfImport.result.candidates:[]
+                            visible:candidates.length>1
+                            Layout.fillWidth:true;spacing:ui.space(2)
+                            SectionLabel {theme:ui;text:"Matches"}
+                            Repeater {
+                                model:parent.candidates
+                                Rectangle {
+                                    id:choice
+                                    required property var modelData
+                                    required property int index
+                                    readonly property bool chosen:!!root.pdfImport&&root.pdfImport.choice===index
+                                    Layout.fillWidth:true
+                                    implicitHeight:choiceRow.implicitHeight+ui.space(10)
+                                    radius:ui.radius
+                                    color:chosen?ui.selectedFill:choiceMouse.containsMouse?ui.hoverFill:"transparent"
+                                    RowLayout {
+                                        id:choiceRow
+                                        anchors{left:parent.left;right:parent.right;verticalCenter:parent.verticalCenter;leftMargin:ui.space(8);rightMargin:ui.space(8)}
+                                        spacing:ui.space(8)
+                                        Icon {theme:ui;name:choice.chosen?"radioOn":"radioOff";size:ui.title;color:choice.chosen?ui.accentText:ui.dim}
+                                        ColumnLayout {
+                                            Layout.fillWidth:true;spacing:0
+                                            Text {Layout.fillWidth:true;text:choice.modelData.title||"";color:ui.bright;font.family:ui.sans;font.pixelSize:ui.body;elide:Text.ElideRight;textFormat:Text.PlainText}
+                                            Text {Layout.fillWidth:true;text:[choice.modelData.match_kind,choice.modelData.year,Format.fullAuthors(choice.modelData.authors,2),choice.modelData.confident?"":"check that it's this paper"].filter(function(s){return !!s}).join("  ·  ");color:ui.muted;font.family:ui.sans;font.pixelSize:ui.small;elide:Text.ElideRight;textFormat:Text.PlainText}
+                                        }
+                                    }
+                                    MouseArea {id:choiceMouse;anchors.fill:parent;hoverEnabled:true;cursorShape:Qt.PointingHandCursor;onClicked:root.choosePdfCandidate(choice.index)}
+                                }
+                            }
+                        }
                         ScrollPane {
                             id:previewCard
                             visible:root.previewItem!==null
@@ -2444,8 +2711,9 @@ Item {
                             readonly property string venueText: Format.bibField(item.bibtex, "journal") || Format.bibField(item.bibtex, "booktitle") || Format.bibField(item.bibtex, "publisher")
                             RowLayout {
                                 Layout.fillWidth:true;spacing:ui.space(8)
-                                Text {Layout.maximumWidth:previewCard.width*0.6;text:previewCard.item.input||"";color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;elide:Text.ElideMiddle;textFormat:Text.PlainText}
-                                Chip {theme:ui;icon:"check";iconColor:ui.accentText;text:(previewCard.item.recognized==="doi"?"DOI":previewCard.item.recognized==="arxiv"?"arXiv ID":previewCard.item.recognized==="url"?"Web page":String(previewCard.item.recognized||""))+" recognized";bordered:false}
+                                Text {visible:!root.pdfImport;Layout.maximumWidth:previewCard.width*0.6;text:previewCard.item.input||"";color:ui.muted;font.family:ui.mono;font.pixelSize:ui.small;elide:Text.ElideMiddle;textFormat:Text.PlainText}
+                                Chip {theme:ui;visible:!!root.pdfImport;icon:previewCard.item.confident?"check":"alert";iconColor:previewCard.item.confident?ui.accentText:ui.urgent;text:previewCard.item.match_kind||"";bordered:false}
+                                Chip {theme:ui;visible:!root.pdfImport;icon:"check";iconColor:ui.accentText;text:(previewCard.item.recognized==="doi"?"DOI":previewCard.item.recognized==="arxiv"?"arXiv ID":previewCard.item.recognized==="url"?"Web page":String(previewCard.item.recognized||""))+" recognized";bordered:false}
                                 Item {Layout.fillWidth:true}
                             }
                             Text {Layout.fillWidth:true;text:previewCard.item.title||previewCard.item.citekey||"";color:ui.bright;font.family:ui.readingFamily;font.pixelSize:ui.heading+4;font.weight:Font.DemiBold;lineHeight:1.15;wrapMode:Text.Wrap;textFormat:Text.PlainText}
@@ -2455,7 +2723,7 @@ Item {
                             Flow {
                                 Layout.fillWidth:true;spacing:ui.space(6)
                                 Chip {theme:ui;icon:previewCard.item.abstract_source?"text":"alert";iconColor:previewCard.item.abstract_source?ui.accentText:ui.urgent;text:previewCard.item.abstract_source?"abstract · "+previewCard.item.abstract_source:"no abstract found"}
-                                Chip {theme:ui;icon:previewCard.item.pdf_url?"pdf":"fileMissing";iconColor:previewCard.item.pdf_url?ui.accentText:ui.dim;text:previewCard.item.pdf_url?"open PDF · "+Format.host(previewCard.item.pdf_url):"no open-access PDF"}
+                                Chip {theme:ui;icon:root.pdfImport||previewCard.item.pdf_url?"pdf":"fileMissing";iconColor:root.pdfImport||previewCard.item.pdf_url?ui.accentText:ui.dim;text:root.pdfImport?"PDF copied into your library":previewCard.item.pdf_url?"open PDF · "+Format.host(previewCard.item.pdf_url):"no open-access PDF"}
                                 Chip {theme:ui;icon:"tag";visible:!!previewCard.item.citekey;text:previewCard.item.citekey||""}
                                 Chip {theme:ui;icon:"folder";visible:root.projectId!=="";text:"adds to "+root.projectName}
                             }
@@ -2479,12 +2747,14 @@ Item {
                                 BibLabel {required property var modelData;text:"⚠ "+modelData;color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
                             }
                         }
-                        ScrollView{visible:root.previewItem===null;Layout.fillWidth:true;Layout.fillHeight:true;BibTextArea{id:previewBody;readOnly:true}}
+                        Item{visible:root.previewItem===null&&!!root.pdfImport;Layout.fillWidth:true;Layout.fillHeight:true}
+                        ScrollView{visible:root.previewItem===null&&!root.pdfImport;Layout.fillWidth:true;Layout.fillHeight:true;BibTextArea{id:previewBody;readOnly:true}}
                         RowLayout{
                             Layout.fillWidth:true;spacing:ui.space(8)
-                            BibLabel{text:root.pendingImport?"Existing values are never overwritten":"";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
-                            BibButton{variant:"ghost";visible:root.pendingImport!==null;iconName:"pencil";text:"Edit BibTeX";onClicked:root.editPreviewBibtex()}
-                            BibButton{variant:"ghost";text:root.pendingImport?"Cancel":"Close";onClicked:previewDialog.close()}
+                            BibLabel{text:root.pdfImport?"The original file stays where it is":root.pendingImport?"Existing values are never overwritten":"";color:ui.dim;font.pixelSize:ui.small;Layout.fillWidth:true}
+                            BibButton{variant:"ghost";visible:root.pendingImport!==null&&!root.pdfImport;iconName:"pencil";text:"Edit BibTeX";onClicked:root.editPreviewBibtex()}
+                            BibButton{variant:"ghost";visible:!!root.pdfImport&&root.pdfQueue.length>0;text:"Cancel all";onClicked:{root.pdfQueue=[];previewDialog.close()}}
+                            BibButton{variant:"ghost";text:root.pdfImport&&root.pdfQueue.length?"Skip":root.pendingImport||root.pdfImport?"Cancel":"Close";onClicked:previewDialog.close()}
                             BibButton{variant:"primary";visible:root.pendingImport!==null;iconName:"plus";text:root.noteSaving?"Adding…":"Add to library";shortcutHint:"^↵";enabled:!root.noteSaving;onClicked:root.importPreview()}
                         }
                     }

@@ -56,6 +56,21 @@ Rectangle {
         function installRclone() { note("installRclone") }
         function openRcloneConfig() { note("openRcloneConfig") }
         function syncFolderGuess() { return "/home/reader/Sync" }
+        // Welcome and Zotero stand-in.
+        property bool libraryEmpty: false
+        property var zotero: null
+        property bool zoteroLooking: false
+        property var zoteroOptions: ({pdfs: "copy", groups: true, notes: true, projects: true})
+        property bool zoteroImporting: false
+        property var zoteroProgress: null
+        property var zoteroResult: null
+        property string zoteroError: ""
+        function openZotero() { note("openZotero") }
+        function chooseZoteroFolder() { note("chooseZoteroFolder") }
+        function detectZotero(path) { note("detectZotero:" + path) }
+        function openBibPicker() { note("openBibPicker") }
+        function openPdfPicker() { note("openPdfPicker") }
+        function setZoteroOption(key, value) { var o = Object.assign({}, zoteroOptions); o[key] = value; zoteroOptions = o; note("setZoteroOption:" + key) }
         property bool metadataBusy: false
         property bool allNotes: false
         property bool includeOtherNotes: false
@@ -303,6 +318,15 @@ Rectangle {
         SyncPanel { id: syncPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
     }
     Rectangle {
+        id: zoteroSheet
+        visible: false
+        anchors.centerIn: parent
+        width: 640; height: Math.min(parent.height - 20, zoteroPanel.implicitHeight + 40)
+        color: ui.card
+        border.width: 1; border.color: ui.border
+        ZoteroPanel { id: zoteroPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
+    }
+    Rectangle {
         id: editorSheet
         visible: false
         anchors.centerIn: parent
@@ -520,6 +544,78 @@ Rectangle {
             shot("7b-palette-filtered")
             keyClick(Qt.Key_Return)
             verify(app.calls.indexOf("runAction:19") >= 0, "Return runs the filtered action: " + app.calls)
+            tryCompare(palette, "opened", false)
+            palette.open()
+            tryCompare(palette, "opened", true)
+            keyClick(Qt.Key_P); keyClick(Qt.Key_D); keyClick(Qt.Key_F); keyClick(Qt.Key_Space); keyClick(Qt.Key_I); keyClick(Qt.Key_S); keyClick(Qt.Key_B)
+            compare(palette.matches.length, 1)
+            compare(palette.matches[0].n, 30)
+            keyClick(Qt.Key_Return)
+            verify(app.calls.indexOf("runAction:30") >= 0, "Import PDF runs from the palette: " + app.calls)
+        }
+        function test_15_welcome_add_pdf_and_zotero() {
+            var library = {found: true, path: "/home/reader/Zotero", running: true, projects: 62, projects_own: 61, standalone: 35, other_files: 2, loose_notes: 5,
+                libraries: [{name: "My Library", group: false, references: 1962, pdfs: 1470, pdfs_missing: 44, pdf_bytes: 3.9e9, notes: 445, annotations: 4148, citation_keys: 1948},
+                            {name: "Reading group", group: true, references: 294, pdfs: 120, pdfs_missing: 0, pdf_bytes: 2e8, notes: 3, annotations: 12, citation_keys: 280}]}
+            mouseClick(find(toolbar, "addPdfButton"))
+            verify(app.calls.indexOf("openPdfPicker") >= 0, "Add PDF in the toolbar: " + app.calls)
+
+            // A new library welcomes, with the Zotero library it found first.
+            var hits = app.hits
+            app.hits = []
+            app.libraryEmpty = true
+            app.zotero = library
+            wait(80)
+            verify(find(list, "welcome").visible)
+            shot("15a-welcome-zotero-found")
+            mouseClick(find(list, "welcomeZoteroButton"))
+            verify(app.calls.indexOf("openZotero") >= 0, app.calls)
+            mouseClick(find(list, "welcomeBibtexButton"))
+            verify(app.calls.indexOf("openBibPicker") >= 0, app.calls)
+            mouseClick(find(list, "welcomeSyncButton"))
+            verify(app.calls.indexOf("openSync") >= 0, app.calls)
+            app.zotero = {found: false}
+            wait(50)
+            shot("15b-welcome-no-zotero")
+            mouseClick(find(list, "welcomeZoteroButton"))
+            verify(app.calls.indexOf("chooseZoteroFolder") >= 0, app.calls)
+
+            // What Zotero would bring, and the choices.
+            app.zotero = library
+            zoteroSheet.visible = true
+            wait(80)
+            verify(find(zoteroPanel, "zoteroFound").visible)
+            compare(zoteroPanel.references, 2256)
+            compare(zoteroPanel.countText, "2,256 references")
+            shot("15c-zotero-found")
+            mouseClick(find(zoteroPanel, "zoteroGroups"))
+            compare(app.zoteroOptions.groups, false)
+            compare(zoteroPanel.references, 1962)
+            mouseClick(find(zoteroPanel, "zoteroLink"))
+            compare(app.zoteroOptions.pdfs, "link")
+            app.zoteroImporting = true
+            app.zoteroProgress = {what: "Copying PDFs", done: 312, total: 1470}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroImporting").visible)
+            verify(!zoteroPanel.canImport)
+            shot("15d-zotero-importing")
+            app.zoteroImporting = false
+            app.zoteroResult = {references: 1950, merged: 12, pdfs: 1426, pdfs_missing: 44, pdfs_copied: true, notes: 3100, projects: 61, project_links: 1400, standalone: 35, other_files: 2, loose_notes: 5}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroDone").visible)
+            shot("15e-zotero-done")
+            app.zoteroResult = null
+            app.zotero = {found: false}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroMissing").visible)
+            shot("15f-zotero-missing")
+
+            zoteroSheet.visible = false
+            app.zotero = null
+            app.zoteroOptions = {pdfs: "copy", groups: true, notes: true, projects: true}
+            app.libraryEmpty = false
+            app.hits = hits
+            wait(50)
         }
         function mathFixture() {
             function path(name) { return decodeURIComponent(String(Qt.resolvedUrl("math/" + name)).replace(/^file:\/\//, "")) }

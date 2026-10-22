@@ -14,6 +14,8 @@ Popup {
         {n: 1, group: "Add", icon: "plus", label: "Add new item", hint: "DOI, arXiv ID, URL or BibTeX"},
         {n: 6, group: "Add", icon: "braces", label: "Paste BibTeX"},
         {n: 7, group: "Add", icon: "file", label: "Import BibTeX file…"},
+        {n: 30, group: "Add", icon: "pdf", label: "Import PDF…", hint: "reads its DOI, arXiv ID, ISBN or title"},
+        {n: 31, group: "Add", icon: "book", label: "Import from Zotero…", hint: "references, PDFs, notes and collections"},
         {n: 8, group: "Add", icon: "link", label: "Add DOI"},
         {n: 11, group: "Open", icon: "external", label: "Open link", shortcut: "Ctrl+U", ref: true},
         {n: 12, group: "Open", icon: "pdf", label: "Open PDF", hint: "downloads if needed", shortcut: app.pdfShortcut, ref: true},

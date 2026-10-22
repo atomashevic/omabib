@@ -104,8 +104,8 @@ Google Drive, Dropbox, OneDrive or a folder you already sync. Edits merge, PDFs 
 
 ## Get started
 
-1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry, or paste one straight into the search box and press <kbd>Enter</kbd>. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one.
-2. **Bring your existing library.** Export a `.bib` file from Zotero, Mendeley or any other manager, then press <kbd>Ctrl</kbd>+<kbd>K</kbd> and choose **Import BibTeX file…**.
+1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry, or paste one straight into the search box and press <kbd>Enter</kbd>. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one. If you already have the PDF, click **Add PDF** or drop it on the window: Omabib reads the DOI, arXiv ID, ISBN or title printed in it and looks the paper up.
+2. **Bring your existing library.** Coming from Zotero? **Import from Zotero…** on the welcome page (or in **Settings**) brings over its references with their citation keys, PDFs, notes, highlights and collections, and leaves Zotero as it is. From Mendeley or any other manager, export a `.bib` file and choose **Import BibTeX file…**.
 3. **Organize.** Click **New project** in the sidebar, then **Add to project** on any paper. Each project keeps its own notes.
 
 ### Your agent, alongside you
@@ -148,7 +148,7 @@ Omabib runs on your computer and keeps your library there. Sync goes straight to
 
 - **Free and open source:** AGPL, no subscription.
 - **No servers, no analytics:** nothing to sign up for, nothing tracked.
-- **Your files:** the library and the PDFs Omabib downloads live in `~/.local/share/omabib/`. PDFs you attach from elsewhere stay where they are.
+- **Your files:** the library, the PDFs Omabib downloads and copies of the PDFs you import live in `~/.local/share/omabib/`. A PDF you attach to a paper already in the library stays where it is.
 - **No lock-in:** BibTeX in and out, and `omabib backup ~/omabib-backup.db` makes a backup any time.
 
 ## Uninstall
