@@ -3,7 +3,8 @@ import QtQuick.Layouts
 import "Format.js" as Format
 
 // The bar over an open paper: the way back, named for where it goes, the
-// paper's title and authors, and the chat and notes-pane controls.
+// paper's title and authors, the switch between its details and its PDF,
+// and the chat and notes-pane controls.
 Rectangle {
     id: root
 
@@ -83,6 +84,55 @@ Rectangle {
             }
         }
 
+        // The tab's two views. Ctrl+O switches between them too.
+        Rectangle {
+            id: views
+            objectName: "tabViews"
+            implicitWidth: viewRow.implicitWidth + root.theme.space(8)
+            implicitHeight: root.theme.space(32)
+            radius: root.theme.radius + 1
+            color: root.theme.app
+            border.width: 1
+            border.color: root.theme.line
+            RowLayout {
+                id: viewRow
+                anchors { left: parent.left; leftMargin: root.theme.space(3); verticalCenter: parent.verticalCenter }
+                spacing: root.theme.space(2)
+                Repeater {
+                    model: [{ key: "info", label: "Info", icon: "info", tip: "The paper's details, notes and files" },
+                            { key: "pdf", label: "PDF", icon: "pdf", tip: "Read the PDF; Omabib finds one if it's missing" }]
+                    Rectangle {
+                        id: view
+                        required property var modelData
+                        readonly property bool current: (modelData.key === "pdf") === root.app.inPdfTab
+                        objectName: "tabView:" + modelData.key
+                        implicitWidth: viewLabel.implicitWidth + root.theme.space(22)
+                        implicitHeight: root.theme.space(26)
+                        radius: root.theme.radius
+                        color: current ? root.theme.selectedFill : viewHover.hovered ? root.theme.hoverFill : "transparent"
+                        border.width: current ? 1 : 0
+                        border.color: root.theme.line
+                        RowLayout {
+                            id: viewLabel
+                            anchors.centerIn: parent
+                            spacing: root.theme.space(6)
+                            Icon { theme: root.theme; name: view.modelData.icon; size: root.theme.title; color: view.current ? root.theme.accentText : root.theme.muted }
+                            Text {
+                                text: view.modelData.label
+                                color: view.current ? root.theme.bright : root.theme.muted
+                                font.family: root.theme.sans
+                                font.pixelSize: root.theme.body
+                                font.weight: view.current ? Font.DemiBold : Font.Medium
+                                textFormat: Text.PlainText
+                            }
+                        }
+                        HoverHandler { id: viewHover; cursorShape: view.current ? Qt.ArrowCursor : Qt.PointingHandCursor }
+                        TapHandler { onTapped: if (!view.current) { view.modelData.key === "pdf" ? root.app.showPdf() : root.app.showInfo() } }
+                        Tip { theme: root.theme; visible: viewHover.hovered && !view.current; text: view.modelData.tip + "  ·  " + root.app.pdfShortcut }
+                    }
+                }
+            }
+        }
         TextButton {
             theme: root.theme
             icon: "sparkles"

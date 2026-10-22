@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Layouts
 
 // Preferences: importing a library, the theme and reading face, PDF page
-// colors in reader tabs and which apps the chat buttons start. App.qml owns
-// reading and writing them through omabib-settings.
+// colors in reader tabs, which apps the chat buttons start, and the agents
+// outside Omabib that can use the library. App.qml owns reading and writing
+// them through omabib-settings.
 ColumnLayout {
     id: root
 
@@ -190,38 +191,6 @@ ColumnLayout {
     }
     Hint { text: "The terminal button in the detail toolbar. Opens a chat with the reference, its notes and PDF, and Omabib's MCP tools." }
 
-    Rectangle {
-        Layout.fillWidth: true
-        implicitHeight: codexRow.implicitHeight + root.theme.space(20)
-        color: root.theme.app
-        border.width: 1
-        border.color: root.theme.line
-        radius: root.theme.radius
-        RowLayout {
-            id: codexRow
-            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: root.theme.space(12) }
-            spacing: root.theme.space(10)
-            Text {
-                Layout.fillWidth: true
-                text: (root.info.codex_mcp || {}).message || "Connect Codex to use your library in any Codex session."
-                color: root.theme.text
-                font.family: root.theme.sans
-                font.pixelSize: root.theme.small
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
-            }
-            TextButton {
-                objectName: "connectCodex"
-                theme: root.theme
-                text: (root.info.codex_mcp || {}).state === "connected" ? "Connected" : "Connect Codex"
-                enabled: ["missing", "error"].indexOf((root.info.codex_mcp || {}).state) !== -1 && !root.app.settingsBusy
-                busy: root.app.settingsBusy
-                fontSize: root.theme.small
-                onClicked: root.app.registerCodex()
-            }
-        }
-    }
-
     SectionLabel { theme: root.theme; text: "Desktop chat"; Layout.topMargin: root.theme.space(10) }
     Repeater {
         model: root.info.desktops || []
@@ -235,42 +204,72 @@ ColumnLayout {
             onChosen: root.app.setSetting("ai_desktop", modelData.id)
         }
     }
-    Rectangle {
-        Layout.fillWidth: true
-        visible: root.settings.ai_desktop === "claude"
-        implicitHeight: mcpRow.implicitHeight + root.theme.space(20)
-        color: root.theme.app
-        border.width: 1
-        border.color: root.theme.line
-        radius: root.theme.radius
-        RowLayout {
-            id: mcpRow
-            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: root.theme.space(12); rightMargin: root.theme.space(10) }
-            spacing: root.theme.space(10)
-            Icon { theme: root.theme; name: root.info.claude_desktop_mcp ? "check" : "alert"; size: root.theme.title; color: root.info.claude_desktop_mcp ? root.theme.accentText : root.theme.urgent }
-            Text {
-                Layout.fillWidth: true
-                text: root.info.claude_desktop_mcp
-                    ? "Claude Desktop has Omabib's tools. If you just added them, restart Claude Desktop."
-                    : "Claude Desktop can't see your library yet. Adding Omabib keeps your other Claude Desktop settings and saves a backup."
-                color: root.theme.text
-                font.family: root.theme.sans
-                font.pixelSize: root.theme.small
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
-            }
-            TextButton {
-                theme: root.theme
-                visible: !root.info.claude_desktop_mcp
-                icon: "plus"
-                text: "Add Omabib to Claude Desktop"
-                fontSize: root.theme.small
-                busy: root.app.settingsBusy
-                onClicked: root.app.registerClaudeDesktop()
+    Hint { text: "The chat button in the detail toolbar. ChatGPT opens an unsent Codex-mode draft; Claude opens a new chat with a prompt to read the reference through Omabib's tools." }
+
+    SectionLabel { theme: root.theme; text: "Your library in other agents"; Layout.topMargin: root.theme.space(10) }
+    Hint { text: "Connecting adds Omabib's MCP server to the agent, and for Claude Code and Codex the Omabib skill, so any session can search your library, read papers and notes, and save notes when you ask. Omabib's own chats need nothing." }
+    Repeater {
+        model: root.info.agents || []
+        Rectangle {
+            id: agent
+            required property var modelData
+            readonly property bool connected: modelData.state === "connected"
+            readonly property bool installed: modelData.state !== "unavailable"
+            readonly property bool troubled: modelData.state === "error" || modelData.state === "custom"
+            objectName: "agent:" + modelData.id
+            Layout.fillWidth: true
+            implicitHeight: agentLine.implicitHeight + root.theme.space(20)
+            color: root.theme.app
+            border.width: 1
+            border.color: root.theme.line
+            radius: root.theme.radius
+            RowLayout {
+                id: agentLine
+                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: root.theme.space(12); rightMargin: root.theme.space(10) }
+                spacing: root.theme.space(10)
+                Icon {
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: root.theme.space(1)
+                    theme: root.theme
+                    name: agent.connected ? "check" : agent.troubled ? "alert" : "robot"
+                    size: root.theme.title
+                    color: agent.connected ? root.theme.accentText : agent.troubled ? root.theme.urgent : root.theme.muted
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: root.theme.space(2)
+                    Text {
+                        text: agent.modelData.name
+                        color: agent.installed ? root.theme.bright : root.theme.muted
+                        font.family: root.theme.sans
+                        font.pixelSize: root.theme.body
+                        font.weight: Font.DemiBold
+                        textFormat: Text.PlainText
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: agent.modelData.message || ""
+                        color: root.theme.muted
+                        font.family: root.theme.sans
+                        font.pixelSize: root.theme.small
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                    }
+                }
+                TextButton {
+                    objectName: "connect:" + agent.modelData.id
+                    visible: agent.modelData.state === "missing" || agent.modelData.state === "error"
+                    theme: root.theme
+                    icon: "plus"
+                    text: "Connect"
+                    enabled: !root.app.settingsBusy
+                    busy: root.app.settingsBusy
+                    fontSize: root.theme.small
+                    onClicked: root.app.connectAgent(agent.modelData.id)
+                }
             }
         }
     }
-    Hint { text: "The chat button in the detail toolbar. ChatGPT opens an unsent Codex-mode draft; Claude opens a new chat with a prompt to read the reference through Omabib's tools." }
 
     Hint {
         Layout.topMargin: root.theme.space(8)

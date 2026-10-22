@@ -40,14 +40,14 @@ The abstract and the AI summary are selectable: drag across paragraphs and press
 
 ## Tabs
 
-The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it, each showing that paper's details at full width, and PDFs open in **reader tabs**.
+The strip above the list starts with the **library tab**: the current project (or All references), its reference count, and a chevron for the project picker. Papers open in **paper tabs** beside it. A paper and its PDF share one tab: **Info** and **PDF** at the top of the tab switch between the paper's details, at full width, and its PDF in the reader. **Ctrl+O** switches too. The PDF keeps its place while you look at the details.
 
-- **Open:** double-click a result, press **Ctrl+T** or **Ctrl+Enter** in the search field, or choose **Open in a tab** in **⋯**. Middle-click a result to open it in the background. A paper that's already open switches to its tab.
+- **Open:** double-click a result, press **Ctrl+T** or **Ctrl+Enter** in the search field, or choose **Open in a tab** in **⋯**; the tab shows the paper's details. **Enter** or **Open PDF** opens it at its PDF. Middle-click a result to open it in the background. A paper that's already open switches to its tab.
 - **Switch:** click a tab or its entry in the sidebar, press **Ctrl+PgUp**/**Ctrl+PgDn** to cycle, **Alt+0** for the library tab and **Alt+1**–**Alt+9** for the others. **Ctrl+F**, or simply typing while a paper tab is showing, takes you back to the search. In a paper tab, **Esc** goes back to the library as you left it.
 - **Close:** tabs stay open until you close them, including after you hide the window or restart the computer. Close one with its ×, a middle-click or **Ctrl+W**. Deleting a reference closes its tabs.
-- **Limits:** up to 12 paper and reader tabs together. Tabs shrink as the strip fills, then overlap with the active tab on top.
+- **Limits:** up to 12 paper tabs. Tabs shrink as the strip fills, then overlap with the active tab on top.
 
-Each paper tab remembers its section, and each reader tab its page and zoom. Tabs are saved in `~/.local/state/omabib/tabs.json`, which holds only reference IDs, citation keys, titles, sections, pages and zoom levels.
+Each paper tab remembers which view it shows, the section open in each (the details' section, and the one beside the PDF), and the PDF's page and zoom. Tabs are saved in `~/.local/state/omabib/tabs.json`, which holds only reference IDs, citation keys, titles, sections, pages and zoom levels.
 
 ## The command palette
 
@@ -142,7 +142,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 
 ## Reading PDFs
 
-**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
+**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper's PDF in its tab, beside the **Info** view of its details. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
 
 | Keys | |
 |---|---|
@@ -163,6 +163,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **c** | quote the selection in the chat, or open the chat |
 | **Ctrl+R** | theme or original page colors |
 | **Esc** | put down the highlighter, cancel the clip, selection or search; again to go back |
+| **Ctrl+O** | the paper's details (**Info**), and back to the PDF |
 | **Ctrl+W** | close the tab |
 
 Dragging across words, or double-clicking one, selects them. **Ctrl+C** copies the passage with its lines run together, a word hyphenated across a line break closed up, and paragraphs kept apart. To highlight, press **m** or click the highlighter in the toolbar. Then a drag or a double-click saves a highlight in the color shown beside it (click the dot for another: yellow, red, green, purple or blue), and the highlighter stays in hand until **m** or **Esc**. With words selected, **m** highlights them.
@@ -212,14 +213,17 @@ On Linux, **⋯ → Chat in Codex CLI** (or Claude Code) opens the agent in a te
 
 ## Connecting other agents
 
-Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask.
+Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask. Omabib also ships a skill, the [agent guide](../skills/omabib/SKILL.md), that tells Claude Code and Codex how to use those tools.
 
-- **Codex:** **Settings → Connect Codex**, or `omabib-settings register-codex`. This registers Omabib's MCP server and installs the Omabib skill in `~/.codex/skills/omabib`. Reopen running Codex sessions afterwards. An existing connection to another library is left alone.
-- **Claude Desktop:** **Settings → Add Omabib to Claude Desktop**, then restart Claude Desktop. This adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
-- **Claude Code:** `claude mcp add --scope user omabib -- ~/.local/bin/omabib mcp`
+A new library connects the agents it finds: as the welcome page first shows, Omabib adds its MCP server and skill to Claude Code and Codex, and its MCP server to Claude Desktop, and the page lists what it connected. This happens once. **Settings → Your library in other agents** shows each agent's connection, with **Connect** for one that isn't connected yet. Start a new session of an agent afterwards (restart Claude Desktop) so it loads the tools. An agent already connected to another library, or with a configuration Omabib can't read, is left alone.
+
+- **Claude Code:** `omabib-settings register-claude-code` does the same from a terminal. It runs `claude mcp add-json --scope user omabib …` and installs the skill in `~/.claude/skills/omabib` (or under `$CLAUDE_CONFIG_DIR`).
+- **Codex:** `omabib-settings register-codex` registers the MCP server with `codex mcp add` and installs the skill in `~/.codex/skills/omabib`.
+- **Claude Desktop:** `omabib-settings register-claude-desktop SOCKET` adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
+- **All of them:** `omabib-settings connect-agents` connects every agent found that has no Omabib connection yet.
 - **Anything else:** run `omabib mcp` as a stdio MCP server.
 
-Omabib's own chats are connected already. If you used the old `omabib-mcp` companion, you no longer need it: **Connect Codex** reuses its connection and refreshes its skill, and you can delete its checkout. After updating Omabib, restart MCP clients so they see new tools. The [agent guide](../skills/omabib/SKILL.md) describes how agents should use the library.
+Omabib's own chats are connected already. If you used the old `omabib-mcp` companion, you no longer need it: **Connect** for Codex reuses its connection and refreshes its skill, and you can delete its checkout. After updating Omabib, restart MCP clients so they see new tools.
 
 ## Settings
 
@@ -229,8 +233,9 @@ The **Settings** button at the bottom of the sidebar opens them. Changes apply i
 - **Theme:** System (follows your desktop's light or dark setting), Light, Dark, or Omarchy. Omarchy appears when `~/.local/state/omarchy/current/theme/colors.toml` parses, and a new config chooses it. System, Light or Dark already written in `settings.json` stay as they are. An open window follows a theme change, including when Omarchy replaces the theme directory. `mode` `light` or `dark` in that file decides which; with no `mode`, the background does. A file that does not parse keeps the palette already on screen.
 - **Reading font:** Mona Sans or Source Serif 4, for titles, abstracts and notes.
 - **PDF pages:** **Original colors** or **Theme colors** (see [Theme colors](#theme-colors)).
-- **Terminal chat:** Codex CLI or Claude Code, for chats and **Chat in…** in a terminal. **Connect Codex** is here too.
-- **Desktop chat:** ChatGPT Desktop or Claude Desktop, with **Add Omabib to Claude Desktop**.
+- **Terminal chat:** Codex CLI or Claude Code, for chats and **Chat in…** in a terminal.
+- **Desktop chat:** ChatGPT Desktop or Claude Desktop.
+- **Your library in other agents:** Claude Code, Codex and Claude Desktop, each with its connection and **Connect** when it has none (see [Connecting other agents](#connecting-other-agents)).
 
 To change the PDF shortcut from **Ctrl+O**, set `OMABIB_PDF_SHORTCUT` in the environment Omabib starts in.
 
