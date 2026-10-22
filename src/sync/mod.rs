@@ -2,7 +2,9 @@
 //! kept in sync by another app, or Google Drive, Dropbox and OneDrive through
 //! rclone. The live database never leaves the computer. Each computer uploads
 //! its own immutable change batches and reads everyone else's (see `apply` for
-//! the merge rules, `format` for the files).
+//! the merge rules, `format` for the files). Highlights travel beside that, in
+//! `annotations/`, so a highlight line never appears in a main batch.
+pub mod annotations;
 pub mod apply;
 pub mod clock;
 mod connect;
@@ -46,6 +48,7 @@ pub fn migrate(c: &Connection) -> Result<()> {
     if !has {
         c.execute_batch("ALTER TABLE note_images ADD COLUMN source_sha256 TEXT")?;
     }
+    c.execute_batch(annotations::SCHEMA)?;
     for (table, kind, cols) in records::TABLES {
         for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
             let key = cols
@@ -60,6 +63,16 @@ pub fn migrate(c: &Connection) -> Result<()> {
                 event.to_ascii_lowercase()
             ))?;
         }
+    }
+    // Highlights use their own outbox. A highlight edit must not land in
+    // sync_outbox, or it would be written into a main batch.
+    for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+        c.execute_batch(&format!(
+            "CREATE TRIGGER IF NOT EXISTS sync_highlights_{} AFTER {event} ON highlights \
+             WHEN (SELECT value FROM sync_state WHERE key='record')='1' \
+             BEGIN INSERT INTO ann_outbox(kind,key,at) VALUES('highlight',{row}.id,strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;",
+            event.to_ascii_lowercase()
+        ))?;
     }
     Ok(())
 }
@@ -203,6 +216,14 @@ impl Sync {
     }
 }
 
+/// Other computers' batches waiting to be merged.
+struct Fetched {
+    main: Vec<(String, i64, Vec<Change>)>,
+    ann: Vec<(String, i64, Vec<Change>)>,
+    names: HashMap<String, String>,
+    devices: Vec<Value>,
+}
+
 /// What a sync did, for the status line.
 #[derive(Debug, Default)]
 pub struct Summary {
@@ -283,12 +304,16 @@ impl Sync {
             return Ok(false);
         }
         let waiting: i64 = c.query_row(
-            "SELECT (SELECT count(*) FROM sync_batches)+(SELECT count(*) FROM sync_uploads)",
+            "SELECT (SELECT count(*) FROM sync_batches)+(SELECT count(*) FROM sync_uploads)+(SELECT count(*) FROM ann_batches)",
             [],
             |r| r.get(0),
         )?;
         let newest: Option<u64> = c
-            .query_row("SELECT max(at) FROM sync_outbox", [], |r| r.get::<_, Option<String>>(0))?
+            .query_row(
+                "SELECT max(at) FROM (SELECT at FROM sync_outbox UNION ALL SELECT at FROM ann_outbox)",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )?
             .and_then(|at| clock::iso_ms(&at));
         let settled =
             newest.is_some_and(|ms| clock::now_ms().saturating_sub(ms) >= DEBOUNCE.as_millis() as u64);
@@ -389,19 +414,27 @@ impl Sync {
         };
         let store = open_store(&provider)?;
         // Other computers' new batches, read before taking the write lock.
-        let (incoming, names, devices) = self.fetch(lib, store.as_ref(), &me)?;
+        let fetched = self.fetch(lib, store.as_ref(), &me)?;
         let clips = fetch_clips(
             lib,
             store.as_ref(),
-            incoming.iter().flat_map(|(_, _, ch)| ch.iter()),
+            fetched.main.iter().flat_map(|(_, _, ch)| ch.iter()),
         )?;
-        let received: usize = incoming.iter().map(|(_, _, ch)| ch.len()).sum();
+        let received: usize = fetched
+            .main
+            .iter()
+            .chain(fetched.ann.iter())
+            .map(|(_, _, ch)| ch.len())
+            .sum();
         let from: Vec<String> = {
-            let mut f: Vec<String> = incoming
+            let mut f: Vec<String> = fetched
+                .main
                 .iter()
+                .chain(fetched.ann.iter())
                 .filter(|(_, _, ch)| !ch.is_empty())
                 .map(|(d, _, _)| {
-                    names
+                    fetched
+                        .names
                         .get(d)
                         .cloned()
                         .unwrap_or_else(|| "another computer".into())
@@ -425,21 +458,45 @@ impl Sync {
                 )?;
                 set(&tx, "seq", &seq.to_string())?;
             }
+            // A highlight-only edit bumps ann_seq and leaves the main sequence alone.
+            let ann = annotations::flush(&tx, &me, &mut clock)?;
+            if !ann.is_empty() {
+                let seq = get_i64(&tx, "ann_seq")? + 1;
+                let body = format::write_batch(&me, seq, &records::now(), &ann)?;
+                tx.execute(
+                    "INSERT INTO ann_batches(seq,body) VALUES(?,?)",
+                    params![seq, body],
+                )?;
+                set(&tx, "ann_seq", &seq.to_string())?;
+            }
             let mut watermarks: BTreeMap<String, i64> = BTreeMap::new();
             let mut all = Vec::new();
-            for (device, seq, changes) in incoming {
+            for (device, seq, changes) in fetched.main {
                 let w = watermarks.entry(device).or_insert(0);
                 *w = (*w).max(seq);
                 all.extend(changes);
             }
-            let outcome = apply::apply(&tx, &me, &mut clock, all, &clips, &names)?;
+            let outcome = apply::apply(&tx, &me, &mut clock, all, &clips, &fetched.names)?;
             for (device, seq) in &watermarks {
                 set(&tx, &format!("wm:{device}"), &seq.to_string())?;
             }
-            set(&tx, "names", &serde_json::to_string(&names)?)?;
+            let mut ann_marks: BTreeMap<String, i64> = BTreeMap::new();
+            let mut ann_in = Vec::new();
+            for (device, seq, changes) in fetched.ann {
+                let w = ann_marks.entry(device).or_insert(0);
+                *w = (*w).max(seq);
+                ann_in.extend(changes);
+            }
+            let ann_applied = annotations::apply(&tx, &me, &mut clock, ann_in)?;
+            for (device, seq) in &ann_marks {
+                set(&tx, &format!("awm:{device}"), &seq.to_string())?;
+            }
+            set(&tx, "names", &serde_json::to_string(&fetched.names)?)?;
             let applied = get_i64(&tx, "applied_since_snapshot")?
                 + outcome.applied as i64
-                + local.len() as i64;
+                + local.len() as i64
+                + ann.len() as i64
+                + ann_applied as i64;
             set(&tx, "applied_since_snapshot", &applied.to_string())?;
             set(&tx, "hlc", &clock.to_string())?;
             set(&tx, "record", "1")?;
@@ -457,7 +514,7 @@ impl Sync {
             );
         }
         self.upload(lib, store.as_ref(), &me)?;
-        self.status.lock().unwrap().devices = devices;
+        self.status.lock().unwrap().devices = fetched.devices;
         self.maybe_snapshot(lib, store.as_ref(), &me)?;
         Ok(Summary {
             already_running: false,
@@ -471,22 +528,13 @@ impl Sync {
     }
 
     /// Batches newer than what this computer has applied, per device, in order.
-    #[allow(clippy::type_complexity)]
-    fn fetch(
-        &self,
-        lib: &Library,
-        store: &dyn Store,
-        me: &str,
-    ) -> Result<(
-        Vec<(String, i64, Vec<Change>)>,
-        HashMap<String, String>,
-        Vec<Value>,
-    )> {
+    fn fetch(&self, lib: &Library, store: &dyn Store, me: &str) -> Result<Fetched> {
         let c = crate::db::read_connection(&lib.path)?;
         let mut names: HashMap<String, String> = get(&c, "names")?
             .and_then(|n| serde_json::from_str(&n).ok())
             .unwrap_or_default();
-        let mut incoming = Vec::new();
+        let mut main = Vec::new();
+        let mut ann = Vec::new();
         let mut devices = Vec::new();
         for entry in store.list("devices")? {
             let Some(device) = entry.name.strip_suffix(".json") else {
@@ -509,10 +557,23 @@ impl Sync {
             for seq in applied + 1..=latest {
                 let bytes = store.read(&format::batch_path(device, seq))?;
                 let (_, changes) = format::read_batch(&bytes)?;
-                incoming.push((device.to_string(), seq, changes));
+                main.push((device.to_string(), seq, changes));
+            }
+            // Missing ann_seq means an older client. There is nothing to read.
+            let ann_applied = get_i64(&c, &format!("awm:{device}"))?;
+            let ann_latest = manifest["ann_seq"].as_i64().unwrap_or(0);
+            for seq in ann_applied + 1..=ann_latest {
+                let bytes = store.read(&format::annotation_batch_path(device, seq))?;
+                let (_, changes) = format::read_batch(&bytes)?;
+                ann.push((device.to_string(), seq, changes));
             }
         }
-        Ok((incoming, names, devices))
+        Ok(Fetched {
+            main,
+            ann,
+            names,
+            devices,
+        })
     }
 
     /// Sends files, then batches, then this computer's manifest, so a batch
@@ -608,9 +669,22 @@ impl Sync {
             set(&w, "uploaded", &seq.to_string())?;
             sent = seq;
         }
+        let ann_batches: Vec<(i64, Vec<u8>)> = c
+            .prepare("SELECT seq,body FROM ann_batches ORDER BY seq")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut ann_sent = get_i64(&c, "ann_uploaded")?;
+        for (seq, body) in ann_batches {
+            store.write(&format::annotation_batch_path(me, seq), &body)?;
+            let w = lib.writer.lock().unwrap();
+            w.execute("DELETE FROM ann_batches WHERE seq=?", [seq])?;
+            set(&w, "ann_uploaded", &seq.to_string())?;
+            ann_sent = seq;
+        }
         // Rewritten when it says something new, or hourly so other computers
         // see this one is still syncing; not on every idle poll.
-        let mut manifest = json!({"device":me,"name":hostname(),"seq":sent,
+        // ann_seq is extra. An older client reads seq and ignores it.
+        let mut manifest = json!({"device":me,"name":hostname(),"seq":sent,"ann_seq":ann_sent,
             "hlc":get(&c, "hlc")?,"app":format!("omabib {}", env!("CARGO_PKG_VERSION"))});
         let content = manifest.to_string();
         let recent = get(&c, "manifest_written")?
@@ -667,7 +741,7 @@ impl Sync {
             "message": s.message,
             "progress": s.progress,
             "last_success": get(&c, "last_success")?,
-            "pending": count("SELECT (SELECT count(*) FROM sync_outbox)+(SELECT count(*) FROM sync_batches)+(SELECT count(*) FROM sync_uploads)"),
+            "pending": count("SELECT (SELECT count(*) FROM sync_outbox)+(SELECT count(*) FROM sync_batches)+(SELECT count(*) FROM sync_uploads)+(SELECT count(*) FROM ann_outbox)+(SELECT count(*) FROM ann_batches)"),
             "conflicts": count("SELECT count(*) FROM sync_conflicts"),
             "devices": s.devices,
             "device_name": hostname(),
@@ -809,6 +883,7 @@ impl Sync {
                     set(&tx, "device", &me)?;
                     let mut clock = Hlc::zero(&me);
                     apply::adopt_all(&tx, &me, &mut clock)?;
+                    annotations::adopt_all(&tx, &me, &mut clock)?;
                     set(&tx, "hlc", &clock.to_string())?;
                     set(&tx, "library", &uuid::Uuid::new_v4().to_string())?;
                     set(&tx, "record", "1")?;
@@ -863,6 +938,8 @@ impl Sync {
                         )?;
                     }
                 }
+                // The sidecar when this library has one; otherwise the annotation batches.
+                annotations::absorb(&tx, store.as_ref(), &me, &mut clock)?;
                 if mode == "merge" {
                     // What only this computer has goes up as new records.
                     for kind in records::KINDS {
@@ -875,6 +952,7 @@ impl Sync {
                             }
                         }
                     }
+                    annotations::queue_untracked(&tx)?;
                 }
                 set(&tx, "hlc", &clock.to_string())?;
                 set(&tx, "library", library["library_id"].as_str().unwrap_or(""))?;
@@ -1024,6 +1102,7 @@ impl Sync {
 fn reset(c: &Connection) -> Result<()> {
     c.execute_batch(
         "DELETE FROM sync_outbox; DELETE FROM sync_base; DELETE FROM sync_batches; DELETE FROM sync_uploads; DELETE FROM sync_aliases; DELETE FROM sync_parked; \
+         DELETE FROM ann_outbox; DELETE FROM ann_base; DELETE FROM ann_batches; DELETE FROM ann_parked; \
          DELETE FROM sync_state WHERE key NOT IN ('provider');",
     )?;
     set(c, "record", "0")
@@ -1034,7 +1113,7 @@ fn clear_library(c: &Connection) -> Result<()> {
     c.execute_batch(
         "DELETE FROM chat_events; DELETE FROM chats; DELETE FROM note_revisions; DELETE FROM note_images; DELETE FROM docs; \
          DELETE FROM notes; DELETE FROM attachments; DELETE FROM associations; DELETE FROM external_summaries; \
-         DELETE FROM refs; DELETE FROM projects;",
+         DELETE FROM highlights; DELETE FROM refs; DELETE FROM projects;",
     )?;
     Ok(())
 }
@@ -1045,7 +1124,7 @@ fn backup(lib: &Library, why: &str) -> Result<PathBuf> {
     let stamp = records::now().replace([':', '.'], "-");
     let path = dir.join(format!("before-sync-{why}-{stamp}.db"));
     lib.call("backup", &json!({"path":path}))?;
-    // Keep the three newest sync backups.
+    // Keep the three newest sync backups. before-highlights-* stays.
     let mut old: Vec<PathBuf> = std::fs::read_dir(&dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
@@ -1121,6 +1200,7 @@ fn write_snapshot(lib: &Library, store: &dyn Store, me: &str) -> Result<()> {
     for old in mine.iter().rev().skip(2) {
         store.remove(&format!("snapshots/{old}"))?;
     }
+    annotations::write_snapshot(&c, store, me)?;
     Ok(())
 }
 

@@ -1474,7 +1474,8 @@ Item {
         rpc("add_pdf",{ref_id:attachmentRefId,path:decodeURIComponent(url.slice(7))},function(r){flash("PDF attached");reloadDetail()})
     }
     // Typed digits reach actions 1 to actionCount; later ones (Import PDF…,
-    // Import from Zotero…) run from the palette only, so typing 3 doesn't wait for a second digit.
+    // Import from Zotero…, the reader's Markdown copy and highlighter) run from
+    // the palette only, so typing 3 doesn't wait for a second digit.
     readonly property int actionCount: 29
     function actionDigit(digit) {
         actionTimer.stop()
@@ -1527,6 +1528,8 @@ Item {
         case 29:askAboutReaderSelection();break
         case 30:openPdfPicker();break
         case 31:openZotero();break
+        case 32:copyReaderSelection();break
+        case 33:highlightReaderSelection();break
         }
     }
     // After adding, replace whatever search/display was up with the newly
@@ -1714,7 +1717,17 @@ Item {
     }
     function askAboutReaderSelection() {
         if(!inPdfTab || !readerPane.selection){focusChat();return}
-        askAboutSelection(readerPane.selection.page,readerPane.selectionText())
+        readerPane.quoteInChat(readerPane.selectionText(),readerPane.selection.page)
+    }
+    function copyReaderSelection() {
+        if(inPdfTab && readerPane.selection)readerPane.copyPassage(readerPane.selectionText(),readerPane.selection.page,true)
+    }
+    // With words selected they are highlighted; otherwise the highlighter is picked up.
+    function highlightReaderSelection() {
+        if(!inPdfTab)return
+        if(readerPane.selection)readerPane.highlightSelection("")
+        else readerPane.tool="highlight"
+        readerPane.focusPages()
     }
     function askAboutClip(clip) {
         if(!clip || !clip.rect_pt)return

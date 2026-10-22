@@ -5,8 +5,10 @@ import QtQuick.Window
 import "Wheel.js" as Wheel
 
 // A PDF reader tab. The service renders pages with MuPDF; this pane lays them
-// out, selects and searches text, and turns a dragged rectangle into a clip
-// note. The reference's notes, overview and AI summary sit beside the pages.
+// out, selects and searches text, highlights it (the highlighter tool, or a
+// selection's right-click menu), and turns a dragged rectangle into a clip
+// note. The reference's notes, highlights, overview and AI summary sit beside
+// the pages. A highlight is stored in the library. The PDF is not.
 //
 // Page geometry is in PDF points with a top-left origin, as the service
 // reports it. On screen a point is `zoom` logical pixels; the device pixel
@@ -45,10 +47,22 @@ FocusScope {
     property int currentPage: 1
     property int firstVisible: 1
     property int lastVisible: 1
-    property string tool: "select" // select | rect
+    property string tool: "select" // select | rect | highlight
+    // The color a new highlight takes: the highlighter's, or the last one a
+    // selection was highlighted in.
+    property string highlightColor: "yellow"
+    readonly property var highlightColors: ["yellow", "red", "green", "purple", "blue"]
+    // The side pane shows this PDF's highlights rather than a reference section.
+    property bool sideHighlights: false
+    // A highlight just jumped to, outlined for a moment.
+    property string focusMark: ""
     property var renders: ({})     // page -> {path, width, height, scale, links}
     property var words: ({})       // page -> [[text, x0, y0, x1, y1, block, line]]
     property var selection: null   // {page, from, to} word indices
+    property var highlights: []    // {id, page, rects, quote, color, comment} for this PDF
+    property int highlightEpoch: 0
+    readonly property bool highlightMenuOpen: highlightPopover.opened
+    readonly property bool contextMenuOpen: contextMenu.opened
     property var search: null      // {query, flat: [{page, rect}], index, total, truncated}
     property bool searching: false
     property bool showOutline: false
@@ -61,7 +75,7 @@ FocusScope {
     property int inFlight: 0
     property var pending: ({})
 
-    readonly property bool wantsEscape: !!app.composer || tool !== "select" || selection !== null || search !== null || searchField.activeFocus
+    readonly property bool wantsEscape: !!app.composer || highlightPopover.opened || contextMenu.opened || tool !== "select" || selection !== null || search !== null || searchField.activeFocus
     readonly property var clips: {
         if (!ref || !doc || !ref.notes) return []
         return ref.notes.filter(function (n) {
@@ -70,6 +84,12 @@ FocusScope {
     }
 
     onDocKeyChanged: open()
+    // Another section asked for (the chat, a note) takes the side pane back.
+    Connections {
+        target: root.app
+        function onDetailTabChanged() { root.sideHighlights = false }
+    }
+    Timer { id: unfocusMark; interval: 1600; onTriggered: root.focusMark = "" }
     // Replies lost to a reconnect never arrive; start the document over.
     Connections {
         target: root.app
@@ -97,6 +117,7 @@ FocusScope {
 
     function open() {
         doc = null; renders = ({}); words = ({}); selection = null; search = null; searching = false
+        highlights = []; highlightEpoch++; highlightPopover.close(); contextMenu.close()
         queue = []; pending = ({}); inFlight = 0; tool = "select"; countDigits = ""
         if (!docKey) { status = "idle"; return }
         status = "loading"; message = ""
@@ -107,6 +128,7 @@ FocusScope {
             if (root.docKey !== key) return
             root.doc = r
             root.status = "ready"
+            root.loadHighlights()
             root.renderZoom = root.zoom
             Qt.callLater(function () { if (root.docKey === key) { root.goToPage(page); root.updateCurrentPage() } })
         }, function (error) {
@@ -287,16 +309,263 @@ FocusScope {
         }
         return bestDistance <= 400 ? best : -1
     }
-    function selectionText() {
-        if (!selection || !words[selection.page]) return ""
-        var list = words[selection.page], out = "", prev = null
-        for (var i = Math.min(selection.from, selection.to); i <= Math.max(selection.from, selection.to); i++) {
+    // Words from..to as a passage: lines run together, a word hyphenated at a
+    // line's end is closed up, and paragraphs (MuPDF's blocks) stay apart.
+    function passage(page, from, to) {
+        var list = words[page]
+        if (!list) return ""
+        var out = "", prev = null
+        for (var i = Math.min(from, to); i <= Math.max(from, to); i++) {
             var w = list[i]
-            if (prev) out += prev[5] !== w[5] || prev[6] !== w[6] ? "\n" : " "
+            if (prev) {
+                var first = w[0].charAt(0)
+                var lower = first !== first.toUpperCase() && first === first.toLowerCase()
+                if (prev[5] !== w[5]) out += "\n\n"
+                // "state-of-" keeps its hyphen: a compound, not a broken word.
+                else if (prev[6] !== w[6] && prev[0].length > 1 && prev[0].indexOf("-") === prev[0].length - 1 && lower) out = out.slice(0, -1)
+                else out += " "
+            }
             out += w[0]
             prev = w
         }
         return out
+    }
+    function selectionText() {
+        return selection ? passage(selection.page, selection.from, selection.to) : ""
+    }
+    // A passage as Markdown: a block quote that cites its page, for Pandoc.
+    function quoteMarkdown(text, page) {
+        var key = (ref && ref.citekey) || (tab && tab.citekey) || ""
+        var quoted = text.split("\n\n").map(function (p) { return "> " + p }).join("\n>\n")
+        return quoted + "\n>\n> " + (key ? "[@" + key + ", p. " + page + "]" : "p. " + page)
+    }
+    function copyPassage(text, page, markdown) {
+        if (text) app.copy(markdown ? quoteMarkdown(text, page) : text)
+    }
+    // The passage goes to the chat beside the page as a quote with its page.
+    function quoteInChat(text, page) {
+        if (!text) return
+        selection = null
+        sideHighlights = false
+        if (!showSide) showSide = true
+        app.askAboutSelection(page, text)
+    }
+    // A page note that starts with the passage quoted.
+    function noteAbout(text, page) {
+        if (!doc || !text) return
+        selection = null
+        sideHighlights = false
+        if (!showSide) showSide = true
+        app.editClip({ source_pdf: doc.path, page: page })
+        if (app.composer) app.composer = Object.assign({}, app.composer, { body: text.split("\n\n").map(function (p) { return "> " + p }).join("\n>\n") + "\n\n" })
+    }
+    function selectionContains(page, x, y) {
+        if (!selection || selection.page !== page || !doc) return false
+        var p = doc.pages[page - 1], px = p.x0 + x / zoom, py = p.y0 + y / zoom
+        return lineRects(page, Math.min(selection.from, selection.to), Math.max(selection.from, selection.to)).some(function (r) {
+            return px >= r[0] - 2 && px <= r[2] + 2 && py >= r[1] - 2 && py <= r[3] + 2
+        })
+    }
+    // One box per line, the union of the word boxes on that line.
+    function lineRects(page, from, to) {
+        var list = words[page]
+        if (!list) return []
+        var rects = [], line = null, prev = null
+        for (var i = from; i <= to; i++) {
+            var w = list[i]
+            var same = prev && prev[5] === w[5] && prev[6] === w[6]
+            if (!same) {
+                if (line) rects.push(line)
+                line = [w[1], w[2], w[3], w[4]]
+            } else {
+                line[0] = Math.min(line[0], w[1])
+                line[1] = Math.min(line[1], w[2])
+                line[2] = Math.max(line[2], w[3])
+                line[3] = Math.max(line[3], w[4])
+            }
+            prev = w
+        }
+        if (line) rects.push(line)
+        return rects
+    }
+    function highlightInk(name, solid) {
+        var hex = { yellow: "#f5d90a", red: "#e5484d", green: "#30a46c", purple: "#8e4ec6", blue: "#3b82f6" }
+        var c = Qt.color(hex[name] || hex.yellow)
+        return solid ? c : Qt.rgba(c.r, c.g, c.b, 0.45)
+    }
+    function paintHighlight(row) {
+        return {
+            id: row.id, page: row.page, rects: row.rects, quote: row.quote,
+            color: row.color || "yellow", comment: row.comment || "", created_at: row.created_at
+        }
+    }
+    function loadHighlights() {
+        if (!doc || !doc.ref_id || !doc.attachment_id) return
+        var epoch = highlightEpoch, key = doc.doc_id
+        app.rpc("pdf_highlights", { ref_id: doc.ref_id, attachment_id: doc.attachment_id }, function (r) {
+            if (epoch !== root.highlightEpoch || !root.doc || root.doc.doc_id !== key) return
+            root.highlights = r.highlights || []
+        })
+    }
+    // The selection as a highlight in `color` (the highlighter's by default).
+    // The selection then goes, as it does under a highlighter.
+    function highlightSelection(color) {
+        if (!doc || !doc.ref_id || !doc.attachment_id || !selection || !words[selection.page]) return
+        color = color || highlightColor
+        var from = Math.min(selection.from, selection.to), to = Math.max(selection.from, selection.to)
+        var page = selection.page, rects = lineRects(page, from, to), quote = selectionText()
+        if (!rects.length || !quote) return
+        var key = doc.doc_id
+        highlightColor = color
+        highlightEpoch++
+        selection = null
+        app.rpc("add_highlight", {
+            ref_id: doc.ref_id, attachment_id: doc.attachment_id,
+            page: page, rects: rects, quote: quote, color: color
+        }, function (row) {
+            if (!root.doc || root.doc.doc_id !== key || !row || !row.id) return
+            root.highlights = root.highlights.concat([root.paintHighlight(row)])
+        })
+    }
+    function applyHighlight(row) {
+        var painted = paintHighlight(row), next = [], found = false
+        for (var i = 0; i < highlights.length; i++) {
+            if (highlights[i].id === painted.id) { next.push(painted); found = true }
+            else next.push(highlights[i])
+        }
+        if (!found) next.push(painted)
+        highlights = next
+        if (highlightPopover.mark && highlightPopover.mark.id === painted.id) highlightPopover.mark = painted
+    }
+    function recolor(mark, color) {
+        if (!mark || mark.color === color) return
+        app.rpc("update_highlight", { id: mark.id, color: color }, function (row) {
+            if (row && row.id) root.applyHighlight(row)
+        })
+    }
+    function setHighlightColor(color) { recolor(highlightPopover.mark, color) }
+    function saveHighlightComment(text) {
+        var mark = highlightPopover.mark
+        if (!mark || text === highlightPopover.heldComment) return
+        highlightPopover.heldComment = text
+        app.rpc("update_highlight", { id: mark.id, comment: text }, function (row) {
+            if (row && row.id) root.applyHighlight(row)
+        })
+    }
+    function removeHighlight(mark) {
+        if (!mark) return
+        app.rpc("delete_highlight", { id: mark.id }, function (row) {
+            if (!row || row.deleted !== true) return
+            root.highlights = root.highlights.filter(function (h) { return h.id !== mark.id })
+            highlightPopover.close()
+        })
+    }
+    // The PDF's highlights in reading order: by page, then down the page.
+    readonly property var orderedHighlights: highlights.slice().sort(function (a, b) {
+        return a.page - b.page || (a.rects && b.rects ? a.rects[0][1] - b.rects[0][1] : 0)
+    })
+    function goToHighlight(mark) {
+        if (!doc || !mark || !mark.rects || !mark.rects.length) return
+        goToPage(mark.page, Math.max(0, mark.rects[0][1] - doc.pages[mark.page - 1].y0))
+        focusMark = mark.id
+        unfocusMark.restart()
+    }
+    function swatches(current, prefix) {
+        return highlightColors.map(function (c) { return { key: prefix + c, color: root.highlightInk(c, true), selected: c === current } })
+    }
+    // The right-click menu: for the selection, else for the highlight under
+    // the pointer, else for the page.
+    function openMenu(item, page, x, y) {
+        var mark = highlightAt(page, x, y)
+        if (selection && (selectionContains(page, x, y) || !mark)) {
+            contextMenu.target = { page: selection.page, text: selectionText() }
+            contextMenu.items = [
+                { key: "copy", label: "Copy", icon: "copy", shortcut: "Ctrl+C" },
+                { key: "markdown", label: "Copy as Markdown", icon: "quote" },
+                { separator: true },
+                { key: "highlight", label: "Highlight", icon: "highlighter", shortcut: "m" },
+                { swatches: swatches(highlightColor, "highlight:") },
+                { separator: true },
+                { key: "chat", label: "Add to chat as quote", icon: "chatQuote", shortcut: "c" },
+                { key: "note", label: "Add a note about this", icon: "notePlus" }
+            ]
+        } else if (mark) {
+            openMarkMenu(mark, item, x, y)
+            return
+        } else {
+            contextMenu.target = { page: page }
+            contextMenu.items = [
+                { key: "pageNote", label: "Note on this page", icon: "notePlus", shortcut: "a" },
+                { key: "clip", label: "Clip a region", icon: "crop", shortcut: "r" },
+                { key: "tool", label: tool === "highlight" ? "Stop highlighting" : "Highlight text", icon: "highlighter", shortcut: "m" }
+            ]
+        }
+        contextMenu.openAtPoint(item, x, y)
+    }
+    // A saved highlight's menu, on the page or in the Highlights list.
+    function openMarkMenu(mark, item, x, y) {
+        selection = null
+        contextMenu.target = { page: mark.page, text: mark.quote, mark: mark }
+        contextMenu.items = [
+            { key: "copy", label: "Copy", icon: "copy" },
+            { key: "markdown", label: "Copy as Markdown", icon: "quote" },
+            { separator: true },
+            { swatches: swatches(mark.color, "color:") },
+            { key: "comment", label: mark.comment ? "Edit comment" : "Add a comment", icon: "pencil" },
+            { key: "chat", label: "Add to chat as quote", icon: "chatQuote" },
+            { key: "note", label: "Add a note about this", icon: "notePlus" },
+            { separator: true },
+            { key: "delete", label: "Delete highlight", icon: "trash", danger: true }
+        ]
+        contextMenu.openAtPoint(item, x, y)
+    }
+    // The highlighter's color, from the dot beside it.
+    function openColorMenu(anchor) {
+        contextMenu.target = {}
+        contextMenu.items = [{ section: "Highlight color" }, { swatches: swatches(highlightColor, "tool:") }]
+        contextMenu.openAtPoint(anchor, 0, 0)
+    }
+    function runMenu(key) {
+        var t = contextMenu.target || {}
+        if (key === "copy") copyPassage(t.text, t.page, false)
+        else if (key === "markdown") copyPassage(t.text, t.page, true)
+        else if (key === "highlight") highlightSelection(highlightColor)
+        else if (key.indexOf("highlight:") === 0) highlightSelection(key.slice(10))
+        else if (key.indexOf("color:") === 0) recolor(t.mark, key.slice(6))
+        else if (key.indexOf("tool:") === 0) { highlightColor = key.slice(5); tool = "highlight" }
+        else if (key === "chat") quoteInChat(t.text, t.page)
+        else if (key === "note") noteAbout(t.text, t.page)
+        else if (key === "delete") removeHighlight(t.mark)
+        else if (key === "pageNote") composeNote(t.page, null)
+        else if (key === "clip") tool = "rect"
+        else if (key === "tool") tool = tool === "highlight" ? "select" : "highlight"
+        if (key === "comment") {
+            openHighlight(t.mark, root, contextMenu.x, contextMenu.y)
+            commentField.forceActiveFocus()
+        } else if (key !== "chat" && key !== "note") keys.forceActiveFocus()
+    }
+    function highlightAt(page, x, y) {
+        if (!doc) return null
+        var p = doc.pages[page - 1], px = p.x0 + x / zoom, py = p.y0 + y / zoom, hit = null
+        for (var i = 0; i < highlights.length; i++) {
+            var h = highlights[i]
+            if (h.page !== page || !h.rects) continue
+            for (var j = 0; j < h.rects.length; j++) {
+                var r = h.rects[j]
+                if (px >= r[0] && px <= r[2] && py >= r[1] && py <= r[3]) hit = h
+            }
+        }
+        return hit
+    }
+    function openHighlight(mark, item, x, y) {
+        highlightPopover.mark = mark
+        highlightPopover.heldComment = mark.comment || ""
+        commentField.text = mark.comment || ""
+        var p = item.mapToItem(root, x, y)
+        var popW = highlightPopover.width, popH = root.theme.space(132)
+        highlightPopover.x = Math.max(root.theme.space(8), Math.min(p.x, width - popW - root.theme.space(8)))
+        highlightPopover.y = Math.max(root.theme.space(8), Math.min(p.y + root.theme.space(8), height - popH - root.theme.space(8)))
+        highlightPopover.open()
     }
     function linkAt(page, x, y) {
         var r = renders[page]
@@ -354,7 +623,9 @@ FocusScope {
         app.editClip(clip)
     }
     function cancel() {
-        if (app.composer) app.cancelComposer()
+        if (contextMenu.opened) contextMenu.close()
+        else if (app.composer) app.cancelComposer()
+        else if (highlightPopover.opened) highlightPopover.close()
         else if (searchField.activeFocus) { searching = false; search = null; keys.forceActiveFocus() }
         else if (tool !== "select") tool = "select"
         else if (selection) selection = null
@@ -365,7 +636,7 @@ FocusScope {
         var ctrl = event.modifiers & Qt.ControlModifier
         var page = pages.height * 0.9
         if (ctrl) {
-            if (event.key === Qt.Key_C && selection) { app.copy(selectionText()); event.accepted = true }
+            if (event.key === Qt.Key_C && selection) { copyPassage(selectionText(), selection.page, false); event.accepted = true }
             else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) { setZoom(zoom * 1.2); event.accepted = true }
             else if (event.key === Qt.Key_Minus) { setZoom(zoom / 1.2); event.accepted = true }
             else if (event.key === Qt.Key_0) { setZoomMode("width"); event.accepted = true }
@@ -394,12 +665,17 @@ FocusScope {
         else if (t === "n") showHit(1)
         else if (t === "N") showHit(-1)
         else if (t === "r") tool = tool === "rect" ? "select" : "rect"
+        // Highlight the selection, or pick up and put down the highlighter.
+        else if (t === "m") {
+            if (selection) highlightSelection(highlightColor)
+            else tool = tool === "highlight" ? "select" : "highlight"
+        }
         else if (t === "a") composeNote(currentPage, null)
         else if (t === "o") showOutline = !showOutline
         else if (t === "c") {
             // Chat about the selection, or just open the chat.
-            if (selection) { app.askAboutSelection(selection.page, selectionText()); selection = null }
-            else app.focusChat()
+            if (selection) quoteInChat(selectionText(), selection.page)
+            else { sideHighlights = false; app.focusChat() }
             if (!showSide) showSide = true
         }
         else if (t === "]") showSide = !showSide
@@ -645,6 +921,20 @@ FocusScope {
                     IconButton { theme: root.theme; icon: "fitPage"; active: root.zoomMode === "page"; tooltip: "Fit page"; shortcut: "z"; onClicked: root.setZoomMode("page") }
                     Divider {}
                     IconButton { theme: root.theme; objectName: "readerColorsButton"; icon: "pageColors"; active: root.app.pdfThemed; tooltip: root.app.pdfThemed ? "Original page colors" : "Theme page colors"; shortcut: "Ctrl+R"; onClicked: root.app.togglePdfColors() }
+                    IconButton { theme: root.theme; objectName: "readerHighlightTool"; icon: "highlighter"; active: root.tool === "highlight"; tooltip: "Highlight text"; shortcut: "m"; onClicked: { root.tool = root.tool === "highlight" ? "select" : "highlight"; keys.forceActiveFocus() } }
+                    // The highlighter's color; a click picks another.
+                    Rectangle {
+                        objectName: "readerHighlightColor"
+                        implicitWidth: root.theme.space(16); implicitHeight: implicitWidth
+                        Layout.rightMargin: root.theme.space(4)
+                        radius: width / 2
+                        color: root.highlightInk(root.highlightColor, true)
+                        border.width: colorHover.hovered ? 2 : 1
+                        border.color: colorHover.hovered ? root.theme.bright : root.theme.line
+                        HoverHandler { id: colorHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: root.openColorMenu(parent) }
+                        Tip { theme: root.theme; visible: colorHover.hovered; text: "Highlight color" }
+                    }
                     IconButton { theme: root.theme; icon: "crop"; active: root.tool === "rect"; tooltip: "Clip a region into a note"; shortcut: "r"; onClicked: { root.tool = root.tool === "rect" ? "select" : "rect"; keys.forceActiveFocus() } }
                     IconButton { theme: root.theme; icon: "notePlus"; tooltip: "Note on this page"; shortcut: "a"; onClicked: root.composeNote(root.currentPage, null) }
                     Divider {}
@@ -698,14 +988,19 @@ FocusScope {
                     Layout.leftMargin: root.theme.space(18)
                     Layout.rightMargin: root.theme.space(18)
                     theme: root.theme
-                    current: side.key
+                    current: root.sideHighlights ? "highlights" : side.key
                     tabs: [
                         { key: "notes", label: "Notes", count: root.ref && root.ref.notes ? root.ref.notes.length : 0 },
+                        { key: "highlights", label: "Highlights", count: root.highlights.length },
                         { key: "overview", label: "Abstract" },
                         { key: "ai", label: "AI summary", icon: "sparkles", visible: !!root.ref && root.app.arxivIdOf(root.ref) !== "" },
                         { key: "chat", label: "Chat", icon: "robot" }
                     ]
-                    onSelected: key => { if (root.app.composer) root.app.cancelComposer(); root.app.selectTab(key) }
+                    onSelected: key => {
+                        if (root.app.composer) root.app.cancelComposer()
+                        if (key === "highlights") root.sideHighlights = true
+                        else { root.sideHighlights = false; root.app.selectTab(key) }
+                    }
                 }
                 NoteComposer {
                     id: composer
@@ -726,12 +1021,101 @@ FocusScope {
                     Layout.minimumWidth: 0
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    currentIndex: sections.indexOf(key)
+                    currentIndex: root.sideHighlights ? sections.length : sections.indexOf(key)
                     NotesTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(18) }
                     OverviewTab { theme: root.theme; app: root.app; sidePadding: root.theme.space(18) }
                     AiSummaryTab { theme: root.theme; app: root.app }
                     ChatPane { objectName: "readerChat"; theme: root.theme; app: root.app; compact: true }
+                    HighlightsTab { objectName: "readerHighlights"; theme: root.theme; reader: root }
                 }
+            }
+        }
+    }
+
+    MenuPopup {
+        id: contextMenu
+        objectName: "readerMenu"
+        theme: root.theme
+        menuWidth: root.theme.space(250)
+        // What the menu acts on: {page, text, mark}.
+        property var target: null
+        onTriggered: key => root.runMenu(key)
+    }
+
+    Popup {
+        id: highlightPopover
+        objectName: "highlightPopover"
+        property var mark: null
+        property string heldComment: ""
+        modal: true
+        dim: false
+        focus: true
+        padding: root.theme.space(10)
+        width: root.theme.space(240)
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: root.theme.raised
+            border.width: 1
+            border.color: root.theme.border
+            radius: root.theme.radius
+            Shadow { theme: root.theme; radius: parent.radius; reach: 16 }
+        }
+        contentItem: ColumnLayout {
+            spacing: root.theme.space(8)
+            focus: true
+            RowLayout {
+                spacing: root.theme.space(6)
+                Repeater {
+                    model: ["yellow", "red", "green", "purple", "blue"]
+                    Rectangle {
+                        id: swatch
+                        required property string modelData
+                        objectName: "highlightSwatch" + modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                        Layout.preferredWidth: root.theme.space(22)
+                        Layout.preferredHeight: root.theme.space(22)
+                        radius: width / 2
+                        color: root.highlightInk(modelData, true)
+                        border.width: highlightPopover.mark && highlightPopover.mark.color === modelData ? 2 : 1
+                        border.color: highlightPopover.mark && highlightPopover.mark.color === modelData ? root.theme.bright : root.theme.line
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.setHighlightColor(swatch.modelData)
+                        }
+                    }
+                }
+            }
+            TextField {
+                id: commentField
+                objectName: "highlightComment"
+                Layout.fillWidth: true
+                implicitHeight: root.theme.space(28)
+                leftPadding: root.theme.space(8)
+                placeholderText: "Comment"
+                placeholderTextColor: root.theme.dim
+                color: root.theme.bright
+                font.family: root.theme.sans
+                font.pixelSize: root.theme.small
+                selectByMouse: true
+                background: Rectangle {
+                    color: root.theme.app
+                    radius: root.theme.radiusSmall
+                    border.width: 1
+                    border.color: commentField.activeFocus ? root.theme.focusBorder : root.theme.line
+                }
+                onAccepted: root.saveHighlightComment(text)
+                onActiveFocusChanged: if (!activeFocus) root.saveHighlightComment(text)
+            }
+            TextButton {
+                objectName: "highlightDelete"
+                theme: root.theme
+                icon: "trash"
+                text: "Delete"
+                variant: "danger"
+                Layout.alignment: Qt.AlignLeft
+                onClicked: root.removeHighlight(highlightPopover.mark)
             }
         }
     }
@@ -756,6 +1140,8 @@ FocusScope {
         property point pressAt: Qt.point(0, 0)
         property point dragAt: Qt.point(0, 0)
         property bool dragging: false
+        property bool picked: false
+        property bool skipClick: false
 
         objectName: "readerPage" + page
         width: column.width
@@ -808,6 +1194,27 @@ FocusScope {
 
             Repeater {
                 model: {
+                    var out = [], list = root.highlights
+                    for (var i = 0; i < list.length; i++) {
+                        if (list[i].page !== pageItem.page || !list[i].rects) continue
+                        for (var j = 0; j < list[i].rects.length; j++)
+                            out.push({ rect: list[i].rects[j], color: list[i].color, id: list[i].id })
+                    }
+                    return out
+                }
+                Rectangle {
+                    required property var modelData
+                    objectName: "readerHighlight"
+                    readonly property rect box: root.fromPoints(pageItem.page, modelData.rect)
+                    x: box.x; y: box.y; width: box.width; height: box.height
+                    color: root.highlightInk(modelData.color, false)
+                    border.width: root.focusMark === modelData.id ? 2 : 0
+                    border.color: root.highlightInk(modelData.color, true)
+                }
+            }
+
+            Repeater {
+                model: {
                     var s = root.selection, list = root.words[pageItem.page]
                     if (!s || s.page !== pageItem.page || !list) return []
                     return list.slice(Math.min(s.from, s.to), Math.max(s.from, s.to) + 1)
@@ -816,7 +1223,8 @@ FocusScope {
                     required property var modelData
                     readonly property rect box: root.fromPoints(pageItem.page, [modelData[1], modelData[2], modelData[3], modelData[4]])
                     x: box.x - 1; y: box.y; width: box.width + 3; height: box.height
-                    color: Qt.rgba(0.2, 0.45, 1, 0.3)
+                    // Under the highlighter, the ink it will leave.
+                    color: root.tool === "highlight" ? root.highlightInk(root.highlightColor, false) : Qt.rgba(0.2, 0.45, 1, 0.3)
                 }
             }
 
@@ -871,26 +1279,34 @@ FocusScope {
                 objectName: "readerPageMouse"
                 anchors.fill: parent
                 hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: root.tool === "rect" ? Qt.CrossCursor
-                    : root.linkAt(pageItem.page, mouseX, mouseY) ? Qt.PointingHandCursor : Qt.IBeamCursor
+                    : root.tool === "select" && (root.linkAt(pageItem.page, mouseX, mouseY) || root.highlightAt(pageItem.page, mouseX, mouseY)) ? Qt.PointingHandCursor : Qt.IBeamCursor
                 onPressed: mouse => {
                     keys.forceActiveFocus()
+                    root.requestWords(pageItem.page)
+                    if (mouse.button === Qt.RightButton) return
                     pageItem.pressAt = Qt.point(mouse.x, mouse.y)
                     pageItem.dragAt = pageItem.pressAt
                     pageItem.dragging = false
-                    if (root.tool === "select") root.requestWords(pageItem.page)
+                    pageItem.picked = false
                 }
                 onPositionChanged: mouse => {
-                    if (!pressed) return
+                    if (!(pressedButtons & Qt.LeftButton)) return
                     pageItem.dragAt = Qt.point(Math.max(0, Math.min(width, mouse.x)), Math.max(0, Math.min(height, mouse.y)))
                     if (Math.abs(pageItem.dragAt.x - pageItem.pressAt.x) + Math.abs(pageItem.dragAt.y - pageItem.pressAt.y) > 3) pageItem.dragging = true
-                    if (pageItem.dragging && root.tool === "select") {
+                    if (pageItem.dragging && root.tool !== "rect") {
                         var from = root.wordAt(pageItem.page, pageItem.pressAt.x, pageItem.pressAt.y)
                         var to = root.wordAt(pageItem.page, pageItem.dragAt.x, pageItem.dragAt.y)
-                        if (from >= 0 && to >= 0) root.selection = { page: pageItem.page, from: from, to: to }
+                        if (from >= 0 && to >= 0) {
+                            root.selection = { page: pageItem.page, from: from, to: to }
+                            pageItem.picked = true
+                        }
                     }
                 }
                 onReleased: mouse => {
+                    if (mouse.button === Qt.RightButton) { root.openMenu(pageMouse, pageItem.page, mouse.x, mouse.y); return }
+                    if (pageItem.skipClick) { pageItem.skipClick = false; pageItem.dragging = false; return }
                     if (root.tool === "rect") {
                         var box = Qt.rect(Math.min(pageItem.pressAt.x, pageItem.dragAt.x), Math.min(pageItem.pressAt.y, pageItem.dragAt.y),
                                           Math.abs(pageItem.dragAt.x - pageItem.pressAt.x), Math.abs(pageItem.dragAt.y - pageItem.pressAt.y))
@@ -898,17 +1314,30 @@ FocusScope {
                         root.composeNote(pageItem.page, box.width > 3 && box.height > 3 ? box : null)
                         return
                     }
-                    if (pageItem.dragging) { pageItem.dragging = false; return }
+                    if (pageItem.dragging) {
+                        var picked = pageItem.picked
+                        pageItem.dragging = false
+                        pageItem.picked = false
+                        // The highlighter keeps what it was dragged over; a plain drag only selects.
+                        if (picked && root.tool === "highlight") root.highlightSelection(root.highlightColor)
+                        return
+                    }
                     var clip = root.clipAt(pageItem.page, mouse.x, mouse.y)
                     var link = root.linkAt(pageItem.page, mouse.x, mouse.y)
+                    var mark = root.highlightAt(pageItem.page, mouse.x, mouse.y)
                     root.selection = null
                     if (clip) root.app.edit("note", clip)
+                    else if (mark) root.openHighlight(mark, pageMouse, mouse.x, mouse.y)
                     else if (link && link.page) root.goToPage(link.page)
                     else if (link && link.uri) root.app.openExternal(link.uri)
                 }
                 onDoubleClicked: mouse => {
+                    if (mouse.button !== Qt.LeftButton || root.tool === "rect") return
+                    pageItem.skipClick = true
                     var w = root.wordAt(pageItem.page, mouse.x, mouse.y)
-                    if (w >= 0) root.selection = { page: pageItem.page, from: w, to: w }
+                    if (w < 0) return
+                    root.selection = { page: pageItem.page, from: w, to: w }
+                    if (root.tool === "highlight") root.highlightSelection(root.highlightColor)
                 }
             }
         }

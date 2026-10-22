@@ -68,7 +68,7 @@ Claude Code or Codex, on your own login, with no API keys. It reads the paper, y
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/agents-dark.webp"><img src="https://omabib.github.io/img/features/agents-light.webp" alt="Agents found on this computer"></picture>
 
 **First-class MCP, built in**<br>
-One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes and clips, and open PDFs.
+One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes, clips and text highlights, and open PDFs.
 
 </td>
 <td width="50%" valign="top">
@@ -133,9 +133,9 @@ And a button too, for the mouse. On a Mac, <kbd>⌘</kbd> takes the place of <kb
 | <kbd>Tab</kbd> | paper details | middle-button drag | pan |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | open in a tab | <kbd>g</kbd><kbd>g</kbd> / <kbd>G</kbd> | first / last page |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | switch project | <kbd>/</kbd>, <kbd>n</kbd> <kbd>N</kbd> | find, next, previous |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | detail sections | <kbd>r</kbd> | clip into a note |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | detail sections | <kbd>m</kbd> / <kbd>r</kbd> | highlight / clip into a note |
 | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | switch tabs | <kbd>a</kbd> | note on this page |
-| <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | ask about the selection |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | quote the selection in the chat |
 | <kbd>Esc</kbd> | back, or hide | <kbd>Ctrl</kbd>+<kbd>R</kbd> | theme or original colors |
 
 Closing the window keeps Omabib ready in the background, so it opens instantly. On Omarchy, the installer binds **Super+Alt+B** to `omabib open` in `~/.config/hypr/bindings.lua`. Elsewhere, add a shortcut for `omabib open` in your desktop's keyboard settings. `omabib add` opens straight into the add box.

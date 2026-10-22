@@ -715,6 +715,9 @@ impl Applier<'_> {
             for (k, x) in gone {
                 tombstone(c, &k, &x, &hlc)?;
             }
+            if kind == "ref" {
+                super::annotations::tombstone_for_ref(c, &key, &hlc)?;
+            }
             self.out.chats.extend(chats);
         }
         tombstone(c, kind, &key, &hlc)?;

@@ -282,7 +282,10 @@ impl Library {
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
         crate::chat::migrate(&c)?;
+        // user_version stays 1. The table starts empty, so creating it cannot lose data.
+        crate::highlights::ensure_table(&c)?;
         crate::sync::migrate(&c)?;
+        crate::sync::annotations::drop_orphans(&c)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let chats = crate::chat::Chats::new(&path);
@@ -391,6 +394,7 @@ impl Library {
             "pdf_render" => crate::pdf::render(self, a),
             "pdf_text" => crate::pdf::text(self, a),
             "pdf_search" => crate::pdf::search(self, a),
+            "pdf_highlights" => crate::highlights::for_pdf(self, a),
             "get_pdf" => crate::attachments::get_pdf(self, a),
             "identify_pdf" => crate::attachments::identify_pdf(self, a),
             "zotero_detect" => crate::zotero::detect(self, a),
@@ -415,6 +419,10 @@ impl Library {
             "get_references" => get_references(&read_connection(&self.path)?, a),
             "delete_reference_preview" => delete_reference_preview(&read_connection(&self.path)?, a),
             "delete_note_preview" => delete_note_preview(&read_connection(&self.path)?, a),
+            "list_highlights" => crate::highlights::list(self, a),
+            "add_highlight" => crate::highlights::add(self, a),
+            "update_highlight" => crate::highlights::change(self, a),
+            "delete_highlight" => crate::highlights::remove(self, a),
             "list_projects" => list_projects(&read_connection(&self.path)?, a),
             "project_context" => self.project_context(a),
             "export_bibtex" => export_bibtex(&read_connection(&self.path)?, a),
@@ -592,6 +600,8 @@ impl Library {
                     "DELETE FROM attachments WHERE ref_id=?",
                     "DELETE FROM associations WHERE ref_id=?",
                     "DELETE FROM external_summaries WHERE ref_id=?",
+                    // No foreign key: an older client can still delete the reference.
+                    "DELETE FROM highlights WHERE ref_id=?",
                 ] {
                     tx.execute(sql, [rid])?;
                 }

@@ -142,7 +142,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 
 ## Reading PDFs
 
-**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
+**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
 
 | Keys | |
 |---|---|
@@ -153,14 +153,23 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **0** or **w** / **z** | fit width / fit page |
 | **gg** / **G**, a number and **G** | first page, last page, that page |
 | **/**, then **n** / **N** | find, next / previous match |
-| drag, double-click, **Ctrl+C** | select words, copy |
+| drag, double-click | select those words; with the highlighter, highlight them |
+| **m** | highlight the selection, or pick up or put down the highlighter |
+| right-click | copy, copy as Markdown, highlight, quote in the chat, note |
+| **Ctrl+C** | copy the selection |
 | **r** | clip a region into a note |
 | **a** | note on the current page |
 | **o** / **]** | contents / side pane |
-| **c** | ask the chat about the selection, or open the chat |
+| **c** | quote the selection in the chat, or open the chat |
 | **Ctrl+R** | theme or original page colors |
-| **Esc** | cancel the clip, selection or search; again to go back |
+| **Esc** | put down the highlighter, cancel the clip, selection or search; again to go back |
 | **Ctrl+W** | close the tab |
+
+Dragging across words, or double-clicking one, selects them. **Ctrl+C** copies the passage with its lines run together, a word hyphenated across a line break closed up, and paragraphs kept apart. To highlight, press **m** or click the highlighter in the toolbar. Then a drag or a double-click saves a highlight in the color shown beside it (click the dot for another: yellow, red, green, purple or blue), and the highlighter stays in hand until **m** or **Esc**. With words selected, **m** highlights them.
+
+Right-click a selection for **Copy**, **Copy as Markdown** (a block quote that cites its page as `[@citekey, p. 4]`, ready for Pandoc), **Highlight** in any of the five colors, **Add to chat as quote**, and **Add a note about this**, which opens a page note that starts with the quote. Right-click a highlight for the same, plus its color, a comment and **Delete highlight**; a click on it opens its color and comment. Right-click bare page for a page note, a clip or the highlighter. The **Highlights** tab in the side pane lists the PDF's highlights in reading order with their comments; click one to go to it.
+
+The colors are only colors. A highlight is kept in the library and is not written into the PDF. It is drawn only while the open file is the one it was taken from.
 
 Links inside the paper jump to their page, and web links open in your browser. **Open PDF in another app** in **⋯** hands the file to your system's PDF viewer.
 
@@ -203,7 +212,7 @@ On Linux, **⋯ → Chat in Codex CLI** (or Claude Code) opens the agent in a te
 
 ## Connecting other agents
 
-Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes and clips, get a PDF's path, and save notes when you ask.
+Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask.
 
 - **Codex:** **Settings → Connect Codex**, or `omabib-settings register-codex`. This registers Omabib's MCP server and installs the Omabib skill in `~/.codex/skills/omabib`. Reopen running Codex sessions afterwards. An existing connection to another library is left alone.
 - **Claude Desktop:** **Settings → Add Omabib to Claude Desktop**, then restart Claude Desktop. This adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
@@ -235,7 +244,7 @@ Sync keeps your library the same on all your computers, through storage you alre
 
 From then on, sync runs by itself: about 30 seconds after you stop editing, every 5 minutes, when the window opens, and when you press **Sync**. Changes from other computers appear in the open window.
 
-**What syncs:** references, notes and their clips, projects, attachments and cached AI summaries. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
+**What syncs:** references, notes and their clips, projects, attachments, cached AI summaries, and text highlights. Highlights are kept in the library and synced beside it. They are not written into the PDF. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
 
 **When edits meet:**
 
@@ -377,5 +386,6 @@ For agents:
 - Omabib never runs a language model itself and never indexes PDF text. It returns paths; reading the paper is up to the agent.
 - The MCP server handles up to eight calls at once, plus eight queued; beyond that, calls get a retryable busy error. Responses can arrive out of order.
 - Deleting a reference or a note goes through a preview first (`delete_reference_preview`, `delete_note_preview`), and the deletion must match it.
+- Text highlights are listed with `list_highlights` (one reference, or the whole library). `add_highlight` saves a highlight, yellow unless `color` says otherwise, `update_highlight` changes its color or comment, and `delete_highlight` removes it. A replaced PDF is marked stale. They are not part of `get_reference`.
 
 `omabib schema get_reference search` prints those tools' schemas. See [API.md](../API.md) for the rest.
