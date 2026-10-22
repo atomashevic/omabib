@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 
 // The library's toolbar: the sidebar toggle, where you are, the search field
-// (which routes the list's keys), Add and the actions palette.
+// (which routes the list's keys), Add PDF, Add and the actions palette.
 Rectangle {
     id: root
 
@@ -90,6 +90,25 @@ Rectangle {
             }
         }
 
+        TextButton {
+            id: addPdf
+            objectName: "addPdfButton"
+            visible: root.width > root.theme.space(620)
+            theme: root.theme
+            icon: "pdf"
+            text: "Add PDF"
+            onClicked: root.app.openPdfPicker()
+        }
+        // A narrow window keeps the button as an icon.
+        IconButton {
+            visible: !addPdf.visible
+            theme: root.theme
+            icon: "pdf"
+            size: root.theme.space(30)
+            iconSize: root.theme.title + 1
+            tooltip: "Add PDF"
+            onClicked: root.app.openPdfPicker()
+        }
         TextButton {
             objectName: "addButton"
             theme: root.theme

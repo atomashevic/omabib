@@ -67,6 +67,8 @@ var GLYPHS = {
   heading:        0xE384,  // heading
   quote:          0xE239,  // quote
   crop:           0xE0AB,  // crop
+  highlighter:    0xE130,  // pen-line (the font's highlighter glyph lacks its pen body)
+  chatQuote:      0xE572,  // message-square-quote
   zoomIn:         0xE1B6,  // zoom-in
   zoomOut:        0xE1B7,  // zoom-out
   fitWidth:       0xE1C6,  // move-horizontal

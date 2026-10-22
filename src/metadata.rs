@@ -14,14 +14,32 @@ pub(crate) fn client() -> Result<Client> {
         .build()?)
 }
 pub(crate) fn fetch(c: &Client, url: Url) -> Result<Value> {
-    let response = c.get(url).send()?.error_for_status()?;
+    Ok(serde_json::from_slice(&read(send(c, url)?.error_for_status()?)?)?)
+}
+/// A GET that waits out one "too many requests" for as long as the service
+/// asks, up to five seconds, before trying again.
+fn send(c: &Client, url: Url) -> Result<reqwest::blocking::Response> {
+    let response = c.get(url.clone()).send()?;
+    if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Ok(response);
+    }
+    let pause = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok())
+        .unwrap_or(2)
+        .clamp(1, 5);
+    std::thread::sleep(Duration::from_secs(pause));
+    Ok(c.get(url).send()?)
+}
+fn read(response: reqwest::blocking::Response) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() <= 4 * 1024 * 1024,
         "Metadata response too large"
     );
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(bytes)
 }
 pub(crate) fn endpoint(base: &str, id: &str) -> Result<Url> {
     let mut u = Url::parse(base)?;
@@ -160,6 +178,211 @@ pub(crate) fn title_search(c: &Client, title: &str, authors: &str) -> Result<Vec
         .flatten()
         .map(crossref)
         .collect())
+}
+/// The Crossref record for a DOI, or DataCite's when Crossref has none
+/// (arXiv's, Zenodo's and datasets' DOIs). A busy Crossref is an error, not
+/// a missing DOI.
+pub(crate) fn doi_record(c: &Client, doi: &str) -> Result<Value> {
+    match fetch(c, endpoint("https://api.crossref.org/works/", doi)?) {
+        Ok(v) => Ok(crossref(&v["message"])),
+        Err(e)
+            if e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status)
+                == Some(reqwest::StatusCode::NOT_FOUND) =>
+        {
+            Ok(datacite(
+                &fetch(c, endpoint("https://api.datacite.org/dois/", doi)?)?["data"]["attributes"],
+            ))
+        }
+        Err(e) => Err(e),
+    }
+}
+/// Semantic Scholar's best match for a title, if it has one. Calls without
+/// a key share one rate limit.
+pub(crate) fn semantic_scholar_match(c: &Client, title: &str) -> Result<Option<Value>> {
+    let mut url = Url::parse("https://api.semanticscholar.org/graph/v1/paper/search/match")?;
+    url.query_pairs_mut().append_pair("query", title).append_pair(
+        "fields",
+        "title,year,venue,publicationVenue,journal,externalIds,authors,abstract,url",
+    );
+    let response = send(c, url)?;
+    match response.status() {
+        reqwest::StatusCode::NOT_FOUND => Ok(None),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            anyhow::bail!("busy (rate limited); try again in a minute")
+        }
+        _ => {
+            let v: Value = serde_json::from_slice(&read(response.error_for_status()?)?)?;
+            Ok(v["data"].get(0).cloned())
+        }
+    }
+}
+pub(crate) fn semantic_scholar(p: &Value) -> Value {
+    let mut f = Map::new();
+    insert(&mut f, "title", text(p, "title"));
+    let names: Vec<(String, String)> = p["authors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| crate::recognize::split_name(text(a, "name")))
+        .collect();
+    insert(&mut f, "author", &crate::recognize::bibtex_authors(&names));
+    if let Some(y) = p["year"].as_i64() {
+        insert(&mut f, "year", &y.to_string())
+    }
+    insert(&mut f, "abstract", text(p, "abstract"));
+    let ids = &p["externalIds"];
+    insert(&mut f, "doi", text(ids, "DOI"));
+    let arxiv = text(ids, "ArXiv");
+    if arxiv.is_empty() {
+        insert(&mut f, "url", text(p, "url"));
+    } else {
+        insert(&mut f, "eprint", arxiv);
+        insert(&mut f, "archiveprefix", "arXiv");
+        insert(&mut f, "url", &format!("https://arxiv.org/abs/{arxiv}"));
+    }
+    let venue = Some(text(&p["publicationVenue"], "name"))
+        .filter(|v| !v.is_empty())
+        .unwrap_or(text(p, "venue"));
+    let kind = match text(&p["publicationVenue"], "type") {
+        "conference" => {
+            insert(&mut f, "booktitle", venue);
+            "inproceedings"
+        }
+        "journal" => {
+            let journal = text(&p["journal"], "name");
+            insert(&mut f, "journal", if journal.is_empty() { venue } else { journal });
+            insert(&mut f, "volume", text(&p["journal"], "volume"));
+            insert(&mut f, "pages", text(&p["journal"], "pages"));
+            "article"
+        }
+        _ => {
+            if !venue.eq_ignore_ascii_case("arxiv.org") {
+                insert(&mut f, "howpublished", venue);
+            }
+            "misc"
+        }
+    };
+    json!({"entry_type":kind,"gateway":"Semantic Scholar","source":format!("https://api.semanticscholar.org/graph/v1/paper/{}",text(p,"paperId")),"fields":f})
+}
+fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let a = s.find(open)? + open.len();
+    Some(&s[a..a + s[a..].find(close)?])
+}
+/// arXiv papers with `title` as a phrase in their titles: `{arxiv, title, authors}`.
+pub(crate) fn arxiv_search(c: &Client, title: &str) -> Result<Vec<Value>> {
+    let phrase = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut url = Url::parse("https://export.arxiv.org/api/query")?;
+    url.query_pairs_mut()
+        .append_pair("search_query", &format!("ti:\"{phrase}\""))
+        .append_pair("max_results", "5");
+    let xml = String::from_utf8_lossy(&read(send(c, url)?.error_for_status()?)?).into_owned();
+    Ok(xml
+        .split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let id = crate::ingest::arxiv_id_from_text(between(entry, "<id>", "</id>")?.trim())?;
+            let authors: Vec<String> = entry
+                .split("<name>")
+                .skip(1)
+                .filter_map(|s| s.split("</name>").next())
+                .map(clean)
+                .collect();
+            Some(json!({"arxiv":id,"title":clean(between(entry, "<title>", "</title>")?),"authors":authors}))
+        })
+        .collect())
+}
+/// Europe PMC records (PubMed, PMC and preprints) with this title phrase.
+pub(crate) fn europe_pmc_search(c: &Client, title: &str) -> Result<Vec<Value>> {
+    let mut url = Url::parse("https://www.ebi.ac.uk/europepmc/webservices/rest/search")?;
+    url.query_pairs_mut()
+        .append_pair("query", &format!("TITLE:\"{}\"", title.replace('"', " ")))
+        .append_pair("format", "json")
+        .append_pair("pageSize", "3")
+        .append_pair("resultType", "core");
+    let v = fetch(c, url)?;
+    Ok(v["resultList"]["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(europe_pmc)
+        .collect())
+}
+fn europe_pmc(r: &Value) -> Value {
+    let mut f = Map::new();
+    insert(&mut f, "title", text(r, "title").trim_end_matches('.'));
+    // "Long QX, Liu BZ, van der Berg A."
+    let names: Vec<(String, String)> = text(r, "authorString")
+        .trim_end_matches('.')
+        .split(", ")
+        .filter_map(|a| {
+            let (family, initials) = a.trim().rsplit_once(' ')?;
+            Some((family.to_string(), initials.to_string()))
+        })
+        .collect();
+    insert(&mut f, "author", &crate::recognize::bibtex_authors(&names));
+    let journal = &r["journalInfo"];
+    insert(&mut f, "journal", text(&journal["journal"], "title"));
+    insert(&mut f, "volume", text(journal, "volume"));
+    insert(&mut f, "number", text(journal, "issue"));
+    insert(&mut f, "pages", text(r, "pageInfo"));
+    insert(&mut f, "year", text(r, "pubYear"));
+    insert(&mut f, "doi", text(r, "doi"));
+    insert(&mut f, "abstract", text(r, "abstractText"));
+    if !text(r, "pmid").is_empty() {
+        insert(&mut f, "eprint", text(r, "pmid"));
+        insert(&mut f, "eprinttype", "pubmed");
+    }
+    let page = format!("https://europepmc.org/article/{}/{}", text(r, "source"), text(r, "id"));
+    insert(&mut f, "url", &page);
+    json!({"entry_type":"article","gateway":"Europe PMC","source":page,"fields":f})
+}
+/// Open Library's record of the edition with this ISBN.
+pub(crate) fn open_library(c: &Client, isbn: &str) -> Result<Option<Value>> {
+    let mut url = Url::parse("https://openlibrary.org/api/books")?;
+    url.query_pairs_mut()
+        .append_pair("bibkeys", &format!("ISBN:{isbn}"))
+        .append_pair("format", "json")
+        .append_pair("jscmd", "data");
+    let v = fetch(c, url)?;
+    let b = &v[format!("ISBN:{isbn}")];
+    if !b.is_object() {
+        return Ok(None);
+    }
+    let mut f = Map::new();
+    let subtitle = text(b, "subtitle");
+    if subtitle.is_empty() {
+        insert(&mut f, "title", text(b, "title"));
+    } else {
+        insert(&mut f, "title", &format!("{}: {subtitle}", text(b, "title")));
+    }
+    let names: Vec<(String, String)> = b["authors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| crate::recognize::split_name(text(a, "name")))
+        .collect();
+    insert(&mut f, "author", &crate::recognize::bibtex_authors(&names));
+    insert(&mut f, "publisher", text(&b["publishers"][0], "name"));
+    let year: String = text(b, "publish_date")
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|w| w.len() == 4)
+        .unwrap_or("")
+        .to_string();
+    insert(&mut f, "year", &year);
+    insert(&mut f, "isbn", isbn);
+    insert(&mut f, "url", text(b, "url"));
+    if let Some(n) = b["number_of_pages"].as_i64() {
+        insert(&mut f, "pagetotal", &n.to_string());
+    }
+    Ok(Some(
+        json!({"entry_type":"book","gateway":"Open Library","source":format!("https://openlibrary.org/isbn/{isbn}"),"fields":f}),
+    ))
 }
 pub(crate) fn inferred_doi(r: &Value) -> String {
     let fields = &r["fields"];
@@ -482,5 +705,30 @@ mod tests {
             inferred_doi(&json!({"fields":{"url":"https://arxiv.org/pdf/2609.08049v2.pdf"}})),
             "10.48550/arxiv.2609.08049"
         );
+    }
+    #[test]
+    fn title_search_sources_map_to_bibtex_fields() {
+        // A conference paper with no DOI keeps its venue and its arXiv ID.
+        let v = semantic_scholar(
+            &json!({"paperId":"204e","title":"Attention is All you Need","year":2017,"venue":"Neural Information Processing Systems","publicationVenue":{"name":"Neural Information Processing Systems","type":"conference"},"externalIds":{"ArXiv":"1706.03762","DBLP":"journals/corr/VaswaniSPUJGKP17"},"authors":[{"name":"Ashish Vaswani"},{"name":"Noam Shazeer"}],"abstract":null}),
+        );
+        assert_eq!(v["entry_type"], "inproceedings");
+        assert_eq!(v["fields"]["booktitle"], "Neural Information Processing Systems");
+        assert_eq!(v["fields"]["author"], "Vaswani, Ashish and Shazeer, Noam");
+        assert_eq!(v["fields"]["eprint"], "1706.03762");
+        assert_eq!(v["fields"]["url"], "https://arxiv.org/abs/1706.03762");
+        assert!(v["fields"].get("doi").is_none());
+        let v = europe_pmc(
+            &json!({"id":"32350462","source":"MED","pmid":"32350462","doi":"10.1038/s41591-020-0897-1","title":"Antibody responses to SARS-CoV-2 in patients with COVID-19.","authorString":"Long QX, Liu BZ, van der Berg A.","journalInfo":{"volume":"26","issue":"6","journal":{"title":"Nature medicine"}},"pubYear":"2020","pageInfo":"845-848"}),
+        );
+        assert_eq!(v["fields"]["title"], "Antibody responses to SARS-CoV-2 in patients with COVID-19");
+        assert_eq!(v["fields"]["author"], "Long, QX and Liu, BZ and van der Berg, A");
+        assert_eq!(v["fields"]["journal"], "Nature medicine");
+        assert_eq!(v["fields"]["eprint"], "32350462");
+        assert_eq!(v["source"], "https://europepmc.org/article/MED/32350462");
+        let entry = "<entry><id>http://arxiv.org/abs/1706.03762v7</id><title>Attention Is All\n  You Need</title><author><name>Ashish Vaswani</name></author></entry>";
+        let id = crate::ingest::arxiv_id_from_text(between(entry, "<id>", "</id>").unwrap());
+        assert_eq!(id.as_deref(), Some("1706.03762"));
+        assert_eq!(clean(between(entry, "<title>", "</title>").unwrap()), "Attention Is All You Need");
     }
 }

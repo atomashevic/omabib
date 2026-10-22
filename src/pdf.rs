@@ -7,7 +7,8 @@
 use crate::db::{Library, required};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use mupdf::{
-    Colorspace, Device, Document, IRect, ImageFormat, Matrix, Pixmap, Rect, TextPageFlags,
+    Colorspace, Device, Document, IRect, ImageFormat, Matrix, Pixmap, Rect, TextCharFlags,
+    TextPage, TextPageFlags, pdf::PdfDocument,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -102,6 +103,13 @@ impl Pdf {
         self.run(move |w| w.search(&id, &query))
     }
 
+    /// The first pages' lines with their fonts and sizes, and the document
+    /// information dictionary, for identifying the paper (see `recognize`).
+    pub fn read_paper(&self, path: &Path) -> Result<crate::recognize::Reading> {
+        let path = path.to_path_buf();
+        self.run(move |_| read_paper(&path))
+    }
+
     /// Render `rect` (pt) of a page at `scale` as PNG bytes.
     pub fn clip(&self, path: &Path, page: u32, rect: [f32; 4], scale: f32) -> Result<Vec<u8>> {
         let path = path.to_path_buf();
@@ -151,6 +159,121 @@ fn png_size(path: &Path) -> Option<(u32, u32)> {
 
 fn rect_json(r: Rect) -> Value {
     json!([r.x0, r.y0, r.x1, r.y1])
+}
+
+/// Opened apart from the reader's documents: a document read once to identify
+/// it, and its trailer, which only the PDF-specific type exposes.
+fn read_paper(path: &Path) -> Result<crate::recognize::Reading> {
+    let doc = PdfDocument::open(path.to_string_lossy().as_ref()).map_err(to_err)?;
+    ensure!(
+        !doc.needs_password().map_err(to_err)?,
+        "Password-protected PDFs are not supported"
+    );
+    let page_count = doc.page_count().map_err(to_err)?.max(0) as usize;
+    let mut pages = Vec::new();
+    for i in 0..page_count.min(crate::recognize::PAGES) {
+        let page = doc.load_page(i as i32).map_err(to_err)?;
+        let b = page.bounds().map_err(to_err)?;
+        let text = page
+            .to_text_page(TextPageFlags::empty())
+            .map_err(to_err)?;
+        pages.push(read_page(&text, b.x1 - b.x0, b.y1 - b.y0));
+    }
+    let mut info = Vec::new();
+    if let Ok(Some(dict)) = doc.trailer().and_then(|t| t.get_dict("Info"))
+        && let Ok(entries) = dict.dict_iter()
+    {
+        for (key, value) in entries.flatten() {
+            if let (Ok(key), Ok(value)) = (key.as_name(), value.as_string())
+                && !value.trim().is_empty()
+            {
+                info.push((String::from_utf8_lossy(&key).into_owned(), value.trim().to_string()));
+            }
+        }
+    }
+    Ok(crate::recognize::Reading {
+        page_count,
+        info,
+        pages,
+    })
+}
+
+/// The value counted most often, ties to the larger.
+fn most<K: Ord + Clone>(counts: &HashMap<K, usize>) -> Option<K> {
+    counts
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+        .map(|(k, _)| k.clone())
+}
+
+fn read_page(text: &TextPage, width: f32, height: f32) -> crate::recognize::Page {
+    // Sizes in hundredths of a point, so they can be counted and compared.
+    let mut page_sizes: HashMap<i32, usize> = HashMap::new();
+    let mut page = crate::recognize::Page {
+        width,
+        height,
+        ..Default::default()
+    };
+    for block in text.blocks() {
+        for line in block.lines() {
+            let mut s = String::new();
+            let (mut sizes, mut fonts) = (HashMap::<i32, usize>::new(), HashMap::<String, usize>::new());
+            let (mut bold, mut chars) = (0, 0);
+            let (mut first, mut last) = (None, None);
+            for ch in line.chars() {
+                let Some(c) = ch.char() else { continue };
+                s.push(c);
+                if c.is_whitespace() {
+                    continue;
+                }
+                let font = ch.font();
+                if ch.flags().contains(TextCharFlags::BOLD) || font.as_ref().is_some_and(|f| f.is_bold()) {
+                    bold += 1;
+                }
+                *fonts.entry(font.map(|f| f.name().to_string()).unwrap_or_default()).or_default() += 1;
+                *sizes.entry((ch.size() * 100.0).round() as i32).or_default() += 1;
+                chars += 1;
+                first.get_or_insert(ch.origin());
+                last = Some(ch.origin());
+            }
+            page.text.push_str(s.trim_end());
+            page.text.push('\n');
+            // A line running up the margin, like arXiv's stamp, or across the
+            // page, like an "Article in Press" watermark, is text but not layout.
+            let upright = match (first, last) {
+                (Some(a), Some(b)) => (b.y - a.y).abs() <= (b.x - a.x).abs() * 0.1,
+                _ => false,
+            };
+            if chars == 0 || !upright {
+                continue;
+            }
+            for (size, n) in &sizes {
+                *page_sizes.entry(*size).or_default() += n;
+            }
+            let r = line.bounds();
+            let mut font_names: Vec<String> = fonts.keys().cloned().collect();
+            font_names.sort();
+            page.lines.push(crate::recognize::Line {
+                text: s.trim().to_string(),
+                x0: r.x0,
+                y0: r.y0,
+                x1: r.x1,
+                y1: r.y1,
+                size: most(&sizes).unwrap_or(0) as f32 / 100.0,
+                font: most(&fonts).unwrap_or_default(),
+                bold: bold * 2 > chars,
+                fonts: font_names,
+                sizes: sizes.keys().map(|s| *s as f32 / 100.0).collect(),
+            });
+        }
+    }
+    let mut sizes: Vec<(f32, usize)> = page_sizes
+        .into_iter()
+        .map(|(s, n)| (s as f32 / 100.0, n))
+        .collect();
+    sizes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    page.sizes = sizes;
+    page
 }
 
 impl Worker {

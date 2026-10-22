@@ -436,6 +436,7 @@ pub fn delete(c: &Connection, kind: &str, key: &str) -> Result<Removed> {
                 "DELETE FROM attachments WHERE ref_id=?",
                 "DELETE FROM associations WHERE ref_id=?",
                 "DELETE FROM external_summaries WHERE ref_id=?",
+                "DELETE FROM highlights WHERE ref_id=?",
                 "DELETE FROM refs WHERE id=?",
             ] {
                 c.execute(sql, [key])?;

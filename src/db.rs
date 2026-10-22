@@ -180,6 +180,15 @@ fn parse_import(raw: &str) -> Result<(Vec<biblatex::Entry>, Vec<Value>)> {
         .collect();
     Ok((entries, repairs))
 }
+/// A field value as BibTeX source, so braces keep a name whole
+/// (`{World Health Organization}`) rather than being escaped as text; as
+/// plain text when it isn't valid source.
+pub(crate) fn source_chunks(value: &str) -> Vec<biblatex::Spanned<biblatex::Chunk>> {
+    parse_bibtex(&format!("@misc{{x, f = {{{value}}}}}"))
+        .ok()
+        .and_then(|b| b.iter().next().and_then(|e| e.fields.get("f").cloned()))
+        .unwrap_or_else(|| vec![biblatex::Spanned::detached(biblatex::Chunk::Normal(value.into()))])
+}
 pub(crate) fn serialize_entry(e: &biblatex::Entry) -> String {
     let mut out = format!("@{}{{{},\n", e.entry_type, e.key);
     for (key, value) in &e.fields {
@@ -273,7 +282,10 @@ impl Library {
         c.execute_batch(crate::alphaxiv::SCHEMA)?;
         c.execute_batch(crate::chat::SCHEMA)?;
         crate::chat::migrate(&c)?;
+        // user_version stays 1. The table starts empty, so creating it cannot lose data.
+        crate::highlights::ensure_table(&c)?;
         crate::sync::migrate(&c)?;
+        crate::sync::annotations::drop_orphans(&c)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let chats = crate::chat::Chats::new(&path);
@@ -382,8 +394,11 @@ impl Library {
             "pdf_render" => crate::pdf::render(self, a),
             "pdf_text" => crate::pdf::text(self, a),
             "pdf_search" => crate::pdf::search(self, a),
+            "pdf_highlights" => crate::highlights::for_pdf(self, a),
             "get_pdf" => crate::attachments::get_pdf(self, a),
-            "identify_pdf" => crate::attachments::identify_pdf(a),
+            "identify_pdf" => crate::attachments::identify_pdf(self, a),
+            "zotero_detect" => crate::zotero::detect(self, a),
+            "zotero_import" => crate::zotero::import(self, a),
             "lookup_abstract" => lookup_abstract(self, a),
             "missing_abstracts" => missing_abstracts(self, a),
             "add_reference" => self.add_reference(a),
@@ -404,6 +419,10 @@ impl Library {
             "get_references" => get_references(&read_connection(&self.path)?, a),
             "delete_reference_preview" => delete_reference_preview(&read_connection(&self.path)?, a),
             "delete_note_preview" => delete_note_preview(&read_connection(&self.path)?, a),
+            "list_highlights" => crate::highlights::list(self, a),
+            "add_highlight" => crate::highlights::add(self, a),
+            "update_highlight" => crate::highlights::change(self, a),
+            "delete_highlight" => crate::highlights::remove(self, a),
             "list_projects" => list_projects(&read_connection(&self.path)?, a),
             "project_context" => self.project_context(a),
             "export_bibtex" => export_bibtex(&read_connection(&self.path)?, a),
@@ -581,6 +600,8 @@ impl Library {
                     "DELETE FROM attachments WHERE ref_id=?",
                     "DELETE FROM associations WHERE ref_id=?",
                     "DELETE FROM external_summaries WHERE ref_id=?",
+                    // No foreign key: an older client can still delete the reference.
+                    "DELETE FROM highlights WHERE ref_id=?",
                 ] {
                     tx.execute(sql, [rid])?;
                 }
@@ -743,29 +764,48 @@ impl Library {
         let download_pdf = a.get("download_pdf") != Some(&json!(false));
 
         let preview = if let Some(input) = input {
-            crate::ingest::preview(&json!({"input":input}))?
+            let mut preview = crate::ingest::preview(&json!({"input":input}))?;
+            if let Some(source) = a.get("source").and_then(Value::as_str)
+                && preview["recognized"] == "bibtex"
+            {
+                preview["source"] = json!(source);
+            }
+            preview
         } else {
-            let identified = crate::attachments::identify_pdf(&json!({"path":pdf_path.unwrap()}))?;
+            let identified =
+                crate::attachments::identify_pdf(self, &json!({"path":pdf_path.unwrap()}))?;
             let candidates = identified["candidates"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            ensure!(
-                !candidates.is_empty(),
-                "Could not identify this PDF. Pass its DOI, arXiv ID or a URL as input instead."
-            );
-            ensure!(
-                candidates.len() == 1,
-                "This PDF's title matched more than one candidate; call identify_pdf first, then pass the correct DOI or URL as input."
-            );
-            let item = candidates.into_iter().next().unwrap();
-            json!({"bibtex":item["bibtex"],"items":[item]})
+            // A sure match, or the PDF's own entry when nothing was found
+            // online at all, as Zotero does.
+            let item = candidates
+                .first()
+                .filter(|c| c["confident"] == true || candidates.len() == 1)
+                .cloned()
+                .context(
+                    "This PDF matched more than one reference, or one it doesn't print the title of; call identify_pdf, then pass the chosen candidate's bibtex as input with pdf_path.",
+                )?;
+            json!({"bibtex":item["bibtex"],"source":item["source"],"items":[item]})
         };
         let first_item = preview["items"][0].clone();
 
         let mut attach_path = pdf_path.map(PathBuf::from);
         if let Some(p) = &attach_path {
             ensure!(p.is_absolute(), "pdf_path must be absolute");
+            // Imported PDFs are copied into Omabib's storage, named after the
+            // reference, unless asked to link the file where it is.
+            if a.get("copy_pdf") != Some(&json!(false)) {
+                let hint = match text(&first_item, "citekey") {
+                    "" => parse_bibtex(text(&preview, "bibtex"))
+                        .ok()
+                        .and_then(|b| b.iter().next().map(|e| e.key.clone()))
+                        .unwrap_or_default(),
+                    key => key.to_string(),
+                };
+                attach_path = Some(crate::attachments::store_copy(self, p, &hint)?.0);
+            }
         }
         if attach_path.is_none()
             && download_pdf
@@ -816,6 +856,7 @@ impl Library {
             "conflicts": changes["conflicts"],
             "repairs": changes["repairs"],
             "abstract_source": first_item["abstract_source"],
+            "match_kind": first_item["match_kind"],
             "attachment": attachment,
             "warnings": first_item["warnings"],
         });
@@ -863,7 +904,7 @@ fn associate_within(c: &Connection, ref_id: &str, project_id: &str, labels: &str
 /// Record a pointer to a PDF (or other file) for a reference, deduplicating
 /// on (ref_id, path). Shared by the `attach` operation and `add_reference`,
 /// both of which run inside an already-open transaction.
-fn attach_within(
+pub(crate) fn attach_within(
     c: &Connection,
     ref_id: &str,
     path: &Path,
@@ -897,7 +938,7 @@ pub(crate) fn insert_doc(c: &Connection, rid: &str) -> Result<()> {
     )?;
     Ok(())
 }
-fn import(c: &Connection, a: &Value) -> Result<Value> {
+pub(crate) fn import(c: &Connection, a: &Value) -> Result<Value> {
     let raw = required(a, "bibtex")?;
     ensure!(raw.len() <= 64 * 1024 * 1024, "Import exceeds 64 MiB");
     let (bib, repairs) = parse_import(raw).map_err(|e| anyhow::anyhow!("Invalid BibTeX: {e}"))?;
@@ -1115,7 +1156,7 @@ fn upsert(c: &Connection, a: &Value) -> Result<Value> {
     save_entry(c, rid, b.iter().next().unwrap(), false, text(a, "source"))?;
     Ok(json!({"id":rid,"revision":revision+1}))
 }
-fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
+pub(crate) fn write_note(c: &Connection, method: &str, a: &Value) -> Result<Value> {
     validate_labels(a)?;
     let body = a
         .get("body")

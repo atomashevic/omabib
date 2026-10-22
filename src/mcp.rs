@@ -16,7 +16,7 @@ fn tool(
         "get_alphaxiv_overview",
     ]
     .contains(&name);
-    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required},"annotations":{"readOnlyHint":!write,"destructiveHint":matches!(name,"remove_pdf" | "delete_reference" | "delete_note"),"idempotentHint":!write,"openWorldHint":open_world}})
+    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required},"annotations":{"readOnlyHint":!write,"destructiveHint":matches!(name,"remove_pdf" | "delete_reference" | "delete_note" | "delete_highlight"),"idempotentHint":!write,"openWorldHint":open_world}})
 }
 pub fn tools() -> Vec<Value> {
     let string = json!({"type":"string"});
@@ -68,8 +68,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "add_reference",
-            "Add a reference from a DOI, arXiv ID, URL or BibTeX entry (input), or from a local PDF file (pdf_path, read to identify it). Fetches an abstract and an open-access PDF when available. Existing references are filled, not duplicated. Requires idempotency_key.",
-            json!({"input":string,"pdf_path":string,"project_id":{"type":["string","null"]},"download_pdf":boolean,"idempotency_key":string}),
+            "Add a reference from a DOI, arXiv ID, URL or BibTeX entry (input), or from a local PDF file (pdf_path). A PDF alone is identified from its own pages (an arXiv ID, DOI or ISBN printed in it, else its title on Crossref, Semantic Scholar, arXiv and Europe PMC) and is added only when the match is sure; otherwise the error says so. pdf_path with input attaches that PDF to the reference input names. The PDF is copied into Omabib's library unless copy_pdf is false. Fetches an abstract and an open-access PDF when available. Existing references are filled, not duplicated. Requires idempotency_key.",
+            json!({"input":string,"pdf_path":string,"copy_pdf":boolean,"source":string,"project_id":{"type":["string","null"]},"download_pdf":boolean,"idempotency_key":string}),
             vec!["idempotency_key"],
             true,
         ),
@@ -173,6 +173,34 @@ pub fn tools() -> Vec<Value> {
                 "confirm_ref_id",
                 "idempotency_key",
             ],
+            true,
+        ),
+        tool(
+            "list_highlights",
+            "List text highlights for one reference, or the whole library when ref_id is omitted. Newest update first, then id. A replaced PDF is marked stale. Highlights are not notes and are not included in get_reference.",
+            json!({"ref_id":string,"limit":{"type":"integer","minimum":1,"maximum":100},"cursor":{"type":"integer","minimum":0}}),
+            vec![],
+            false,
+        ),
+        tool(
+            "add_highlight",
+            "Save a text highlight on one PDF page, yellow unless color says otherwise. The PDF file is not changed.",
+            json!({"ref_id":string,"attachment_id":string,"page":{"type":"integer","minimum":1},"rects":{"type":"array","minItems":1,"items":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}},"quote":string,"color":{"type":"string","enum":["yellow","red","green","purple","blue"]}}),
+            vec!["ref_id", "attachment_id", "page", "rects", "quote"],
+            true,
+        ),
+        tool(
+            "update_highlight",
+            "Change a highlight's color or comment. The boxes and the quoted text stay as they are.",
+            json!({"id":string,"color":{"type":"string","enum":["yellow","red","green","purple","blue"]},"comment":string}),
+            vec!["id"],
+            true,
+        ),
+        tool(
+            "delete_highlight",
+            "Permanently remove one text highlight. Only call when deletion is explicitly authorized.",
+            json!({"id":string}),
+            vec!["id"],
             true,
         ),
         tool(

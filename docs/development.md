@@ -112,4 +112,4 @@ To install an archive by hand, download it with `SHA256SUMS` into one folder, ch
 
 The macOS app is signed ad hoc, not notarized. Installing with `curl` adds no quarantine flag, so it opens normally; a copy downloaded in a browser needs `xattr -dr com.apple.quarantine ~/Applications/Omabib.app`.
 
-V1 leaves out automatic merging of duplicate references, embeddings, full-text PDF search and annotation.
+V1 leaves out automatic merging of duplicate references, embeddings and full-text PDF search.

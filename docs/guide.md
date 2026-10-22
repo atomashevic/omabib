@@ -7,7 +7,9 @@ On a Mac, press **⌘** wherever this guide says **Ctrl**, and **⌥** for **Alt
 - [The window](#the-window)
 - [Tabs](#tabs)
 - [The command palette](#the-command-palette)
+- [Getting started](#getting-started)
 - [Adding references](#adding-references)
+- [Moving from Zotero](#moving-from-zotero)
 - [Importing BibTeX](#importing-bibtex)
 - [Reading PDFs](#reading-pdfs)
 - [Notes](#notes)
@@ -51,6 +53,17 @@ Each paper tab remembers its section, and each reader tab its page and zoom. Tab
 
 **Ctrl+K**, or the actions button beside **Add**, lists every action. Type to filter it, or type an action's number to run it. For a first digit that could start a two-digit number (1 or 2), press **Enter** straight away or wait a moment for the second digit.
 
+## Getting started
+
+A new, empty library opens on a welcome page with the ways to fill it:
+
+- **Move your Zotero library.** When Zotero is on this computer, Omabib says what it found ("1,962 references and 1,470 PDFs") and **Import from Zotero…** brings it over. Otherwise **Find Zotero library…** lets you choose Zotero's `zotero.sqlite`. See [Moving from Zotero](#moving-from-zotero).
+- **Import a BibTeX file** exported from Mendeley, EndNote, JabRef, Paperpile or any other manager. See [Importing BibTeX](#importing-bibtex).
+- **Add a paper** by DOI, arXiv ID or link, or a PDF you have. See [Adding references](#adding-references).
+- **Set up sync** when your library already lives on another computer. See [Sync](#sync).
+
+The page stays until the first reference arrives. All four are also in **Ctrl+K**, and the imports in **Settings**.
+
 ## Adding references
 
 Click **Add** (or **1 · Add new item** in the palette, or run `omabib add`) and paste any of:
@@ -65,6 +78,20 @@ You can also paste an identifier into the search field and press **Enter** when 
 
 Omabib looks up the title, authors and year, finds an abstract when it can, and looks for an open-access PDF. It previews each item with the citation key it would get (`family_word_year`, like `watts_collective_1998`) and saves nothing until you press **Import**. Adding a single identifier also downloads and attaches its PDF. A paper that's already in your library is filled in rather than added twice. Afterwards, the new paper (or the first of several) is selected.
 
+### A PDF you already have
+
+Click **Add PDF** beside **Add**, drop PDFs on the window, choose **Import PDF…** in **Ctrl+K**, or click **Choose PDF…** in the add box. Omabib reads the first five pages of each PDF and identifies the paper the way Zotero does, in this order:
+
+1. an arXiv ID stamped on the first page, a DOI in the file's properties, or a DOI printed on the first two pages;
+2. an ISBN printed in it, looked up on [Open Library](https://openlibrary.org);
+3. its title (the largest text above the abstract) searched on Crossref, then Semantic Scholar, arXiv and Europe PMC.
+
+A record counts only when the PDF prints its title, and for a title under 50 letters also the surname of one of its first two authors. A DOI or a title the paper cites is therefore not taken for the paper itself. Omabib stops at the first record that passes. When none passes, or two records tie, the preview lists the records it found and marks them **check that it's this paper**. The last entry in the list is made from the PDF itself: its title, the authors in its file properties, and its abstract.
+
+**Add to library** copies the PDF to `~/.local/share/omabib/pdfs/<citekey>.pdf` and attaches it. The original file stays where it was. If the same file is already in your library, the preview says so. Several dropped PDFs are previewed one after another.
+
+Only the title, one surname and the identifiers are sent to these services; the PDF itself is not uploaded. A scanned PDF without a text layer can't be read: add it by DOI, or with the entry made from its file name.
+
 For an arXiv paper, the **AI summary** section checks [alphaXiv](https://www.alphaxiv.org) for a published overview the first time you open it, keeps a copy, and lays it out for reading, with a strip that jumps between sections. When there's no overview yet, it says so and links to the paper on alphaXiv.
 
 From a terminal:
@@ -77,7 +104,31 @@ omabib add --pdf /absolute/path/to/paper.pdf            # recognized from the PD
 omabib add --dry-run 10.1145/x 10.1145/y                # preview several, save nothing
 ```
 
-`omabib add` with nothing after it opens the add box in the window. `--no-pdf` skips the PDF download. `--pdf` reads the PDF's first two pages for a DOI or arXiv ID, or searches Crossref by its title.
+`omabib add` with nothing after it opens the add box in the window. `--no-pdf` skips the PDF download. `--pdf` identifies the PDF as above and adds it only when the match is sure, or with the entry made from the PDF when nothing was found online; `--pdf FILE --dry-run` lists the candidates and saves nothing.
+
+## Moving from Zotero
+
+**Import from Zotero…** (on the welcome page, in **Settings**, or in **Ctrl+K**) reads Zotero's own library and brings over:
+
+- **Every reference**, under the citation key it has in Zotero (Zotero 7's own key, Better BibTeX's, or a `Citation Key:` line in Extra), so LaTeX and Pandoc documents that cite it keep working. A reference without a key gets one like `watts_collective_1998`. Zotero's fields become BibTeX fields, its tags become `keywords` (tags added automatically from databases are left out), and other lines in Extra are kept in `annotation`.
+- **PDFs.** **Copy into Omabib** (the default) puts a copy in `~/.local/share/omabib/pdfs/`, so the library no longer depends on Zotero and sync can carry the files. **Use Zotero's files where they are** takes no extra space but needs the Zotero folder to stay.
+- **Notes**, converted to Markdown. A note longer than Omabib's 64 KiB limit is split into parts.
+- **Highlights and comments** made in Zotero's PDF reader, gathered into one note per PDF: each passage quoted with its page, then its comment.
+- **Collections as projects.** A subcollection becomes a project named "Parent / Child". A group library's collections are named after the group, and a group library's other references go into a project named after it.
+
+The dialog shows what it found before anything happens, and each part can be left out. Imported notes show "zotero" beside their date. Nothing in Zotero is changed: Omabib reads a copy of its database, so Zotero can stay open, although changes made in Zotero after that won't come over. Items in Zotero's trash stay behind, and a PDF without a parent item becomes a reference titled after its file, to fill in with **Fill metadata online**.
+
+Importing again later brings over what's new. Omabib remembers what each Zotero item became, so nothing is added or copied twice, and a reference you deleted in Omabib since stays deleted. A paper already in Omabib from elsewhere (the same DOI, or the same citation key and title) is filled in rather than added twice. A PDF Zotero hasn't downloaded to this computer (with **Download files as needed** in Zotero's sync settings) can't come over; open it in Zotero, then import again. Web snapshots, EPUBs and standalone notes stay in Zotero.
+
+From a terminal:
+
+```bash
+omabib zotero --dry-run                 # what would come over, from the library Omabib finds
+omabib zotero                           # import it
+omabib zotero --dir ~/Zotero --link-pdfs --no-groups
+```
+
+`--no-notes` and `--no-projects` leave notes and projects out.
 
 ## Importing BibTeX
 
@@ -91,7 +142,7 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 
 ## Reading PDFs
 
-**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
+**Open PDF** (**Enter** on a result with a PDF, **Ctrl+O**, the toolbar's **Open PDF**, or `omabib pdf open CITATION_KEY`) opens the paper in a reader tab. If there's no PDF yet, Omabib looks for one first. Notes, highlights, the abstract and the AI summary sit in a pane to the right, and the reader keeps its page and zoom across restarts. Your PDF files are never changed.
 
 | Keys | |
 |---|---|
@@ -102,14 +153,23 @@ Entries repeated within a file are merged: missing fields are combined and, wher
 | **0** or **w** / **z** | fit width / fit page |
 | **gg** / **G**, a number and **G** | first page, last page, that page |
 | **/**, then **n** / **N** | find, next / previous match |
-| drag, double-click, **Ctrl+C** | select words, copy |
+| drag, double-click | select those words; with the highlighter, highlight them |
+| **m** | highlight the selection, or pick up or put down the highlighter |
+| right-click | copy, copy as Markdown, highlight, quote in the chat, note |
+| **Ctrl+C** | copy the selection |
 | **r** | clip a region into a note |
 | **a** | note on the current page |
 | **o** / **]** | contents / side pane |
-| **c** | ask the chat about the selection, or open the chat |
+| **c** | quote the selection in the chat, or open the chat |
 | **Ctrl+R** | theme or original page colors |
-| **Esc** | cancel the clip, selection or search; again to go back |
+| **Esc** | put down the highlighter, cancel the clip, selection or search; again to go back |
 | **Ctrl+W** | close the tab |
+
+Dragging across words, or double-clicking one, selects them. **Ctrl+C** copies the passage with its lines run together, a word hyphenated across a line break closed up, and paragraphs kept apart. To highlight, press **m** or click the highlighter in the toolbar. Then a drag or a double-click saves a highlight in the color shown beside it (click the dot for another: yellow, red, green, purple or blue), and the highlighter stays in hand until **m** or **Esc**. With words selected, **m** highlights them.
+
+Right-click a selection for **Copy**, **Copy as Markdown** (a block quote that cites its page as `[@citekey, p. 4]`, ready for Pandoc), **Highlight** in any of the five colors, **Add to chat as quote**, and **Add a note about this**, which opens a page note that starts with the quote. Right-click a highlight for the same, plus its color, a comment and **Delete highlight**; a click on it opens its color and comment. Right-click bare page for a page note, a clip or the highlighter. The **Highlights** tab in the side pane lists the PDF's highlights in reading order with their comments; click one to go to it.
+
+The colors are only colors. A highlight is kept in the library and is not written into the PDF. It is drawn only while the open file is the one it was taken from.
 
 Links inside the paper jump to their page, and web links open in your browser. **Open PDF in another app** in **⋯** hands the file to your system's PDF viewer.
 
@@ -152,7 +212,7 @@ On Linux, **⋯ → Chat in Codex CLI** (or Claude Code) opens the agent in a te
 
 ## Connecting other agents
 
-Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes and clips, get a PDF's path, and save notes when you ask.
+Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask.
 
 - **Codex:** **Settings → Connect Codex**, or `omabib-settings register-codex`. This registers Omabib's MCP server and installs the Omabib skill in `~/.codex/skills/omabib`. Reopen running Codex sessions afterwards. An existing connection to another library is left alone.
 - **Claude Desktop:** **Settings → Add Omabib to Claude Desktop**, then restart Claude Desktop. This adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
@@ -165,6 +225,7 @@ Omabib's own chats are connected already. If you used the old `omabib-mcp` compa
 
 The **Settings** button at the bottom of the sidebar opens them. Changes apply immediately and are saved in `~/.config/omabib/settings.json`; `omabib-settings` prints or changes them from a terminal (`omabib-settings set ai_cli claude`).
 
+- **Bring in your library:** **Import from Zotero…** and **Import BibTeX file…**.
 - **Theme:** System (follows your desktop's light or dark setting), Light, Dark, or Omarchy. Omarchy appears when `~/.local/state/omarchy/current/theme/colors.toml` parses, and a new config chooses it. System, Light or Dark already written in `settings.json` stay as they are. An open window follows a theme change, including when Omarchy replaces the theme directory. `mode` `light` or `dark` in that file decides which; with no `mode`, the background does. A file that does not parse keeps the palette already on screen.
 - **Reading font:** Mona Sans or Source Serif 4, for titles, abstracts and notes.
 - **PDF pages:** **Original colors** or **Theme colors** (see [Theme colors](#theme-colors)).
@@ -183,7 +244,7 @@ Sync keeps your library the same on all your computers, through storage you alre
 
 From then on, sync runs by itself: about 30 seconds after you stop editing, every 5 minutes, when the window opens, and when you press **Sync**. Changes from other computers appear in the open window.
 
-**What syncs:** references, notes and their clips, projects, attachments and cached AI summaries. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
+**What syncs:** references, notes and their clips, projects, attachments, cached AI summaries, and text highlights. Highlights are kept in the library and synced beside it. They are not written into the PDF. Every PDF is uploaded; other computers download one the first time it's opened, or all at once with **Download all** in the Sync dialog. Chats, note history and each computer's own file paths stay where they are. Your storage gets a visible `Omabib/` folder with readable `pdfs/<citekey>.pdf` files, which you can open from a phone. The library file itself never leaves your computer.
 
 **When edits meet:**
 
@@ -218,7 +279,7 @@ Omabib keeps its own rclone config in `~/.config/omabib/rclone.conf`, separate f
 
 **Attach PDF…** in **⋯** (or in the **Files** section) links a PDF you already have. **Open PDF** finds one itself: an attached file, a copy from your sync storage, or a freshly downloaded open-access copy (from the paper's own link, arXiv, OpenAlex or Semantic Scholar). **Open link** (**Ctrl+U**) opens the paper's web page or DOI instead, even when a PDF is attached. In **Files**, each attachment has **Open**, **Pull** when its file is missing, and **Remove link**; removing a link keeps the file.
 
-PDFs Omabib downloads go to `~/.local/share/omabib/pdfs/<citekey>.pdf`, so you can find them by name. PDFs you attach stay where they are. Files can be up to 512 MiB.
+PDFs Omabib downloads and PDFs you import go to `~/.local/share/omabib/pdfs/<citekey>.pdf`, so you can find them by name; an imported PDF is a copy. A PDF you attach to a paper already in the library stays where it is. Files can be up to 512 MiB.
 
 ```bash
 omabib pdf add CITATION_KEY /absolute/path/paper.pdf
@@ -325,5 +386,6 @@ For agents:
 - Omabib never runs a language model itself and never indexes PDF text. It returns paths; reading the paper is up to the agent.
 - The MCP server handles up to eight calls at once, plus eight queued; beyond that, calls get a retryable busy error. Responses can arrive out of order.
 - Deleting a reference or a note goes through a preview first (`delete_reference_preview`, `delete_note_preview`), and the deletion must match it.
+- Text highlights are listed with `list_highlights` (one reference, or the whole library). `add_highlight` saves a highlight, yellow unless `color` says otherwise, `update_highlight` changes its color or comment, and `delete_highlight` removes it. A replaced PDF is marked stale. They are not part of `get_reference`.
 
 `omabib schema get_reference search` prints those tools' schemas. See [API.md](../API.md) for the rest.

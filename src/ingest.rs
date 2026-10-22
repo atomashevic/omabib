@@ -65,7 +65,7 @@ pub(crate) fn citation_key(fields: &Value) -> String {
     }
 }
 
-fn bibliography(fields: &Value, kind: &str) -> Result<String> {
+pub(crate) fn bibliography(fields: &Value, kind: &str) -> Result<String> {
     let title = text(fields, "title");
     ensure!(
         !title.is_empty(),
@@ -78,12 +78,17 @@ fn bibliography(fields: &Value, kind: &str) -> Result<String> {
         if let Some(s) = value.as_str()
             && !s.is_empty()
         {
-            e.set(
-                key,
-                vec![biblatex::Spanned::detached(biblatex::Chunk::Normal(
-                    s.into(),
-                ))],
-            );
+            // Organizations come braced as authors: `{OpenAI}`.
+            if key == "author" {
+                e.set(key, crate::db::source_chunks(s));
+            } else {
+                e.set(
+                    key,
+                    vec![biblatex::Spanned::detached(biblatex::Chunk::Normal(
+                        s.into(),
+                    ))],
+                );
+            }
         }
     }
     Ok(crate::db::serialize_entry(e))

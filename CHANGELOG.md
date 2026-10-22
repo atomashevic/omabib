@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A new, empty library opens on a welcome page: move the Zotero library found on this computer, import a BibTeX file, add a first paper or PDF, or set up sync for a library on another computer.
+- Move from Zotero in one step, from the welcome page, Settings, Ctrl+K or `omabib zotero`. Omabib reads a copy of Zotero's database, so Zotero is never changed and can stay open. References keep their citation keys (Zotero 7's, Better BibTeX's or one in Extra), and their PDFs (copied, or linked where Zotero keeps them), notes, highlights with their pages, tags and collections come along; collections become projects. The dialog shows what it found before importing, with progress while PDFs are copied. Importing again brings over only what's new.
+- **Add PDF** beside **Add** in the toolbar.
+- Highlight text in the reader. Press **m**, or click the highlighter in the reader's toolbar, then drag over a passage or double-click a word; the highlight takes the color shown beside the highlighter (yellow, red, green, purple or blue), and the highlighter stays in hand until **m** or **Esc**. A plain drag only selects, and **m** highlights a selection. Highlights are kept in the library and synced with it. The PDF is not changed.
+- Right-click in the reader. On a selection: **Copy**, **Copy as Markdown** (a block quote citing its page as `[@citekey, p. 4]`), **Highlight** in any color, **Add to chat as quote** and **Add a note about this**. On a highlight: the same, plus its color, a comment and **Delete highlight**. Copied text runs its lines together, closes up words hyphenated across lines and keeps paragraphs apart.
+- A **Highlights** tab in the reader's side pane lists the PDF's highlights in reading order with their comments. A click goes to the passage.
+- Agents can list, save, change, and delete PDF text highlights with `list_highlights`, `add_highlight`, `update_highlight`, and `delete_highlight`, through `omabib call` and the MCP server. A new highlight is yellow unless `color` says otherwise. The PDF file is not changed.
+- Import a PDF as a new reference, as in Zotero. Drop PDFs on the window, choose **Import PDF…** in Ctrl+K, or click **Choose PDF…** in the add box. Omabib reads the first five pages and identifies the paper in Zotero's order: an arXiv ID on page one, a DOI in the file's properties or printed on its first two pages, an ISBN (looked up on Open Library), then its title on Crossref, Semantic Scholar, arXiv and Europe PMC. A record counts only when the PDF prints its title; a title under 50 letters also needs an author's surname on the page. When no record passes, or two tie, the preview lists them, and an entry made from the PDF itself is always offered last. The PDF is copied into the library's `pdfs/` folder and the original stays where it was. A file that is already in the library is pointed out.
+
+### Changed
+
+- Identifying a PDF no longer needs `pdftotext` or `pdfinfo` from poppler-utils. Omabib reads the PDF with MuPDF, which it already includes, so `omabib add --pdf` also works on a Mac.
+- `add_reference` with `pdf_path` copies the PDF into the library unless `copy_pdf` is false. With `pdf_path` alone it adds only a sure match, or the PDF's own entry when nothing was found online. `identify_pdf` returns candidates in one shape, each with `match_kind` and `confident`, plus `existing`. `omabib add --pdf FILE --dry-run` lists the candidates.
+
 ## [0.1.3] - 2026-10-21
 
 v0.1.2 was tagged but never published. This release carries those changes: the Omarchy key and theme, uninstall, the field-merge sync fix, the install preflight, and older rclone, plus the mouse-wheel fix and the Linux package-list fix.

@@ -726,7 +726,12 @@ fn add_reference_from_bibtex_attaches_pdf_and_associates_project_atomically() {
     let r = l
         .call("get_reference", &json!({"id":out["id"]}))
         .unwrap();
-    assert_eq!(r["pdf_path"], json!(pdf.canonicalize().unwrap()));
+    // The PDF is copied into the library's storage, named after the
+    // reference, and the original is left where it was.
+    let stored = d.path().canonicalize().unwrap().join("pdfs/Added2025.pdf");
+    assert_eq!(r["pdf_path"], json!(stored));
+    assert_eq!(std::fs::read(&stored).unwrap(), std::fs::read(&pdf).unwrap());
+    assert!(pdf.exists());
     let ctx = l
         .call("project_context", &json!({"project_id":project["id"]}))
         .unwrap();
@@ -754,6 +759,15 @@ fn add_reference_from_bibtex_attaches_pdf_and_associates_project_atomically() {
     let mut different = args.clone();
     different["input"] = json!("@article{Other,title={Other},year={2026}}");
     assert!(l.call("add_reference", &different).is_err());
+
+    // copy_pdf:false links the file where it is.
+    let linked = l
+        .call(
+            "add_reference",
+            &json!({"input":"@misc{Linked2025,title={Linked in place}}","pdf_path":pdf,"copy_pdf":false,"download_pdf":false}),
+        )
+        .unwrap();
+    assert_eq!(linked["attachment"]["path"], json!(pdf.canonicalize().unwrap()));
 }
 
 #[test]

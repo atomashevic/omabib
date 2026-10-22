@@ -68,7 +68,7 @@ Claude Code or Codex, on your own login, with no API keys. It reads the paper, y
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://omabib.github.io/img/features/agents-dark.webp"><img src="https://omabib.github.io/img/features/agents-light.webp" alt="Agents found on this computer"></picture>
 
 **First-class MCP, built in**<br>
-One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes and clips, and open PDFs.
+One fast server for Claude Code, Codex, Claude Desktop and any MCP client. Agents search your library, fetch many papers in one call, read notes, clips and text highlights, and open PDFs.
 
 </td>
 <td width="50%" valign="top">
@@ -104,8 +104,8 @@ Google Drive, Dropbox, OneDrive or a folder you already sync. Edits merge, PDFs 
 
 ## Get started
 
-1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry, or paste one straight into the search box and press <kbd>Enter</kbd>. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one.
-2. **Bring your existing library.** Export a `.bib` file from Zotero, Mendeley or any other manager, then press <kbd>Ctrl</kbd>+<kbd>K</kbd> and choose **Import BibTeX file…**.
+1. **Add a paper.** Click **Add** and paste a DOI, an arXiv ID, a link to the paper, or a BibTeX entry, or paste one straight into the search box and press <kbd>Enter</kbd>. Omabib fills in the details, finds the abstract, and downloads an open-access PDF when there is one. If you already have the PDF, click **Add PDF** or drop it on the window: Omabib reads the DOI, arXiv ID, ISBN or title printed in it and looks the paper up.
+2. **Bring your existing library.** Coming from Zotero? **Import from Zotero…** on the welcome page (or in **Settings**) brings over its references with their citation keys, PDFs, notes, highlights and collections, and leaves Zotero as it is. From Mendeley or any other manager, export a `.bib` file and choose **Import BibTeX file…**.
 3. **Organize.** Click **New project** in the sidebar, then **Add to project** on any paper. Each project keeps its own notes.
 
 ### Your agent, alongside you
@@ -133,9 +133,9 @@ And a button too, for the mouse. On a Mac, <kbd>⌘</kbd> takes the place of <kb
 | <kbd>Tab</kbd> | paper details | middle-button drag | pan |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | open in a tab | <kbd>g</kbd><kbd>g</kbd> / <kbd>G</kbd> | first / last page |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | switch project | <kbd>/</kbd>, <kbd>n</kbd> <kbd>N</kbd> | find, next, previous |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | detail sections | <kbd>r</kbd> | clip into a note |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | detail sections | <kbd>m</kbd> / <kbd>r</kbd> | highlight / clip into a note |
 | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | switch tabs | <kbd>a</kbd> | note on this page |
-| <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | ask about the selection |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | close the tab | <kbd>c</kbd> | quote the selection in the chat |
 | <kbd>Esc</kbd> | back, or hide | <kbd>Ctrl</kbd>+<kbd>R</kbd> | theme or original colors |
 
 Closing the window keeps Omabib ready in the background, so it opens instantly. On Omarchy, the installer binds **Super+Alt+B** to `omabib open` in `~/.config/hypr/bindings.lua`. Elsewhere, add a shortcut for `omabib open` in your desktop's keyboard settings. `omabib add` opens straight into the add box.
@@ -148,7 +148,7 @@ Omabib runs on your computer and keeps your library there. Sync goes straight to
 
 - **Free and open source:** AGPL, no subscription.
 - **No servers, no analytics:** nothing to sign up for, nothing tracked.
-- **Your files:** the library and the PDFs Omabib downloads live in `~/.local/share/omabib/`. PDFs you attach from elsewhere stay where they are.
+- **Your files:** the library, the PDFs Omabib downloads and copies of the PDFs you import live in `~/.local/share/omabib/`. A PDF you attach to a paper already in the library stays where it is.
 - **No lock-in:** BibTeX in and out, and `omabib backup ~/omabib-backup.db` makes a backup any time.
 
 ## Uninstall

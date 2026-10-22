@@ -56,6 +56,21 @@ Rectangle {
         function installRclone() { note("installRclone") }
         function openRcloneConfig() { note("openRcloneConfig") }
         function syncFolderGuess() { return "/home/reader/Sync" }
+        // Welcome and Zotero stand-in.
+        property bool libraryEmpty: false
+        property var zotero: null
+        property bool zoteroLooking: false
+        property var zoteroOptions: ({pdfs: "copy", groups: true, notes: true, projects: true})
+        property bool zoteroImporting: false
+        property var zoteroProgress: null
+        property var zoteroResult: null
+        property string zoteroError: ""
+        function openZotero() { note("openZotero") }
+        function chooseZoteroFolder() { note("chooseZoteroFolder") }
+        function detectZotero(path) { note("detectZotero:" + path) }
+        function openBibPicker() { note("openBibPicker") }
+        function openPdfPicker() { note("openPdfPicker") }
+        function setZoteroOption(key, value) { var o = Object.assign({}, zoteroOptions); o[key] = value; zoteroOptions = o; note("setZoteroOption:" + key) }
         property bool metadataBusy: false
         property bool allNotes: false
         property bool includeOtherNotes: false
@@ -75,12 +90,28 @@ Rectangle {
         // The reader's service calls, answered from fixtures.
         function rpc(method, params, callback, onError) {
             note(method + ":" + (params.page || params.query || params.ref_id || ""))
+            rpcLog = rpcLog.concat([{method: method, params: params}])
             var page = function (i) { return {x0: 0, y0: 0, w: 612, h: 792} }
             var answer = null
-            if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
+            if (method === "pdf_open") answer = {doc_id: "d1", path: "/lib/paper.pdf", ref_id: params.ref_id, attachment_id: "a1", page_count: 3, pages: [page(0), page(1), page(2)], title: "", outline: [{title: "Introduction", level: 0, page: 1}, {title: "Results", level: 0, page: 3}, {title: "Table 2", level: 1, page: 3}]}
             else if (method === "pdf_render") answer = {path: String(Qt.resolvedUrl("page.png")).replace(/^file:\/\//, ""), width: 306, height: 396, scale: params.scale, links: params.page === 1 ? [{rect: [72, 300, 300, 330], page: 3, uri: null}] : []}
             else if (method === "pdf_text") answer = {page: params.page, words: [["Sparse", 72, 66, 148, 99, 0, 0], ["attention", 154, 66, 246, 99, 0, 0], ["Table", 72, 129, 110, 145, 1, 0], ["headline", 176, 129, 221, 145, 1, 0]]}
             else if (method === "pdf_search") answer = {query: params.query, hits: [{page: 2, rects: [[176, 129, 221, 145]]}], total: 1, truncated: false}
+            else if (method === "pdf_highlights") answer = {highlights: []}
+            else if (method === "add_highlight") {
+                var id = "h" + (++highlightSeq)
+                answer = {id: id, ref_id: params.ref_id, attachment_id: params.attachment_id, page: params.page, rects: params.rects, quote: params.quote, color: params.color || "yellow", comment: "", created_at: "2026-09-15T07:00:00Z"}
+                var added = Object.assign({}, highlightStore)
+                added[id] = answer
+                highlightStore = added
+            } else if (method === "update_highlight") {
+                answer = Object.assign({}, highlightStore[params.id])
+                if (params.color !== undefined) answer.color = params.color
+                if (params.comment !== undefined) answer.comment = params.comment
+                var edited = Object.assign({}, highlightStore)
+                edited[params.id] = answer
+                highlightStore = edited
+            } else if (method === "delete_highlight") answer = {id: params.id, deleted: true}
             if (!answer) { if (onError) onError("unsupported"); return 1 }
             Qt.callLater(callback, answer)
             return 1
@@ -101,6 +132,9 @@ Rectangle {
         property string actionDigits: ""
         property bool overflowOpen: overflowMenu.opened
         property var calls: []
+        property var rpcLog: []
+        property var highlightStore: ({})
+        property int highlightSeq: 0
         readonly property int maxTabs: 10
         property var paperTabs: []
         property int activeTab: -1
@@ -301,6 +335,15 @@ Rectangle {
         color: ui.card
         border.width: 1; border.color: ui.border
         SyncPanel { id: syncPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
+    }
+    Rectangle {
+        id: zoteroSheet
+        visible: false
+        anchors.centerIn: parent
+        width: 640; height: Math.min(parent.height - 20, zoteroPanel.implicitHeight + 40)
+        color: ui.card
+        border.width: 1; border.color: ui.border
+        ZoteroPanel { id: zoteroPanel; x: 20; y: 20; width: parent.width - 40; theme: ui; app: app }
     }
     Rectangle {
         id: editorSheet
@@ -520,6 +563,78 @@ Rectangle {
             shot("7b-palette-filtered")
             keyClick(Qt.Key_Return)
             verify(app.calls.indexOf("runAction:19") >= 0, "Return runs the filtered action: " + app.calls)
+            tryCompare(palette, "opened", false)
+            palette.open()
+            tryCompare(palette, "opened", true)
+            keyClick(Qt.Key_P); keyClick(Qt.Key_D); keyClick(Qt.Key_F); keyClick(Qt.Key_Space); keyClick(Qt.Key_I); keyClick(Qt.Key_S); keyClick(Qt.Key_B)
+            compare(palette.matches.length, 1)
+            compare(palette.matches[0].n, 30)
+            keyClick(Qt.Key_Return)
+            verify(app.calls.indexOf("runAction:30") >= 0, "Import PDF runs from the palette: " + app.calls)
+        }
+        function test_15_welcome_add_pdf_and_zotero() {
+            var library = {found: true, path: "/home/reader/Zotero", running: true, projects: 62, projects_own: 61, standalone: 35, other_files: 2, loose_notes: 5,
+                libraries: [{name: "My Library", group: false, references: 1962, pdfs: 1470, pdfs_missing: 44, pdf_bytes: 3.9e9, notes: 445, annotations: 4148, citation_keys: 1948},
+                            {name: "Reading group", group: true, references: 294, pdfs: 120, pdfs_missing: 0, pdf_bytes: 2e8, notes: 3, annotations: 12, citation_keys: 280}]}
+            mouseClick(find(toolbar, "addPdfButton"))
+            verify(app.calls.indexOf("openPdfPicker") >= 0, "Add PDF in the toolbar: " + app.calls)
+
+            // A new library welcomes, with the Zotero library it found first.
+            var hits = app.hits
+            app.hits = []
+            app.libraryEmpty = true
+            app.zotero = library
+            wait(80)
+            verify(find(list, "welcome").visible)
+            shot("15a-welcome-zotero-found")
+            mouseClick(find(list, "welcomeZoteroButton"))
+            verify(app.calls.indexOf("openZotero") >= 0, app.calls)
+            mouseClick(find(list, "welcomeBibtexButton"))
+            verify(app.calls.indexOf("openBibPicker") >= 0, app.calls)
+            mouseClick(find(list, "welcomeSyncButton"))
+            verify(app.calls.indexOf("openSync") >= 0, app.calls)
+            app.zotero = {found: false}
+            wait(50)
+            shot("15b-welcome-no-zotero")
+            mouseClick(find(list, "welcomeZoteroButton"))
+            verify(app.calls.indexOf("chooseZoteroFolder") >= 0, app.calls)
+
+            // What Zotero would bring, and the choices.
+            app.zotero = library
+            zoteroSheet.visible = true
+            wait(80)
+            verify(find(zoteroPanel, "zoteroFound").visible)
+            compare(zoteroPanel.references, 2256)
+            compare(zoteroPanel.countText, "2,256 references")
+            shot("15c-zotero-found")
+            mouseClick(find(zoteroPanel, "zoteroGroups"))
+            compare(app.zoteroOptions.groups, false)
+            compare(zoteroPanel.references, 1962)
+            mouseClick(find(zoteroPanel, "zoteroLink"))
+            compare(app.zoteroOptions.pdfs, "link")
+            app.zoteroImporting = true
+            app.zoteroProgress = {what: "Copying PDFs", done: 312, total: 1470}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroImporting").visible)
+            verify(!zoteroPanel.canImport)
+            shot("15d-zotero-importing")
+            app.zoteroImporting = false
+            app.zoteroResult = {references: 1950, merged: 12, pdfs: 1426, pdfs_missing: 44, pdfs_copied: true, notes: 3100, projects: 61, project_links: 1400, standalone: 35, other_files: 2, loose_notes: 5}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroDone").visible)
+            shot("15e-zotero-done")
+            app.zoteroResult = null
+            app.zotero = {found: false}
+            wait(50)
+            verify(find(zoteroPanel, "zoteroMissing").visible)
+            shot("15f-zotero-missing")
+
+            zoteroSheet.visible = false
+            app.zotero = null
+            app.zoteroOptions = {pdfs: "copy", groups: true, notes: true, projects: true}
+            app.libraryEmpty = false
+            app.hits = hits
+            wait(50)
         }
         function mathFixture() {
             function path(name) { return decodeURIComponent(String(Qt.resolvedUrl("math/" + name)).replace(/^file:\/\//, "")) }
@@ -696,13 +811,13 @@ Rectangle {
             reader.setZoomMode("width")
             wait(250)
 
-            // Text selection copies words, joining lines with newlines.
+            // Text selection copies words; paragraphs stay apart.
             tryVerify(function () { return !!reader.words[1] })
             reader.selection = {page: 1, from: 0, to: 3}
-            compare(reader.selectionText(), "Sparse attention\nTable headline")
+            compare(reader.selectionText(), "Sparse attention\n\nTable headline")
             verify(reader.wantsEscape)
             keyClick(Qt.Key_C, Qt.ControlModifier)
-            verify(app.calls.indexOf("copy:Sparse attention\nTable headline") >= 0, app.calls)
+            verify(app.calls.indexOf("copy:Sparse attention\n\nTable headline") >= 0, app.calls)
             keyClick(Qt.Key_Escape)
             compare(reader.selection, null)
 
@@ -828,6 +943,195 @@ Rectangle {
             compare(app.settings.pdf_colors, "original")
             } finally {
                 reader.showOutline = false
+                readerSheet.visible = false
+                reader.tab = null
+                app.paperTabs = []
+                app.activeTab = -1
+            }
+        }
+        function test_11b_highlights() {
+            function callsNamed(method) {
+                var n = 0
+                for (var i = 0; i < app.rpcLog.length; i++) if (app.rpcLog[i].method === method) n++
+                return n
+            }
+            function findShown(name) {
+                var top = stage
+                while (top.parent) top = top.parent
+                return find(top, name)
+            }
+            function near(got, want) { return Math.abs(got - want) < 0.01 }
+            var r = Fixture.ref
+            app.selected = r
+            app.detailTab = "notes"
+            app.highlightStore = ({})
+            app.highlightSeq = 0
+            app.rpcLog = []
+            app.paperTabs = [{id: r.id, citekey: r.citekey, title: r.title, kind: "pdf", detail_tab: "notes", page: 1, zoom_mode: "custom", zoom: 1}]
+            app.activeTab = 0
+            readerSheet.visible = true
+            reader.tab = app.activePaper
+            try {
+                tryCompare(reader, "status", "ready")
+                tryVerify(function () { return !!reader.words[1] })
+                reader.setZoom(1)
+                compare(reader.zoom, 1)
+                wait(50)
+                var mouse1 = find(find(reader, "readerPage1"), "readerPageMouse")
+                verify(mouse1 !== null)
+
+                var menuOpen = function () { return reader.contextMenuOpen }
+                var choose = function (key) {
+                    var row = findShown("menuItem:" + key) || findShown("menuSwatch:" + key)
+                    verify(row !== null, "menu entry " + key)
+                    // Rows are laid out on the next frame after the menu's entries change.
+                    tryVerify(function () { return row.width > 0 })
+                    mouseClick(row)
+                    tryVerify(function () { return !reader.contextMenuOpen })
+                }
+                var rightClick = function (x, y) {
+                    mouseClick(mouse1, x, y, Qt.RightButton)
+                    tryVerify(menuOpen)
+                }
+
+                // A click on empty text does nothing.
+                mouseClick(mouse1, 400, 200)
+                wait(50)
+                compare(callsNamed("add_highlight"), 0)
+                compare(reader.selection, null)
+
+                // With the select tool a double-click or a drag only selects.
+                mouseDoubleClickSequence(mouse1, 198, 137)
+                compare(reader.selection.from, 3)
+                compare(reader.selection.to, 3)
+                mouseDrag(mouse1, 91, 137, 110, 0)
+                compare(Math.min(reader.selection.from, reader.selection.to), 2)
+                compare(Math.max(reader.selection.from, reader.selection.to), 3)
+                wait(50)
+                compare(callsNamed("add_highlight"), 0)
+                compare(reader.highlights.length, 0)
+
+                // Right-clicking the selection copies it plain or as a cited Markdown quote.
+                rightClick(100, 137)
+                verify(findShown("menuItem:chat") !== null)
+                verify(findShown("menuItem:highlight") !== null)
+                verify(findShown("menuSwatch:highlight:purple") !== null)
+                shot("11e-reader-selection-menu")
+                choose("copy")
+                verify(app.calls.indexOf("copy:Table headline") >= 0, app.calls)
+                verify(reader.selection !== null, "copying keeps the selection")
+                rightClick(100, 137)
+                choose("markdown")
+                verify(app.calls.indexOf("copy:> Table headline\n>\n> [@okafor_sparse_2026, p. 1]") >= 0, app.calls)
+
+                // A swatch highlights the selection in that color, which the highlighter then takes.
+                rightClick(100, 137)
+                choose("highlight:green")
+                tryVerify(function () { return reader.highlights.length === 1 })
+                var table = reader.highlights[0]
+                compare(table.color, "green")
+                compare(table.quote, "Table headline")
+                compare(table.rects.length, 1)
+                verify(near(table.rects[0][0], 72) && near(table.rects[0][2], 221))
+                verify(near(table.rects[0][1], 129) && near(table.rects[0][3], 145))
+                compare(reader.selection, null)
+                compare(reader.highlightColor, "green")
+                var sent = app.rpcLog.filter(function (c) { return c.method === "add_highlight" })
+                compare(sent[0].params.color, "green")
+                compare(sent[0].params.attachment_id, "a1")
+                verify(find(find(reader, "readerPage1"), "readerHighlight") !== null)
+
+                // `m` picks up the highlighter: a drag saves in its color, a double-click saves a word.
+                keyClick("m")
+                compare(reader.tool, "highlight")
+                verify(find(reader, "readerHighlightTool").active)
+                mouseDrag(mouse1, 80, 82, 160, 0)
+                tryVerify(function () { return reader.highlights.length === 2 })
+                compare(reader.highlights[1].quote, "Sparse attention")
+                compare(reader.highlights[1].color, "green")
+                compare(reader.selection, null)
+                compare(reader.tool, "highlight", "the highlighter stays in hand")
+                keyClick("m")
+                compare(reader.tool, "select")
+
+                // A highlight's own menu recolors it and quotes it into the chat.
+                rightClick(100, 137)
+                verify(findShown("menuItem:delete") !== null)
+                verify(findShown("menuItem:comment") !== null)
+                choose("color:purple")
+                tryVerify(function () { return reader.highlights[0].color === "purple" })
+                compare(reader.highlights[1].color, "green")
+                rightClick(100, 137)
+                choose("chat")
+                compare(app.chatAttachment.selection.text, "Table headline")
+                compare(app.chatAttachment.selection.page, 1)
+                compare(app.detailTab, "chat")
+                app.chatAttachment = null
+
+                // "Add a note about this" opens a page note that starts with the quote.
+                app.composer = {note: null, clip: {source_pdf: "/lib/paper.pdf", page: 1}, token: "t2", projectId: null, labels: "", evidence: "PDF p. 1"}
+                rightClick(100, 137)
+                choose("note")
+                compare(app.lastClip.source_pdf, "/lib/paper.pdf")
+                compare(app.lastClip.page, 1)
+                verify(!app.lastClip.rect_pt)
+                compare(app.composer.body, "> Table headline\n\n")
+                app.cancelComposer()
+
+                // The side pane lists the highlights in reading order.
+                app.detailTab = "notes"
+                reader.sideHighlights = true
+                var list = find(reader, "readerHighlights")
+                tryVerify(function () { return list.visible })
+                compare(list.marks.length, 2)
+                compare(list.marks[0].quote, "Sparse attention")
+                compare(list.marks[1].quote, "Table headline")
+                wait(100)
+                shot("11f-reader-highlights")
+                var cards = []
+                var collect = function (item) {
+                    if (item.objectName === "highlightCard") cards.push(item)
+                    for (var i = 0; i < item.children.length; i++) collect(item.children[i])
+                }
+                collect(list.contentItem)
+                compare(cards.length, 2)
+                mouseClick(cards[1])
+                compare(reader.focusMark, list.marks[1].id)
+                mouseClick(cards[0], 20, 10, Qt.RightButton)
+                tryVerify(menuOpen)
+                choose("delete")
+                tryVerify(function () { return reader.highlights.length === 1 })
+                compare(reader.highlights[0].quote, "Table headline")
+                // Asking for another section gives the side pane back.
+                app.detailTab = "overview"
+                verify(!reader.sideHighlights)
+                app.detailTab = "notes"
+
+                // A click on a highlight still opens the popover: comment and delete.
+                mouseClick(mouse1, 91, 137)
+                tryVerify(function () { return reader.highlightMenuOpen })
+                mouseClick(findShown("highlightSwatchRed"))
+                tryVerify(function () { return reader.highlights[0].color === "red" })
+                var field = findShown("highlightComment")
+                mouseClick(field)
+                field.forceActiveFocus()
+                keyClick(Qt.Key_N); keyClick(Qt.Key_O); keyClick(Qt.Key_T); keyClick(Qt.Key_E)
+                keyClick(Qt.Key_Return)
+                tryVerify(function () { return reader.highlights[0].comment === "note" })
+                mouseClick(findShown("highlightDelete"))
+                tryVerify(function () { return reader.highlights.length === 0 && !reader.highlightMenuOpen })
+
+                // On bare page the menu offers a page note, a clip and the highlighter.
+                rightClick(400, 300)
+                verify(findShown("menuItem:pageNote") !== null)
+                verify(findShown("menuItem:clip") !== null)
+                choose("tool")
+                compare(reader.tool, "highlight")
+                keyClick(Qt.Key_Escape)
+                compare(reader.tool, "select")
+            } finally {
+                reader.sideHighlights = false
+                reader.tool = "select"
                 readerSheet.visible = false
                 reader.tab = null
                 app.paperTabs = []

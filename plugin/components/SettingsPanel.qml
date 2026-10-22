@@ -1,9 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Preferences: the theme and reading face, PDF page colors in reader tabs and
-// which apps the chat buttons start. App.qml owns reading and writing them
-// through omabib-settings.
+// Preferences: importing a library, the theme and reading face, PDF page
+// colors in reader tabs and which apps the chat buttons start. App.qml owns
+// reading and writing them through omabib-settings.
 ColumnLayout {
     id: root
 
@@ -102,7 +102,17 @@ ColumnLayout {
         color: root.theme.urgent
     }
 
-    SectionLabel { theme: root.theme; text: "Theme" }
+    SectionLabel { theme: root.theme; text: "Bring in your library" }
+    RowLayout {
+        Layout.fillWidth: true
+        spacing: root.theme.space(8)
+        TextButton { objectName: "settingsZotero"; theme: root.theme; icon: "book"; text: "Import from Zotero…"; onClicked: root.app.openZotero() }
+        TextButton { theme: root.theme; icon: "braces"; text: "Import BibTeX file…"; onClicked: root.app.openBibPicker() }
+        Item { Layout.fillWidth: true }
+    }
+    Hint { text: "Zotero: references with their citation keys, PDFs, notes, highlights and collections, read from Zotero's own library. BibTeX: entries exported from Mendeley, EndNote, JabRef or any other manager. Either can be run again; nothing is added twice." }
+
+    SectionLabel { theme: root.theme; text: "Theme"; Layout.topMargin: root.theme.space(10) }
     RowLayout {
         Layout.fillWidth: true
         spacing: root.theme.space(6)
