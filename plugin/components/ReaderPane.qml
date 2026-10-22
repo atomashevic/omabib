@@ -18,7 +18,8 @@ FocusScope {
 
     required property var theme
     required property var app
-    // The active tab entry: {id, citekey, title, kind: "pdf", page, zoom_mode, zoom}.
+    // The paper's tab: {id, citekey, title, view, page, zoom_mode, zoom}. It
+    // stays set while the tab shows Info, so the PDF keeps its place.
     property var tab: null
     readonly property string docKey: tab ? tab.id : ""
     readonly property var ref: app.selected && tab && app.selected.id === tab.id ? app.selected : null

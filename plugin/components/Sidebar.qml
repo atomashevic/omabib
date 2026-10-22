@@ -84,10 +84,10 @@ Rectangle {
                     SideItem {
                         required property var modelData
                         required property int index
-                        objectName: (modelData.kind === "pdf" ? "pdfTab:" : "paperTab:") + modelData.citekey
-                        icon: modelData.kind === "pdf" ? "pdf" : "document"
+                        objectName: "paperTab:" + modelData.citekey
+                        icon: modelData.view === "pdf" ? "pdf" : "document"
                         label: modelData.title || modelData.citekey
-                        trailing: modelData.kind === "pdf" && modelData.page > 1 ? "p. " + modelData.page : ""
+                        trailing: modelData.view === "pdf" && modelData.page > 1 ? "p. " + modelData.page : ""
                         trailingMono: true
                         closable: true
                         tooltip: (modelData.title || modelData.citekey) + (index < 9 ? "  ·  Alt+" + (index + 1) : "")
