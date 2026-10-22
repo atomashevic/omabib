@@ -789,8 +789,24 @@ Item {
         settings=next
         runSettings(args)
     }
-    function registerCodex() { runSettings(["register-codex",serviceSocket]) }
-    function registerClaudeDesktop() { runSettings(["register-claude-desktop",serviceSocket]) }
+    // Gives an agent outside Omabib the library: its MCP server, and for
+    // Claude Code and Codex the Omabib skill.
+    function connectAgent(id) {
+        var command={"claude-code":"register-claude-code","codex":"register-codex","claude-desktop":"register-claude-desktop"}[id]
+        if(command)runSettings([command,serviceSocket])
+    }
+    // A new library's welcome page connects the agents found on this computer,
+    // once: omabib-settings then records agent_setup "done". One try a session,
+    // so a failure isn't retried in a loop.
+    property bool agentsConnecting: false
+    property bool agentSetupTried: false
+    readonly property bool wantsAgentSetup: libraryEmpty && !!settingsInfo && settings.agent_setup!=="done" && !agentSetupTried
+    onWantsAgentSetupChanged: if(wantsAgentSetup)connectAgents()
+    function connectAgents() {
+        agentSetupTried=true
+        agentsConnecting=true
+        runSettings(["connect-agents",serviceSocket])
+    }
     Process {
         id:settingsProcess
         environment: ({OMABIB_SOCKET: root.serviceSocket})
@@ -809,6 +825,7 @@ Item {
         }}
         onExited:(code,status)=>{
             root.settingsBusy=false
+            if(settingsProcess.command[1]==="connect-agents")root.agentsConnecting=false
             if(root.settingsQueue.length){var next=root.settingsQueue[0];root.settingsQueue=root.settingsQueue.slice(1);root.runSettings(next)}
         }
     }

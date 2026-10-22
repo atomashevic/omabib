@@ -213,14 +213,17 @@ On Linux, **⋯ → Chat in Codex CLI** (or Claude Code) opens the agent in a te
 
 ## Connecting other agents
 
-Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask.
+Omabib includes an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can search your library, fetch several papers at once, read notes, clips and text highlights, get a PDF's path, and save notes or highlights when you ask. Omabib also ships a skill, the [agent guide](../skills/omabib/SKILL.md), that tells Claude Code and Codex how to use those tools.
 
-- **Codex:** **Settings → Connect Codex**, or `omabib-settings register-codex`. This registers Omabib's MCP server and installs the Omabib skill in `~/.codex/skills/omabib`. Reopen running Codex sessions afterwards. An existing connection to another library is left alone.
-- **Claude Desktop:** **Settings → Add Omabib to Claude Desktop**, then restart Claude Desktop. This adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
-- **Claude Code:** `claude mcp add --scope user omabib -- ~/.local/bin/omabib mcp`
+A new library connects the agents it finds: as the welcome page first shows, Omabib adds its MCP server and skill to Claude Code and Codex, and its MCP server to Claude Desktop, and the page lists what it connected. This happens once. **Settings → Your library in other agents** shows each agent's connection, with **Connect** for one that isn't connected yet. Start a new session of an agent afterwards (restart Claude Desktop) so it loads the tools. An agent already connected to another library, or with a configuration Omabib can't read, is left alone.
+
+- **Claude Code:** `omabib-settings register-claude-code` does the same from a terminal. It runs `claude mcp add-json --scope user omabib …` and installs the skill in `~/.claude/skills/omabib` (or under `$CLAUDE_CONFIG_DIR`).
+- **Codex:** `omabib-settings register-codex` registers the MCP server with `codex mcp add` and installs the skill in `~/.codex/skills/omabib`.
+- **Claude Desktop:** `omabib-settings register-claude-desktop SOCKET` adds an `omabib` entry to Claude Desktop's config, keeps everything else, and saves the original once as `claude_desktop_config.json.omabib-backup`.
+- **All of them:** `omabib-settings connect-agents` connects every agent found that has no Omabib connection yet.
 - **Anything else:** run `omabib mcp` as a stdio MCP server.
 
-Omabib's own chats are connected already. If you used the old `omabib-mcp` companion, you no longer need it: **Connect Codex** reuses its connection and refreshes its skill, and you can delete its checkout. After updating Omabib, restart MCP clients so they see new tools. The [agent guide](../skills/omabib/SKILL.md) describes how agents should use the library.
+Omabib's own chats are connected already. If you used the old `omabib-mcp` companion, you no longer need it: **Connect** for Codex reuses its connection and refreshes its skill, and you can delete its checkout. After updating Omabib, restart MCP clients so they see new tools.
 
 ## Settings
 
@@ -230,8 +233,9 @@ The **Settings** button at the bottom of the sidebar opens them. Changes apply i
 - **Theme:** System (follows your desktop's light or dark setting), Light, Dark, or Omarchy. Omarchy appears when `~/.local/state/omarchy/current/theme/colors.toml` parses, and a new config chooses it. System, Light or Dark already written in `settings.json` stay as they are. An open window follows a theme change, including when Omarchy replaces the theme directory. `mode` `light` or `dark` in that file decides which; with no `mode`, the background does. A file that does not parse keeps the palette already on screen.
 - **Reading font:** Mona Sans or Source Serif 4, for titles, abstracts and notes.
 - **PDF pages:** **Original colors** or **Theme colors** (see [Theme colors](#theme-colors)).
-- **Terminal chat:** Codex CLI or Claude Code, for chats and **Chat in…** in a terminal. **Connect Codex** is here too.
-- **Desktop chat:** ChatGPT Desktop or Claude Desktop, with **Add Omabib to Claude Desktop**.
+- **Terminal chat:** Codex CLI or Claude Code, for chats and **Chat in…** in a terminal.
+- **Desktop chat:** ChatGPT Desktop or Claude Desktop.
+- **Your library in other agents:** Claude Code, Codex and Claude Desktop, each with its connection and **Connect** when it has none (see [Connecting other agents](#connecting-other-agents)).
 
 To change the PDF shortcut from **Ctrl+O**, set `OMABIB_PDF_SHORTCUT` in the environment Omabib starts in.
 
