@@ -64,6 +64,12 @@ INSERT INTO deletedItems VALUES (7);",
     .unwrap();
 }
 
+/// Import refuses a second run in the same process. These tests share one.
+fn one_import_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn notes_of(l: &Library, citekey: &str) -> Vec<Value> {
     l.call("get_reference", &json!({"id":citekey,"include_notes":true,"include_other_projects":true}))
         .unwrap()["notes"]
@@ -74,6 +80,7 @@ fn notes_of(l: &Library, citekey: &str) -> Vec<Value> {
 
 #[test]
 fn moves_a_zotero_library_and_again_without_duplicates() {
+    let _import = one_import_at_a_time();
     let d = tempfile::tempdir().unwrap();
     let z = d.path().join("Zotero");
     zotero(&z);
@@ -195,4 +202,46 @@ fn moves_a_zotero_library_and_again_without_duplicates() {
 
     // A folder without a library says so.
     assert!(l.call("zotero_detect", &json!({"path":d.path()})).is_err());
+}
+
+/// macOS resolves `/var` to `/private/var`. A temp dir reached through a
+/// symlink is the same situation on Linux: the copied PDF must be stored as
+/// the real path, or lookup and a later import see two different files.
+#[test]
+fn stores_a_canonical_pdf_path_when_the_library_is_behind_a_symlink() {
+    let _import = one_import_at_a_time();
+    let real = tempfile::tempdir().unwrap();
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("via-link");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+    let z = link.join("Zotero");
+    zotero(&z);
+    std::fs::create_dir_all(link.join("omabib")).unwrap();
+    let l = Library::open(link.join("omabib/library.db")).unwrap();
+
+    l.call("zotero_import", &json!({"path": z})).unwrap();
+    let watts = l
+        .call("get_reference", &json!({"id":"watts_collective_1998","include_attachments":true}))
+        .unwrap();
+    let through = link.join("omabib/pdfs/watts_collective_1998.pdf");
+    let canonical = through.canonicalize().unwrap();
+    assert_ne!(through, canonical);
+    assert_eq!(watts["pdf_path"], json!(canonical));
+    assert_eq!(watts["attachments"].as_array().unwrap().len(), 1);
+
+    // Lookup canonicalizes its argument, so the path through the link hits the stored row.
+    let found = l.call("find_reference_by_pdf", &json!({"path": &through})).unwrap();
+    assert_eq!(found["ref_id"], watts["id"]);
+    let found = l.call("find_reference_by_pdf", &json!({"path": &canonical})).unwrap();
+    assert_eq!(found["ref_id"], watts["id"]);
+
+    // Naming the real directory on a second import does not attach the file again.
+    let again = l.call("zotero_import", &json!({"path": real.path().join("Zotero")})).unwrap();
+    assert_eq!(again["pdfs"], 0, "{again}");
+    assert_eq!(again["already"], 4);
+    let watts = l
+        .call("get_reference", &json!({"id":"watts_collective_1998","include_attachments":true}))
+        .unwrap();
+    assert_eq!(watts["pdf_path"], json!(canonical));
+    assert_eq!(watts["attachments"].as_array().unwrap().len(), 1);
 }
